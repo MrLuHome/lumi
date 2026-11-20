@@ -1,4 +1,3 @@
-use image::Rgba;
 use rayon::prelude::*;
 
 use crate::image_engine::buffer::Image16;

@@ -12,6 +12,7 @@ import {
   openProject,
   pickImages,
   saveProject,
+  subscribeBeautyProgress,
   subscribeFaceProgress,
   subscribeToFileDrop,
 } from "./lib/backend";
@@ -192,6 +193,22 @@ export default function App() {
     let unsubscribe: (() => void) | undefined;
     subscribeFaceProgress((progress) => {
       useEditorStore.getState().setFaceProgress(progress);
+    }).then((cleanup) => {
+      if (alive) unsubscribe = cleanup;
+      else cleanup();
+    });
+    return () => {
+      alive = false;
+      unsubscribe?.();
+    };
+  }, []);
+
+  // AI 美肤分析进度（检测 → 蒙版 → 指标）。
+  useEffect(() => {
+    let alive = true;
+    let unsubscribe: (() => void) | undefined;
+    subscribeBeautyProgress((progress) => {
+      useEditorStore.getState().setBeautyProgress(progress);
     }).then((cleanup) => {
       if (alive) unsubscribe = cleanup;
       else cleanup();

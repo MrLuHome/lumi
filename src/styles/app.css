@@ -1701,3 +1701,269 @@
   text-overflow: ellipsis;
   pointer-events: none;
 }
+
+/* ---------- AI 美肤面板 ---------- */
+
+.beauty-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.beauty-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  color: var(--text-3);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.beauty-badge.is-ready {
+  border-color: rgba(126, 214, 165, 0.4);
+  color: #7ed6a5;
+}
+
+.beauty-action-row,
+.beauty-brush-row,
+.beauty-toggle-row,
+.beauty-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 8px;
+}
+
+.beauty-action-row {
+  margin-top: 4px;
+}
+
+.beauty-primary,
+.beauty-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  padding: 6px 8px;
+}
+
+.beauty-slider + .beauty-slider {
+  margin-top: 2px;
+}
+
+.beauty-slider-hint {
+  display: block;
+  margin: -2px 0 6px 2px;
+  color: var(--text-4);
+  font-size: 9px;
+}
+
+.beauty-model {
+  margin: 6px 0 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.beauty-model-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.beauty-model-name {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.beauty-model-meta {
+  margin-top: 3px;
+  color: var(--text-4);
+  font-size: 9px;
+}
+
+.beauty-model-reason {
+  max-height: 44px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.beauty-analysis {
+  margin: 2px 0 8px;
+  padding: 8px;
+  border: 1px solid rgba(224, 181, 124, 0.22);
+  border-radius: 4px;
+  background: rgba(224, 181, 124, 0.045);
+}
+
+.beauty-analysis-head {
+  margin-bottom: 5px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.beauty-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 5px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.beauty-notes {
+  margin: 0 0 6px;
+  padding-left: 14px;
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.beauty-warning {
+  color: #d9a96a;
+  font-size: 9px;
+}
+
+.beauty-face-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.beauty-face-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.beauty-face-item:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.beauty-face-item.is-active {
+  border-color: rgba(224, 181, 124, 0.38);
+  background: rgba(224, 181, 124, 0.08);
+}
+
+.beauty-face-select {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 2px;
+  background: none;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.beauty-face-letter {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(224, 181, 124, 0.16);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.beauty-face-meta {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-btn.is-active {
+  border-color: rgba(224, 181, 124, 0.5);
+  color: var(--accent);
+  background: rgba(224, 181, 124, 0.1);
+}
+
+/* ---------- 画布上的蒙版与画笔 ---------- */
+
+.stage-mask {
+  opacity: 0.62;
+  pointer-events: none;
+}
+
+.stage.is-brushing {
+  cursor: none;
+}
+
+.face-label {
+  fill: #f2c98f;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  paint-order: stroke;
+  stroke: rgba(10, 11, 13, 0.85);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.brush-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.brush-stroke {
+  stroke: rgba(94, 214, 166, 0.55);
+  fill: rgba(94, 214, 166, 0.25);
+}
+
+.brush-stroke.is-erase {
+  stroke: rgba(240, 120, 110, 0.6);
+  fill: rgba(240, 120, 110, 0.25);
+}
+
+.brush-cursor {
+  fill: none;
+  stroke: rgba(120, 230, 180, 0.9);
+  stroke-width: 1.5;
+}
+
+.brush-cursor.is-erase {
+  stroke: rgba(245, 140, 130, 0.9);
+}
+
+.repair-ring {
+  fill: none;
+  stroke: rgba(242, 190, 110, 0.75);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.repair-dot {
+  fill: rgba(242, 201, 143, 0.95);
+  stroke: rgba(20, 18, 14, 0.7);
+  stroke-width: 1;
+}

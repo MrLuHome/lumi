@@ -297,3 +297,54 @@ describe("编辑器状态", () => {
     expect(store.getState().compareMode).toBe("off");
   });
 });
+
+describe("美肤参数与蒙版历史", () => {
+  it("按稳定 ID 修改每张脸，不互相污染且可撤销重做", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a")]);
+    store.getState().updateFaceBeauty(0, "skinSmooth", 25);
+    store.getState().updateFaceBeauty(1, "skinSmooth", 45);
+    store.getState().updateFaceBeauty(1, "blemish", 70);
+
+    let params = paramsOf(store);
+    expect(params.faces.find((face) => face.faceId === 0)?.beauty.skinSmooth).toBe(25);
+    expect(params.faces.find((face) => face.faceId === 1)?.beauty.skinSmooth).toBe(45);
+    expect(params.faces.find((face) => face.faceId === 1)?.beauty.blemish).toBe(70);
+
+    store.getState().undo();
+    params = paramsOf(store);
+    expect(params.faces.find((face) => face.faceId === 1)?.beauty.blemish).toBe(0);
+    store.getState().undo();
+    store.getState().undo();
+    expect(paramsOf(store).faces.every((face) => face.beauty.skinSmooth === 0)).toBe(true);
+    store.getState().redo();
+    store.getState().redo();
+    expect(paramsOf(store).faces.find((face) => face.faceId === 1)?.beauty.skinSmooth).toBe(45);
+  });
+
+  it("手动蒙版可逐笔撤销与恢复", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a")]);
+    const stroke = { erase: false, radius: 0.03, points: [{ x: 0.5, y: 0.5 }] };
+    store.getState().appendMaskStroke(stroke);
+    store.getState().appendMaskStroke({ ...stroke, erase: true });
+    expect(paramsOf(store).manualMask.strokes).toHaveLength(2);
+    expect(paramsOf(store).manualMask.enabled).toBe(true);
+
+    store.getState().undoMaskStroke();
+    expect(paramsOf(store).manualMask.strokes).toHaveLength(1);
+    store.getState().clearMaskStrokes();
+    expect(paramsOf(store).manualMask.strokes).toHaveLength(0);
+  });
+
+  it("手动修复点可单独撤销", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a")]);
+    store.getState().addRepairPoint(0.4, 0.5, 0.03);
+    store.getState().addRepairPoint(0.6, 0.5, 0.03);
+    expect(paramsOf(store).repairPoints).toHaveLength(2);
+    store.getState().undoRepairPoint();
+    expect(paramsOf(store).repairPoints).toHaveLength(1);
+    expect(paramsOf(store).repairPoints[0]?.x).toBe(0.4);
+  });
+});

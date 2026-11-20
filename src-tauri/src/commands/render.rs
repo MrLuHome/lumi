@@ -8,13 +8,14 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{AppError, AppResult};
+use crate::ai_engine::face_frame::FaceFrame;
 use crate::image_engine::buffer::fit_within;
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::export::{self, ExportFormat, ExportSettings};
 use crate::image_engine::params::EditParams;
 use crate::image_engine::preview::{encode_canvas, DETAIL_MAX_EDGE};
 use crate::image_engine::pipeline;
-use crate::state::ImageCache;
+use crate::state::{FaceRepository, ImageCache};
 
 /// 渲染任务注册表：只保留最新请求，旧请求在阶段边界主动退出。
 #[derive(Default)]
@@ -134,9 +135,9 @@ fn emit_progress(app: &AppHandle, request_id: u64, stage: &'static str, progress
     );
 }
 
-fn cache_key(path: &Path, params: &EditParams, max_edge: u32) -> String {
+fn cache_key(path: &Path, params: &EditParams, max_edge: u32, faces: &str) -> String {
     let serialized = serde_json::to_string(params).unwrap_or_default();
-    format!("{}|{}|{}", path.to_string_lossy(), max_edge, serialized)
+    format!("{}|{}|{}|{}", path.to_string_lossy(), max_edge, faces, serialized)
 }
 
 /// 渲染画布预览。`maxEdge` 用于 100% / 200% 高清查看，
@@ -145,6 +146,7 @@ fn cache_key(path: &Path, params: &EditParams, max_edge: u32) -> String {
 pub async fn render_preview(
     app: AppHandle,
     state: State<'_, ImageCache>,
+    repo: State<'_, FaceRepository>,
     render_cache: State<'_, RenderCache>,
     registry: State<'_, RenderRegistry>,
     request_id: u64,
@@ -153,11 +155,13 @@ pub async fn render_preview(
     max_edge: Option<u32>,
 ) -> AppResult<RenderResult> {
     let cache = state.inner().clone();
+    let repo = repo.inner().clone();
     let render_cache = render_cache.inner().clone();
     let cancel = registry.begin(request_id);
     let max_edge = max_edge.unwrap_or(crate::image_engine::PREVIEW_MAX_EDGE);
     let max_edge = max_edge.clamp(320, DETAIL_MAX_EDGE);
-    let key = cache_key(Path::new(&path), &params, max_edge);
+    let signature = repo.signature(Path::new(&path));
+    let key = cache_key(Path::new(&path), &params, max_edge, &signature);
 
     if let Some(hit) = render_cache.get(&key) {
         return Ok(RenderResult {
@@ -171,6 +175,10 @@ pub async fn render_preview(
         let started = Instant::now();
         let cached = cache.load(Path::new(&path))?;
         cancel.check()?;
+        let faces: Vec<FaceFrame> = repo
+            .get(Path::new(&path))
+            .map(|entry| entry.faces)
+            .unwrap_or_default();
 
         let source = if max_edge > crate::image_engine::PREVIEW_MAX_EDGE {
             &cached.full
@@ -179,7 +187,7 @@ pub async fn render_preview(
         };
         let working = fit_within(source, max_edge);
         emit_progress(&app, request_id, "开始", 0.02);
-        let rendered = pipeline::render_with_progress(&working, &params, &cancel, &mut |value, stage| {
+        let rendered = pipeline::render_with_progress(&working, &params, &faces, &cancel, &mut |value, stage| {
             emit_progress(&app, request_id, stage, value);
         })?;
         let preview = encode_canvas(&rendered, cached.has_alpha)?;
@@ -220,6 +228,7 @@ pub struct ExportResult {
 pub async fn export_image(
     app: AppHandle,
     state: State<'_, ImageCache>,
+    repo: State<'_, FaceRepository>,
     registry: State<'_, RenderRegistry>,
     request_id: u64,
     path: String,
@@ -228,6 +237,7 @@ pub async fn export_image(
     destination: Option<String>,
 ) -> AppResult<ExportResult> {
     let cache = state.inner().clone();
+    let repo = repo.inner().clone();
     let cancel = registry.begin(request_id);
     let settings = settings.unwrap_or_default().clamped();
 
@@ -235,6 +245,11 @@ pub async fn export_image(
         let started = Instant::now();
         let cached = cache.load(Path::new(&path))?;
         cancel.check()?;
+        // 导出复用同一份归一化人脸结果，AI 检测不重跑；蒙版按全分辨率重建。
+        let faces: Vec<FaceFrame> = repo
+            .get(Path::new(&path))
+            .map(|entry| entry.faces)
+            .unwrap_or_default();
 
         let target = match destination {
             Some(value) if !value.trim().is_empty() => PathBuf::from(value),
@@ -259,7 +274,7 @@ pub async fn export_image(
         };
 
         emit_progress(&app, request_id, "全尺寸渲染", 0.05);
-        let rendered = pipeline::render_with_progress(&cached.full, &params, &cancel, &mut |value, stage| {
+        let rendered = pipeline::render_with_progress(&cached.full, &params, &faces, &cancel, &mut |value, stage| {
             emit_progress(&app, request_id, stage, 0.05 + value * 0.85);
         })?;
         cancel.check()?;

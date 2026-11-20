@@ -1,16 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  BeautyAnalysis,
+  BeautyProgress,
   EditParams,
   ExportResult,
   ExportSettings,
   FaceDetectionResult,
   FaceModelStatus,
   FaceProgress,
+  MaskPreview,
   PhotoAsset,
   ProjectDoc,
   ProjectOpenResult,
   RenderProgress,
   RenderResult,
+  SkinModelStatus,
 } from "../types";
 import { isDesktopRuntime } from "./platform";
 
@@ -106,6 +110,25 @@ export async function detectFaces(path: string): Promise<FaceDetectionResult> {
   return invoke<FaceDetectionResult>("detect_faces", { path });
 }
 
+export async function skinModelStatus(): Promise<SkinModelStatus> {
+  if (!isDesktopRuntime()) {
+    throw new Error("皮肤分割状态需要在桌面端读取");
+  }
+  return invoke<SkinModelStatus>("skin_model_status");
+}
+
+/** 一键美肤：真实执行检测 → 皮肤区域 → 指标分析，返回可编辑建议参数。 */
+export async function analyzeBeauty(path: string): Promise<BeautyAnalysis> {
+  if (!isDesktopRuntime()) throw new Error("AI 美肤需要在桌面端运行");
+  return invoke<BeautyAnalysis>("analyze_beauty", { path });
+}
+
+/** 生成与渲染完全一致的皮肤蒙版可视化（用于蒙版显示与手动微调）。 */
+export async function previewSkinMask(path: string, params: EditParams): Promise<MaskPreview> {
+  if (!isDesktopRuntime()) throw new Error("皮肤蒙版预览需要在桌面端运行");
+  return invoke<MaskPreview>("preview_skin_mask", { path, params });
+}
+
 export async function subscribeRenderProgress(
   handler: (progress: RenderProgress) => void,
 ): Promise<() => void> {
@@ -123,6 +146,17 @@ export async function subscribeFaceProgress(
   if (!isDesktopRuntime()) return () => {};
   const event = await import("@tauri-apps/api/event");
   const unlisten = await event.listen<FaceProgress>("lumi://face-progress", (payload) =>
+    handler(payload.payload),
+  );
+  return unlisten;
+}
+
+export async function subscribeBeautyProgress(
+  handler: (progress: BeautyProgress) => void,
+): Promise<() => void> {
+  if (!isDesktopRuntime()) return () => {};
+  const event = await import("@tauri-apps/api/event");
+  const unlisten = await event.listen<BeautyProgress>("lumi://beauty-progress", (payload) =>
     handler(payload.payload),
   );
   return unlisten;

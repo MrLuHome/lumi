@@ -1,7 +1,8 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::ai_engine::face_frame::{FaceFrame, FaceTracker};
 use crate::error::{AppError, AppResult};
 use crate::image_engine::buffer::{estimated_bytes, has_alpha, Image16};
 use crate::image_engine::decoder::{self, BitDepth};
@@ -134,6 +135,67 @@ impl ImageCache {
             .lock()
             .map_err(|_| AppError::Task("图片缓存状态异常，请重启应用".to_string()))
     }
+}
+
+/// 单张照片的人脸检测结果缓存。归一化坐标可被预览、高清与导出复用；
+/// `version` 用于渲染缓存键，检测结果变化时不会命中旧缓存。
+#[derive(Debug, Clone)]
+pub struct CachedFaces {
+    pub faces: Vec<FaceFrame>,
+    pub version: u64,
+}
+
+/// 每张照片的人脸结果仓库 + 稳定 ID 跟踪器。
+#[derive(Clone, Default)]
+pub struct FaceRepository {
+    inner: Arc<Mutex<FaceRepositoryInner>>,
+}
+
+#[derive(Default)]
+struct FaceRepositoryInner {
+    entries: HashMap<PathBuf, CachedFaces>,
+    trackers: HashMap<PathBuf, FaceTracker>,
+    version: u64,
+}
+
+impl FaceRepository {
+    pub fn get(&self, path: &Path) -> Option<CachedFaces> {
+        let canonical = canonical_key(path);
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|guard| guard.entries.get(&canonical).cloned())
+    }
+
+    /// 保存检测结果并用跟踪器维持 ID 稳定，返回分配好 ID 的人脸。
+    pub fn store(&self, path: &Path, faces: Vec<FaceFrame>) -> CachedFaces {
+        let canonical = canonical_key(path);
+        let mut guard = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let previous = guard
+            .entries
+            .get(&canonical)
+            .map(|entry| entry.faces.clone())
+            .unwrap_or_default();
+        let tracker = guard.trackers.entry(canonical.clone()).or_default();
+        let faces = tracker.assign(&previous, faces);
+        guard.version = guard.version.saturating_add(1);
+        let cached = CachedFaces {
+            faces,
+            version: guard.version,
+        };
+        guard.entries.insert(canonical, cached.clone());
+        cached
+    }
+
+    pub fn signature(&self, path: &Path) -> String {
+        self.get(path)
+            .map(|entry| format!("{}:{}", entry.version, entry.faces.len()))
+            .unwrap_or_else(|| "none".into())
+    }
+}
+
+fn canonical_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// 缓存条目 -> 前端需要的缩略图 / 预览图 data URL。

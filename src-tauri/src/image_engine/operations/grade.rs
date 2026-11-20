@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::error::AppResult;
 use crate::image_engine::buffer::{par_pixels_mut, Image16, CHANNEL_MAX};
 use crate::image_engine::cancel::CancelToken;
-use crate::image_engine::color::{luma, smoothstep, CurveLut, CurveSetLuts, Lut3D};
+use crate::image_engine::color::{luma, smoothstep, CurveSetLuts, Lut3D};
 use crate::image_engine::params::{EditParams, HslChannel, HslParams};
 
 struct HslPlan {

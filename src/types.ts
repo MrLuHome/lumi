@@ -1,17 +1,24 @@
 export type {
   AdjustmentKey,
+  BeautyKey,
+  BeautyParams,
   CurveChannel,
   CurvePoint,
   CurveSet,
   EditParams,
   ExportFormat,
   ExportSettings,
+  FaceBeauty,
   HslChannel,
   HslKey,
   HslParams,
   LutSettings,
+  ManualMask,
+  MaskPoint,
+  MaskStroke,
   ParamDefinition,
   ParamGroup,
+  RepairPoint,
 } from "./state/params";
 
 /** 与 Rust `ImageItem` 对应。 */
@@ -88,6 +95,72 @@ export interface FaceDetectionResult {
 }
 
 export interface FaceProgress {
+  stage: string;
+  progress: number;
+}
+
+/** 与 Rust `SkinModelStatus` 对应：当前是否加载了可商用皮肤分割模型。 */
+export interface SkinModelStatus {
+  available: boolean;
+  method: string;
+  name: string;
+  version: string;
+  license: string;
+  commercialUse: boolean;
+  sha256: string;
+  input: string;
+  outputs: string;
+  path: string | null;
+  reason: string;
+  registeredCount: number;
+}
+
+/** 与 Rust `FaceMetrics` 对应。 */
+export interface FaceMetrics {
+  faceId: number;
+  skinRatio: number;
+  meanLuma: number;
+  texture: number;
+  blemishDensity: number;
+  chromaVariation: number;
+  redness: number;
+  darkRatio: number;
+  highlightRatio: number;
+  darkCircleDelta: number;
+  eyeTexture: number;
+  foreheadTexture: number;
+  nasolabialTexture: number;
+}
+
+/** 与 Rust `FaceSuggestion` 对应。 */
+export interface FaceSuggestion {
+  faceId: number;
+  metrics: FaceMetrics;
+  suggested: import("./state/params").BeautyParams;
+  notes: string[];
+}
+
+/** 与 Rust `BeautyAnalysis` 对应。 */
+export interface BeautyAnalysis {
+  faces: FaceSuggestion[];
+  method: string;
+  model: string;
+  elapsedMs: number;
+  skinModel: SkinModelStatus;
+  warnings: string[];
+}
+
+/** 与 Rust `MaskPreview` 对应。 */
+export interface MaskPreview {
+  url: string;
+  width: number;
+  height: number;
+  skinRatio: number;
+  faces: number;
+  method: string;
+}
+
+export interface BeautyProgress {
   stage: string;
   progress: number;
 }

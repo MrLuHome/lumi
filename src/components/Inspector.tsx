@@ -10,6 +10,7 @@ import { Slider } from "./ui/Slider";
 import { HslPanel } from "./HslPanel";
 import { CurveEditor } from "./CurveEditor";
 import { FacePanel } from "./FacePanel";
+import { BeautyPanel } from "./BeautyPanel";
 
 interface InspectorProps {
   photo: PhotoAsset | null;
@@ -112,6 +113,7 @@ export function Inspector({ photo, params }: InspectorProps) {
       </div>
 
       <div className={`inspector-body ${photo ? "" : "is-disabled"}`}>
+        <BeautyPanel photo={photo} />
         {PARAM_GROUPS.map((group) => {
           const open = isOpen(group.id);
           const groupDirty = group.params.some((definition) => params[definition.key] !== 0);

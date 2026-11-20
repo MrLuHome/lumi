@@ -1,5 +1,3 @@
-use image::Rgba;
-
 use crate::image_engine::buffer::{par_pixels_mut, Image16, CHANNEL_MAX};
 use crate::image_engine::color::{luma, smoothstep};
 use crate::image_engine::operations::blur;
@@ -22,43 +20,8 @@ pub fn unsharp_mask(image: &Image16, radius: u32, amount: f32) -> Image16 {
     output
 }
 
-/// 磨皮：模糊底图 + 高频保边混合。纯 CPU 基础工序，
-/// 不含人脸检测，因此全图都会参与；人脸蒙版将在后续轮次接入。
-pub fn smooth_skin(image: &Image16, strength: f32) -> Image16 {
-    let ratio = (strength / 100.0).clamp(0.0, 1.0);
-    if ratio <= 0.0 {
-        return image.clone();
-    }
-    let radius = (2.0 + ratio * 3.0).round() as u32;
-    let blurred = blur::gaussian_blur(image, radius);
-    let blend = ratio * 0.85;
-    let edge = 0.05 + (1.0 - ratio) * 0.14;
-
-    let mut output = image.clone();
-    par_pixels_mut(&mut output, |x, y, pixel| {
-        let source = image.get_pixel(x, y).0;
-        let target = blurred.get_pixel(x, y).0;
-        let source_light = luma(
-            source[0] as f32 / CHANNEL_MAX,
-            source[1] as f32 / CHANNEL_MAX,
-            source[2] as f32 / CHANNEL_MAX,
-        );
-        let target_light = luma(
-            target[0] as f32 / CHANNEL_MAX,
-            target[1] as f32 / CHANNEL_MAX,
-            target[2] as f32 / CHANNEL_MAX,
-        );
-        let difference = (source_light - target_light).abs();
-        let weight = 1.0 - smoothstep(edge, edge * 2.0 + 0.02, difference);
-        let mix = blend * weight;
-        for channel in 0..3 {
-            let value = source[channel] as f32
-                + (target[channel] as f32 - source[channel] as f32) * mix;
-            pixel[channel] = value.clamp(0.0, CHANNEL_MAX).round() as u16;
-        }
-    });
-    output
-}
+/// 磨皮已迁移到 `ai_engine::retouch`：必须带皮肤蒙版与关键点保护，
+/// 这里不再保留全图模糊实现。
 
 fn hash_noise(x: u32, y: u32) -> f32 {
     let mut hash = x
@@ -143,6 +106,7 @@ pub fn estimate_white_balance(image: &Image16) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::Rgba;
 
     fn flat(value: u16, size: u32) -> Image16 {
         Image16::from_pixel(size, size, Rgba([value, value, value, 65535]))
@@ -179,14 +143,6 @@ mod tests {
         let center = image.get_pixel(16, 16).0[0];
         let corner = image.get_pixel(0, 0).0[0];
         assert!(corner < center);
-    }
-
-    #[test]
-    fn skin_smooth_keeps_alpha_and_flat_region() {
-        let image: Image16 = Image16::from_pixel(16, 16, Rgba([30_000, 25_000, 20_000, 40000]));
-        let smoothed = smooth_skin(&image, 60.0);
-        assert_eq!(smoothed.get_pixel(8, 8).0[3], 40000);
-        assert!((smoothed.get_pixel(8, 8).0[0] as i32 - 30_000).abs() < 50);
     }
 
     #[test]

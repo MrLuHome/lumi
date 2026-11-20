@@ -71,7 +71,7 @@ fn render_changes_pixels_and_reuses_neutral_input() {
     let working = fit_within(&decoded.image, 900);
     let cancel = CancelToken::default();
 
-    let neutral = pipeline::render(&working, &EditParams::default(), &cancel).unwrap();
+    let neutral = pipeline::render(&working, &EditParams::default(), &[], &cancel).unwrap();
     assert_eq!(neutral.into_raw(), working.clone().into_raw(), "中性参数应原样复用");
 
     let params = EditParams {
@@ -80,8 +80,8 @@ fn render_changes_pixels_and_reuses_neutral_input() {
         saturation: 30.0,
         ..Default::default()
     };
-    let first = pipeline::render(&working, &params, &cancel).unwrap();
-    let second = pipeline::render(&working, &params, &cancel).unwrap();
+    let first = pipeline::render(&working, &params, &[], &cancel).unwrap();
+    let second = pipeline::render(&working, &params, &[], &cancel).unwrap();
     assert_ne!(
         first.clone().into_raw(),
         working.clone().into_raw(),
@@ -100,7 +100,7 @@ fn cancelled_render_stops_with_error() {
         exposure: 20.0,
         ..Default::default()
     };
-    let error = pipeline::render(&working, &params, &cancel).unwrap_err();
+    let error = pipeline::render(&working, &params, &[], &cancel).unwrap_err();
     assert!(matches!(error, AppError::Cancelled));
 }
 
@@ -116,10 +116,10 @@ fn preview_and_export_use_same_pipeline() {
     let cancel = CancelToken::default();
     let preview = build_preview(&decoded.image, 1800);
     let started = std::time::Instant::now();
-    let rendered_preview = pipeline::render(&preview, &params, &cancel).unwrap();
+    let rendered_preview = pipeline::render(&preview, &params, &[], &cancel).unwrap();
     let preview_ms = started.elapsed().as_millis();
     let started = std::time::Instant::now();
-    let rendered_full = pipeline::render(&decoded.image, &params, &cancel).unwrap();
+    let rendered_full = pipeline::render(&decoded.image, &params, &[], &cancel).unwrap();
     let full_ms = started.elapsed().as_millis();
     eprintln!(
         "[perf] render preview 1350x1800: {preview_ms} ms · full 1680x2240: {full_ms} ms"
@@ -233,13 +233,12 @@ fn benchmark_full_pipeline() {
         sharpness: 30.0,
         grain: 10.0,
         vignette: 15.0,
-        skin_smooth: 25.0,
         ..Default::default()
     };
     let cancel = CancelToken::default();
 
     let started = std::time::Instant::now();
-    let rendered = pipeline::render(&preview, &params, &cancel).unwrap();
+    let rendered = pipeline::render(&preview, &params, &[], &cancel).unwrap();
     let preview_render = started.elapsed();
 
     let started = std::time::Instant::now();
@@ -247,7 +246,7 @@ fn benchmark_full_pipeline() {
     let preview_encode = started.elapsed();
 
     let started = std::time::Instant::now();
-    let full = pipeline::render(&decoded.image, &params, &cancel).unwrap();
+    let full = pipeline::render(&decoded.image, &params, &[], &cancel).unwrap();
     let full_render = started.elapsed();
 
     let dir = temp_dir("bench");

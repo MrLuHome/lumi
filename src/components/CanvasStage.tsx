@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ImagePlus } from "lucide-react";
 import type { PhotoAsset } from "../types";
-import { selectActiveFaces, useEditorStore } from "../state/editorStore";
+import { selectActiveFaces, selectActiveParams, useEditorStore } from "../state/editorStore";
 import { isDesktopRuntime } from "../lib/platform";
 
 interface CanvasStageProps {
   photo: PhotoAsset | null;
   effectUrl: string | null;
   onImport: () => void;
+}
+
+interface DraftStroke {
+  points: { x: number; y: number }[];
+}
+
+function faceLetter(index: number): string {
+  return String.fromCharCode(65 + (index % 26));
 }
 
 export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
@@ -24,9 +32,17 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   const faceResult = useEditorStore(selectActiveFaces);
   const activeFace = useEditorStore((state) => state.activeFace);
   const showFaceOverlay = useEditorStore((state) => state.showFaceOverlay);
+  const maskVisible = useEditorStore((state) => state.maskVisible);
+  const maskPreview = useEditorStore((state) => state.maskPreview);
+  const brushMode = useEditorStore((state) => state.brushMode);
+  const brushRadius = useEditorStore((state) => state.brushRadius);
+  const params = useEditorStore(selectActiveParams);
+  const repairPoints = params.repairPoints;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [panning, setPanning] = useState(false);
+  const [draft, setDraft] = useState<DraftStroke | null>(null);
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const panRef = useRef<{
     pointerId: number;
     startX: number;
@@ -81,6 +97,23 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!photo || event.button !== 0) return;
     if ((event.target as HTMLElement).closest(".split-handle")) return;
+    if (brushMode === "repair") {
+      const point = toImagePoint(event.clientX, event.clientY);
+      if (!point) return;
+      useEditorStore.getState().addRepairPoint(
+        point.x / photo.width,
+        point.y / photo.height,
+        brushRadius,
+      );
+      return;
+    }
+    if (brushMode !== "off") {
+      const point = toImagePoint(event.clientX, event.clientY);
+      if (!point) return;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDraft({ points: [point] });
+      return;
+    }
     panRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -93,6 +126,17 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (brushMode !== "off") {
+      const point = toImagePoint(event.clientX, event.clientY);
+      setCursor(point);
+      if (draft && point) {
+        const last = draft.points[draft.points.length - 1];
+        if (!last || Math.hypot(point.x - last.x, point.y - last.y) >= 1.5) {
+          setDraft({ points: [...draft.points, point] });
+        }
+      }
+      return;
+    }
     const drag = panRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     useEditorStore.getState().setPan({
@@ -102,12 +146,44 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   };
 
   const endPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (draft && photo) {
+      const points = draft.points.map((point) => ({
+        x: point.x / photo.width,
+        y: point.y / photo.height,
+      }));
+      if (points.length > 0) {
+        useEditorStore.getState().appendMaskStroke({
+          erase: brushMode === "erase",
+          radius: brushRadius,
+          points,
+        });
+      }
+      setDraft(null);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
     if (panRef.current?.pointerId !== event.pointerId) return;
     panRef.current = null;
     setPanning(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+  };
+
+  /** 屏幕坐标 → 图像像素坐标（考虑缩放与平移，与渲染器一致）。 */
+  const toImagePoint = (clientX: number, clientY: number) => {
+    const element = containerRef.current;
+    if (!element || !photo) return null;
+    const rect = element.getBoundingClientRect();
+    const state = useEditorStore.getState();
+    const left = rect.left + rect.width / 2 + state.pan.x - (photo.width * state.zoom) / 2;
+    const top = rect.top + rect.height / 2 + state.pan.y - (photo.height * state.zoom) / 2;
+    const x = (clientX - left) / state.zoom;
+    const y = (clientY - top) / state.zoom;
+    if (x < 0 || y < 0 || x > photo.width || y > photo.height) return null;
+    return { x, y };
   };
 
   const updateSplit = (clientX: number) => {
@@ -130,12 +206,15 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
 
   return (
     <main
-      className={`stage ${panning ? "is-panning" : ""} ${photo ? "has-photo" : ""}`}
+      className={`stage ${panning ? "is-panning" : ""} ${photo ? "has-photo" : ""} ${
+        brushMode !== "off" ? `is-brushing is-${brushMode}` : ""
+      }`}
       ref={containerRef}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={endPan}
       onPointerCancel={endPan}
+      onPointerLeave={() => setCursor(null)}
       onDoubleClick={() => {
         const state = useEditorStore.getState();
         if (state.zoom >= 0.999) state.fitToWindow();
@@ -171,6 +250,15 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
               />
             )}
 
+            {maskVisible && maskPreview && (
+              <img
+                className="stage-image stage-mask"
+                src={maskPreview.url}
+                alt="皮肤蒙版"
+                draggable={false}
+              />
+            )}
+
             {showFaceOverlay && faceResult && faceResult.faces.length > 0 && (
               <svg
                 className="face-overlay"
@@ -200,6 +288,77 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
                         vectorEffect="non-scaling-stroke"
                       />
                     ))}
+                    <text
+                      className="face-label"
+                      x={face.x + face.width * 0.03}
+                      y={face.y + face.width * 0.07}
+                      fontSize={Math.max(14, face.width * 0.09)}
+                    >
+                      {faceLetter(index)} · ID {face.id}
+                    </text>
+                  </g>
+                ))}
+              </svg>
+            )}
+
+            {brushMode !== "off" && (cursor || draft) && (
+              <svg
+                className="brush-overlay"
+                viewBox={`0 0 ${photo.width} ${photo.height}`}
+                preserveAspectRatio="none"
+                aria-label="手动蒙版画笔"
+              >
+                {draft && draft.points.length > 0 ? (
+                  draft.points.length === 1 ? (
+                    <circle
+                      cx={draft.points[0]!.x}
+                      cy={draft.points[0]!.y}
+                      r={brushRadius * photo.width}
+                      className={`brush-stroke ${brushMode === "erase" ? "is-erase" : ""}`}
+                    />
+                  ) : (
+                    <polyline
+                      points={draft.points.map((point) => `${point.x},${point.y}`).join(" ")}
+                      fill="none"
+                      strokeWidth={brushRadius * photo.width * 2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className={`brush-stroke ${brushMode === "erase" ? "is-erase" : ""}`}
+                    />
+                  )
+                ) : null}
+                {cursor && !draft ? (
+                  <circle
+                    cx={cursor.x}
+                    cy={cursor.y}
+                    r={brushRadius * photo.width}
+                    className={`brush-cursor ${brushMode === "erase" ? "is-erase" : ""}`}
+                  />
+                ) : null}
+              </svg>
+            )}
+
+            {repairPoints.length > 0 && (
+              <svg
+                className="brush-overlay"
+                viewBox={`0 0 ${photo.width} ${photo.height}`}
+                preserveAspectRatio="none"
+                aria-label="手动修复点"
+              >
+                {repairPoints.map((point, index) => (
+                  <g key={`${index}-${point.x}-${point.y}`}>
+                    <circle
+                      cx={point.x * photo.width}
+                      cy={point.y * photo.height}
+                      r={point.radius * photo.width}
+                      className="repair-ring"
+                    />
+                    <circle
+                      cx={point.x * photo.width}
+                      cy={point.y * photo.height}
+                      r={Math.max(3, point.radius * photo.width * 0.1)}
+                      className="repair-dot"
+                    />
                   </g>
                 ))}
               </svg>

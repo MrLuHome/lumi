@@ -1,26 +1,39 @@
 import { create } from "zustand";
 import type {
+  BeautyAnalysis,
+  BeautyParams,
+  BeautyProgress,
   EditParams,
   ExportSettings,
   FaceDetectionResult,
   FaceModelStatus,
   FaceProgress,
+  MaskPreview,
+  MaskStroke,
   PhotoAsset,
   ProjectDoc,
   RenderProgress,
+  SkinModelStatus,
 } from "../types";
 import {
+  BEAUTY_LABELS,
   DEFAULT_EXPORT,
   DEFAULT_PARAMS,
   PARAM_GROUPS,
   PARAM_LABELS,
+  type BeautyKey,
   type CurveChannel,
   type CurvePoint,
   type HslKey,
+  type ManualMask,
   clampParams,
   cloneParams,
+  defaultBeauty,
+  defaultFaceBeauty,
+  findFaceBeauty,
   isNeutral,
   paramsEqual,
+  withFaceBeauty,
 } from "./params";
 import {
   createHistory,
@@ -40,6 +53,9 @@ export const DETAIL_ZOOM_THRESHOLD = 1.05;
 export type RenderStatus = "idle" | "rendering" | "ready" | "error";
 export type CompareMode = "off" | "split";
 export type FaceStatus = "idle" | "loading" | "ready" | "error";
+export type BeautyStatus = "idle" | "analyzing" | "ready" | "error";
+export type MaskStatus = "idle" | "loading" | "ready" | "error";
+export type BrushMode = "off" | "paint" | "erase" | "repair";
 
 export interface Notice {
   id: number;
@@ -91,6 +107,20 @@ export interface EditorState {
   showFaceOverlay: boolean;
   modelStatus: FaceModelStatus | null;
 
+  beautyAnalysis: Record<string, BeautyAnalysis>;
+  beautyStatus: BeautyStatus;
+  beautyProgress: BeautyProgress | null;
+  beautyError: string | null;
+  skinModel: SkinModelStatus | null;
+
+  maskVisible: boolean;
+  maskPreview: MaskPreview | null;
+  maskStatus: MaskStatus;
+  maskError: string | null;
+  brushMode: BrushMode;
+  /** 画笔半径，按图像宽度归一化。 */
+  brushRadius: number;
+
   importing: boolean;
   exporting: boolean;
   dragActive: boolean;
@@ -141,6 +171,34 @@ export interface EditorState {
   setActiveFace: (index: number) => void;
   setShowFaceOverlay: (value: boolean) => void;
   setModelStatus: (status: FaceModelStatus) => void;
+
+  setBeautyStatus: (status: BeautyStatus) => void;
+  setBeautyProgress: (progress: BeautyProgress | null) => void;
+  setBeautyError: (message: string) => void;
+  setBeautyAnalysis: (photoId: string, analysis: BeautyAnalysis) => void;
+  setSkinModel: (status: SkinModelStatus) => void;
+  updateFaceBeauty: (faceId: number, key: BeautyKey, value: number) => void;
+  setFaceEnabled: (faceId: number, enabled: boolean) => void;
+  resetFaceBeauty: (faceId: number) => void;
+  applyBeautySuggestion: (faceId: number, beauty: BeautyParams, label?: string) => void;
+  copyFaceParamsToOthers: (faceId: number) => void;
+  updateManualMask: (
+    updater: (mask: ManualMask) => ManualMask,
+    label: string,
+    coalesceKey?: string,
+  ) => void;
+  appendMaskStroke: (stroke: MaskStroke) => void;
+  undoMaskStroke: () => void;
+  clearMaskStrokes: () => void;
+  addRepairPoint: (x: number, y: number, radius: number) => void;
+  undoRepairPoint: () => void;
+  clearRepairPoints: () => void;
+  setMaskVisible: (visible: boolean) => void;
+  setMaskPreview: (preview: MaskPreview | null) => void;
+  setMaskStatus: (status: MaskStatus) => void;
+  setMaskError: (message: string) => void;
+  setBrushMode: (mode: BrushMode) => void;
+  setBrushRadius: (radius: number) => void;
 
   setImporting: (value: boolean) => void;
   setExporting: (value: boolean) => void;
@@ -251,6 +309,19 @@ export function createEditorStore() {
       showFaceOverlay: true,
       modelStatus: null,
 
+      beautyAnalysis: {},
+      beautyStatus: "idle",
+      beautyProgress: null,
+      beautyError: null,
+      skinModel: null,
+
+      maskVisible: false,
+      maskPreview: null,
+      maskStatus: "idle",
+      maskError: null,
+      brushMode: "off",
+      brushRadius: 0.03,
+
       importing: false,
       exporting: false,
       dragActive: false,
@@ -280,6 +351,11 @@ export function createEditorStore() {
           autoFit: hadActive ? state.autoFit : true,
           pan: hadActive ? state.pan : { x: 0, y: 0 },
           faceStatus: "idle",
+          beautyStatus: "idle",
+          beautyError: null,
+          maskPreview: null,
+          maskVisible: false,
+          brushMode: "off",
         });
       },
 
@@ -292,10 +368,12 @@ export function createEditorStore() {
         const history = { ...state.history };
         const renderedPreviews = { ...state.renderedPreviews };
         const faces = { ...state.faces };
+        const beautyAnalysis = { ...state.beautyAnalysis };
         delete params[id];
         delete history[id];
         delete renderedPreviews[id];
         delete faces[id];
+        delete beautyAnalysis[id];
 
         let activeId = state.activeId;
         if (activeId === id) {
@@ -309,6 +387,7 @@ export function createEditorStore() {
           history,
           renderedPreviews,
           faces,
+          beautyAnalysis,
           activeId,
           autoFit: true,
           pan: { x: 0, y: 0 },
@@ -328,6 +407,13 @@ export function createEditorStore() {
           faceStatus: state.faces[id] ? "ready" : "idle",
           faceError: null,
           activeFace: 0,
+          maskPreview: null,
+          maskError: null,
+          maskVisible: false,
+          brushMode: "off",
+          beautyStatus: state.beautyAnalysis[id] ? "ready" : "idle",
+          beautyError: null,
+          beautyProgress: null,
         });
       },
 
@@ -360,6 +446,15 @@ export function createEditorStore() {
           autoFit: true,
           pan: { x: 0, y: 0 },
           lastEdit: null,
+          beautyAnalysis: {},
+          beautyStatus: "idle",
+          beautyError: null,
+          beautyProgress: null,
+          maskVisible: false,
+          maskPreview: null,
+          maskStatus: "idle",
+          maskError: null,
+          brushMode: "off",
         });
       },
 
@@ -539,15 +634,27 @@ export function createEditorStore() {
         set({ renderStatus: "error", renderError: message, renderElapsedMs: null, renderProgress: null }),
       setRenderProgress: (progress) => set({ renderProgress: progress }),
 
-      setFaces: (photoId, result) =>
+      setFaces: (photoId, result) => {
+        const state = get();
+        const current = state.params[photoId] ?? DEFAULT_PARAMS;
+        const existing = new Map(current.faces.map((face) => [face.faceId, face]));
+        // 检测结果与参数按稳定 ID 对齐：保留已有参数，新增人脸补默认项。
+        const faces = result.faces
+          .map((face) => existing.get(face.id) ?? defaultFaceBeauty(face.id))
+          .sort((a, b) => a.faceId - b.faceId);
         set({
-          faces: { ...get().faces, [photoId]: result },
+          faces: { ...state.faces, [photoId]: result },
+          params: { ...state.params, [photoId]: { ...current, faces } },
           faceStatus: "ready",
           faceError: null,
           faceProgress: null,
           activeFace: 0,
           showFaceOverlay: true,
-        }),
+          maskPreview: null,
+          maskError: null,
+          brushMode: "off",
+        });
+      },
       setFaceStatus: (status) => set({ faceStatus: status }),
       setFaceProgress: (progress) => set({ faceProgress: progress }),
       setFaceError: (message) =>
@@ -555,6 +662,156 @@ export function createEditorStore() {
       setActiveFace: (index) => set({ activeFace: Math.max(0, index) }),
       setShowFaceOverlay: (value) => set({ showFaceOverlay: value }),
       setModelStatus: (status) => set({ modelStatus: status }),
+
+      setBeautyStatus: (status) => set({ beautyStatus: status }),
+      setBeautyProgress: (progress) => set({ beautyProgress: progress }),
+      setBeautyError: (message) =>
+        set({ beautyStatus: "error", beautyError: message, beautyProgress: null }),
+      setBeautyAnalysis: (photoId, analysis) =>
+        set((state) => ({
+          beautyAnalysis: { ...state.beautyAnalysis, [photoId]: analysis },
+          beautyStatus: "ready",
+          beautyError: null,
+          beautyProgress: null,
+        })),
+      setSkinModel: (status) => set({ skinModel: status }),
+
+      updateFaceBeauty: (faceId, key, value) =>
+        apply(
+          (current) =>
+            withFaceBeauty(current, faceId, (face) => ({
+              ...face,
+              beauty: { ...face.beauty, [key]: value },
+            })),
+          BEAUTY_LABELS[key],
+          `beauty:${faceId}:${key}`,
+        ),
+
+      setFaceEnabled: (faceId, enabled) =>
+        apply(
+          (current) =>
+            withFaceBeauty(current, faceId, (face) => ({ ...face, enabled })),
+          enabled ? "启用该人脸" : "停用该人脸",
+        ),
+
+      resetFaceBeauty: (faceId) =>
+        apply(
+          (current) =>
+            withFaceBeauty(current, faceId, (face) => ({
+              ...face,
+              beauty: defaultBeauty(),
+            })),
+          "重置该人脸",
+        ),
+
+      applyBeautySuggestion: (faceId, beauty, label) =>
+        apply(
+          (current) =>
+            withFaceBeauty(current, faceId, (face) => ({
+              ...face,
+              enabled: true,
+              beauty: { ...beauty },
+            })),
+          label ?? "应用 AI 建议",
+        ),
+
+      copyFaceParamsToOthers: (faceId) => {
+        const state = get();
+        const params = selectActiveParams(state);
+        const source = findFaceBeauty(params, faceId);
+        if (!source) return;
+        const result = selectActiveFaces(state);
+        const targetIds = (result?.faces ?? []).map((face) => face.id);
+        if (targetIds.length <= 1) {
+          get().notify("info", "当前照片只有一张人脸");
+          return;
+        }
+        apply(
+          (current) => ({
+            ...current,
+            faces: current.faces.map((face) =>
+              targetIds.includes(face.faceId)
+                ? { ...face, beauty: { ...source.beauty } }
+                : face,
+            ),
+          }),
+          "复制人脸参数",
+        );
+        get().notify("success", "已把当前人脸参数复制到其他人物");
+      },
+
+      updateManualMask: (updater, label, coalesceKey) =>
+        apply(
+          (current) => ({ ...current, manualMask: updater(current.manualMask) }),
+          label,
+          coalesceKey,
+        ),
+
+      appendMaskStroke: (stroke) =>
+        apply(
+          (current) => ({
+            ...current,
+            manualMask: {
+              ...current.manualMask,
+              enabled: true,
+              strokes: [...current.manualMask.strokes, stroke],
+            },
+          }),
+          "手动蒙版笔触",
+        ),
+
+      undoMaskStroke: () =>
+        apply(
+          (current) => ({
+            ...current,
+            manualMask: {
+              ...current.manualMask,
+              strokes: current.manualMask.strokes.slice(0, -1),
+            },
+          }),
+          "撤销笔触",
+        ),
+
+      clearMaskStrokes: () =>
+        apply(
+          (current) => ({
+            ...current,
+            manualMask: { ...current.manualMask, strokes: [] },
+          }),
+          "恢复自动蒙版",
+        ),
+
+      addRepairPoint: (x, y, radius) =>
+        apply(
+          (current) => ({
+            ...current,
+            repairPoints: [...current.repairPoints, { x, y, radius }].slice(-200),
+          }),
+          "添加修复点",
+        ),
+
+      undoRepairPoint: () =>
+        apply(
+          (current) => ({
+            ...current,
+            repairPoints: current.repairPoints.slice(0, -1),
+          }),
+          "撤销修复点",
+        ),
+
+      clearRepairPoints: () =>
+        apply(
+          (current) => ({ ...current, repairPoints: [] }),
+          "清除修复点",
+        ),
+
+      setMaskVisible: (visible) => set({ maskVisible: visible }),
+      setMaskPreview: (preview) =>
+        set({ maskPreview: preview, maskStatus: preview ? "ready" : "idle" }),
+      setMaskStatus: (status) => set({ maskStatus: status }),
+      setMaskError: (message) => set({ maskStatus: "error", maskError: message }),
+      setBrushMode: (mode) => set({ brushMode: mode }),
+      setBrushRadius: (radius) => set({ brushRadius: clamp(radius, 0.004, 0.2) }),
 
       setImporting: (value) => set({ importing: value }),
       setExporting: (value) => set({ exporting: value }),
@@ -591,6 +848,16 @@ export const selectActiveFace = (state: EditorState) => {
   const result = selectActiveFaces(state);
   if (!result || result.faces.length === 0) return null;
   return result.faces[Math.min(state.activeFace, result.faces.length - 1)] ?? result.faces[0];
+};
+
+export const selectActiveBeautyAnalysis = (state: EditorState): BeautyAnalysis | null =>
+  (state.activeId ? state.beautyAnalysis[state.activeId] : undefined) ?? null;
+
+/** 当前选中人脸的参数条目；尚未同步时返回 null。 */
+export const selectActiveFaceBeauty = (state: EditorState) => {
+  const face = selectActiveFace(state);
+  if (!face) return null;
+  return findFaceBeauty(selectActiveParams(state), face.id) ?? null;
 };
 
 /** 效果图 URL：参数归零时直接复用原图，省掉一次后端渲染。 */
