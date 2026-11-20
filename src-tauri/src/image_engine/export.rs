@@ -98,6 +98,18 @@ pub fn write(
     settings: ExportSettings,
     source_depth: BitDepth,
 ) -> AppResult<ExportOutcome> {
+    write_atomic(destination, original, image, settings, source_depth)
+}
+
+/// 原子写出：先写同目录临时文件，成功后重命名。
+/// 取消或异常退出不会在目标位置留下半张损坏的图片。
+pub fn write_atomic(
+    destination: &Path,
+    original: &Path,
+    image: &Image16,
+    settings: ExportSettings,
+    source_depth: BitDepth,
+) -> AppResult<ExportOutcome> {
     if same_path(destination, original) {
         return Err(AppError::Unsupported(
             "导出路径不能与原图相同，原图不会被覆盖".into(),
@@ -115,7 +127,20 @@ pub fn write(
             std::fs::create_dir_all(parent)?;
         }
     }
-    std::fs::write(destination, &bytes)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let file_name = destination
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "export".into());
+    let temp = destination.with_file_name(format!(".lumi-tmp-{stamp}-{file_name}"));
+    std::fs::write(&temp, &bytes)?;
+    if let Err(error) = std::fs::rename(&temp, destination) {
+        std::fs::remove_file(&temp).ok();
+        return Err(error.into());
+    }
     Ok(ExportOutcome {
         path: destination.to_path_buf(),
         bytes: bytes.len() as u64,

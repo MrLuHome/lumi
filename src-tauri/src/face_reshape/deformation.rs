@@ -10,7 +10,7 @@ pub const MAX_LOCAL_DISPLACEMENT: f32 = 0.32;
 
 pub fn clamp_local(du: f32, dv: f32) -> (f32, f32) {
     let length = (du * du + dv * dv).sqrt();
-    if length > MAX_LOCAL_DISPLACEMENT && length > 1e-6 {
+    if length > MAX_LOCAL_DISPLACEMENT {
         let scale = MAX_LOCAL_DISPLACEMENT / length;
         (du * scale, dv * scale)
     } else {

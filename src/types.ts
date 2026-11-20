@@ -397,3 +397,184 @@ export interface ExportResult {
   format: string;
   elapsedMs: number;
 }
+
+/* ------------------------- 第六轮：智能精修 / 预设 / 批量 ------------------------- */
+
+export type Workspace = "edit" | "smart" | "presets" | "batch";
+
+export type RetouchMode = "natural" | "light" | "standard" | "strong";
+
+export type MetricStatus = "ok" | "lowConfidence" | "noData" | "unsupported" | "failed";
+
+/** 与 Rust `AnalysisMetric` 对应。value 为 null 表示没有可靠数据。 */
+export interface AnalysisMetric {
+  key: string;
+  label: string;
+  value: number | null;
+  unit: string;
+  status: MetricStatus;
+  detail: string;
+}
+
+/** 与 Rust `RetouchSuggestion` 对应，target 区分普通参数与按人脸美肤参数。 */
+export interface RetouchSuggestion {
+  id: string;
+  group: string;
+  label: string;
+  target: "param" | "faceBeauty";
+  field: string;
+  current: number;
+  suggested: number;
+  reason: string;
+  confidence: number;
+  applicable: boolean;
+}
+
+export interface AnalysisCapabilities {
+  faceDetection: boolean;
+  beautyAnalysis: boolean;
+  manualMask: boolean;
+  background: boolean;
+}
+
+export interface AnalysisReport {
+  imageHash: string;
+  algorithmVersion: string;
+  resultVersion: number;
+  analyzedAtMs: number;
+  mode: RetouchMode;
+  faces: number;
+  metrics: AnalysisMetric[];
+  suggestions: RetouchSuggestion[];
+  warnings: string[];
+  capabilities: AnalysisCapabilities;
+}
+
+export interface AnalysisResponse {
+  report: AnalysisReport;
+  cached: boolean;
+  /** true 表示输入或算法版本已变化，本次重新计算，旧结果可能过期。 */
+  stale: boolean;
+  elapsedMs: number;
+}
+
+export interface AppliedSuggestions {
+  params: import("./state/params").EditParams;
+  warnings: string[];
+}
+
+export type PresetCategory = "portraitNatural" | "skinTone" | "color" | "mood" | "custom";
+
+export type PresetSource = "builtin" | "custom";
+
+/** 预设参数子集：只含调色与美肤模板，不含任何对象级数据。 */
+export interface PresetParams {
+  exposure?: number;
+  contrast?: number;
+  highlights?: number;
+  shadows?: number;
+  whites?: number;
+  blacks?: number;
+  temperature?: number;
+  tint?: number;
+  saturation?: number;
+  vibrance?: number;
+  clarity?: number;
+  sharpness?: number;
+  grain?: number;
+  vignette?: number;
+  hsl: import("./state/params").HslParams;
+  curves: import("./state/params").CurveSet;
+  lutName?: string;
+  lutStrength?: number;
+  beauty: Record<string, number>;
+}
+
+export interface RetouchPreset {
+  id: string;
+  name: string;
+  category: PresetCategory;
+  description: string;
+  version: string;
+  source: PresetSource;
+  params: PresetParams;
+  suitableFor: string;
+  avoid: string;
+  preview?: string;
+}
+
+export interface PresetList {
+  presets: RetouchPreset[];
+  schemaVersion: number;
+}
+
+export interface PresetPreviews {
+  previews: { presetId: string; url: string; warnings: string[] }[];
+  failed: string[];
+}
+
+export interface PresetSaved {
+  preset: RetouchPreset;
+}
+
+export type BatchStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+export interface BatchTask {
+  jobId: string;
+  path: string;
+  name: string;
+  number: number;
+  status: BatchStatus;
+  stage: string;
+  progress: number;
+  outputPath: string | null;
+  error: string | null;
+  startedAtMs: number;
+  finishedAtMs: number;
+  bytes: number;
+  width: number;
+  height: number;
+}
+
+export interface BatchCurrent {
+  jobId: string;
+  name: string;
+  index: number;
+  stage: string;
+  progress: number;
+}
+
+export interface BatchSnapshot {
+  tasks: BatchTask[];
+  running: boolean;
+  paused: boolean;
+  total: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  cancelled: number;
+  pending: number;
+  exported: number;
+  current: BatchCurrent | null;
+  overall: number;
+  elapsedMs: number;
+  etaMs: number | null;
+}
+
+export type ConflictPolicy = "skip" | "rename" | "overwrite";
+
+export interface BatchExportRequest {
+  photos: { path: string; params: import("./state/params").EditParams }[];
+  settings: import("./state/params").ExportSettings;
+  outputDir: string;
+  naming: string;
+  startIndex: number;
+  conflict: ConflictPolicy;
+  overwriteConfirmed: boolean;
+}

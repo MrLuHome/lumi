@@ -1,12 +1,15 @@
 import { create } from "zustand";
 import type {
+  AnalysisReport,
   BackgroundImageInfo,
   BackgroundReport,
+  BatchSnapshot,
   BeautyAnalysis,
   BeautyParams,
   BeautyProgress,
   BodyCapability,
   BodyReport,
+  ConflictPolicy,
   EditParams,
   ExportSettings,
   FaceDetectionResult,
@@ -22,9 +25,12 @@ import type {
   ProjectDoc,
   ProjectFaceRecord,
   RenderProgress,
+  RetouchMode,
+  RetouchPreset,
   SegmentationCapability,
   SkinModelStatus,
   SubjectMaskPreview,
+  Workspace,
 } from "../types";
 import {
   BEAUTY_LABELS,
@@ -196,6 +202,57 @@ export interface EditorState {
   exporting: boolean;
   dragActive: boolean;
   notice: Notice | null;
+
+  /** 第六轮：工作区切换。 */
+  workspace: Workspace;
+  setWorkspace: (workspace: Workspace) => void;
+
+  /** 智能精修分析：按照片保存最近一次真实报告。 */
+  smartReports: Record<string, AnalysisReport>;
+  smartStatus: MaskStatus;
+  smartError: string | null;
+  smartElapsedMs: number | null;
+  smartMode: RetouchMode;
+  setSmartMode: (mode: RetouchMode) => void;
+  setSmartReport: (photoId: string, report: AnalysisReport, elapsedMs: number) => void;
+  setSmartStatus: (status: MaskStatus) => void;
+  setSmartError: (message: string | null) => void;
+
+  /** 预设库。缩略图来自当前照片的真实渲染，不用占位图。 */
+  presets: RetouchPreset[];
+  presetStatus: MaskStatus;
+  presetError: string | null;
+  presetStrength: number;
+  presetPreviews: Record<string, string>;
+  presetPreviewStatus: MaskStatus;
+  selectedPresetId: string | null;
+  setPresets: (presets: RetouchPreset[]) => void;
+  setPresetStatus: (status: MaskStatus) => void;
+  setPresetError: (message: string | null) => void;
+  setPresetStrength: (value: number) => void;
+  setPresetPreviews: (previews: Record<string, string>) => void;
+  setPresetPreviewStatus: (status: MaskStatus) => void;
+  setSelectedPreset: (presetId: string | null) => void;
+
+  /** 批量处理：选择、输出设置与任务快照。 */
+  batchSelection: string[];
+  batchSnapshot: BatchSnapshot | null;
+  batchOutputDir: string;
+  batchNaming: string;
+  batchStartIndex: number;
+  batchConflict: ConflictPolicy;
+  batchSettings: ExportSettings;
+  toggleBatchSelection: (photoId: string) => void;
+  setBatchSelection: (ids: string[]) => void;
+  setBatchSnapshot: (snapshot: BatchSnapshot | null) => void;
+  setBatchOutputDir: (dir: string) => void;
+  setBatchNaming: (naming: string) => void;
+  setBatchStartIndex: (index: number) => void;
+  setBatchConflict: (policy: ConflictPolicy) => void;
+  setBatchSettings: (settings: ExportSettings) => void;
+
+  /** 把后端返回的完整参数写回指定照片，并保留可撤销历史。 */
+  applyExternalParams: (photoId: string, next: EditParams, label: string) => void;
 
   addPhotos: (items: PhotoAsset[]) => void;
   removePhoto: (id: string) => void;
@@ -515,6 +572,79 @@ export function createEditorStore() {
       exporting: false,
       dragActive: false,
       notice: null,
+
+      workspace: "edit",
+      setWorkspace: (workspace) => set({ workspace }),
+
+      smartReports: {},
+      smartStatus: "idle",
+      smartError: null,
+      smartElapsedMs: null,
+      smartMode: "natural",
+      setSmartMode: (smartMode) => set({ smartMode }),
+      setSmartReport: (photoId, report, elapsedMs) =>
+        set((state) => ({
+          smartReports: { ...state.smartReports, [photoId]: report },
+          smartElapsedMs: elapsedMs,
+          smartStatus: "ready",
+          smartError: null,
+        })),
+      setSmartStatus: (smartStatus) => set({ smartStatus }),
+      setSmartError: (smartError) => set({ smartError, smartStatus: smartError ? "error" : "idle" }),
+
+      presets: [],
+      presetStatus: "idle",
+      presetError: null,
+      presetStrength: 100,
+      presetPreviews: {},
+      presetPreviewStatus: "idle",
+      selectedPresetId: null,
+      setPresets: (presets) => set({ presets, presetStatus: "ready", presetError: null }),
+      setPresetStatus: (presetStatus) => set({ presetStatus }),
+      setPresetError: (presetError) =>
+        set({ presetError, presetStatus: presetError ? "error" : "idle" }),
+      setPresetStrength: (presetStrength) =>
+        set({ presetStrength: Math.min(100, Math.max(0, presetStrength)) }),
+      setPresetPreviews: (presetPreviews) => set({ presetPreviews }),
+      setPresetPreviewStatus: (presetPreviewStatus) => set({ presetPreviewStatus }),
+      setSelectedPreset: (selectedPresetId) => set({ selectedPresetId }),
+
+      batchSelection: [],
+      batchSnapshot: null,
+      batchOutputDir: "",
+      batchNaming: "{name}-lumi",
+      batchStartIndex: 1,
+      batchConflict: "skip",
+      batchSettings: DEFAULT_EXPORT,
+      toggleBatchSelection: (photoId) =>
+        set((state) => ({
+          batchSelection: state.batchSelection.includes(photoId)
+            ? state.batchSelection.filter((id) => id !== photoId)
+            : [...state.batchSelection, photoId],
+        })),
+      setBatchSelection: (batchSelection) => set({ batchSelection }),
+      setBatchSnapshot: (batchSnapshot) => set({ batchSnapshot }),
+      setBatchOutputDir: (batchOutputDir) => set({ batchOutputDir }),
+      setBatchNaming: (batchNaming) => set({ batchNaming }),
+      setBatchStartIndex: (batchStartIndex) =>
+        set({ batchStartIndex: Math.max(1, Math.round(batchStartIndex || 1)) }),
+      setBatchConflict: (batchConflict) => set({ batchConflict }),
+      setBatchSettings: (batchSettings) => set({ batchSettings }),
+      applyExternalParams: (photoId, next, label) => {
+        const state = get();
+        const current = state.params[photoId];
+        if (!current) return;
+        const clamped = clampParams(cloneParams(next));
+        if (paramsEqual(current, clamped)) return;
+        set({
+          params: { ...state.params, [photoId]: clamped },
+          history: {
+            ...state.history,
+            [photoId]: pushHistory(state.history[photoId], current, label, Date.now()),
+          },
+          lastEdit: null,
+        });
+      },
 
       addPhotos: (items) => {
         if (items.length === 0) return;

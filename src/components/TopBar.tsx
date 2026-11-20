@@ -8,7 +8,7 @@ import {
   Save,
   Undo2,
 } from "lucide-react";
-import type { PhotoAsset } from "../types";
+import type { PhotoAsset, Workspace } from "../types";
 import { Menu } from "./ui/Menu";
 import type { CompareMode } from "../state/editorStore";
 import { isDesktopRuntime } from "../lib/platform";
@@ -25,6 +25,8 @@ interface TopBarProps {
   canRedo: boolean;
   canPaste: boolean;
   compareMode: CompareMode;
+  workspace: Workspace;
+  onWorkspace: (workspace: Workspace) => void;
   importing: boolean;
   exporting: boolean;
   onImport: () => void;
@@ -48,6 +50,8 @@ export function TopBar({
   canRedo,
   canPaste,
   compareMode,
+  workspace,
+  onWorkspace,
   importing,
   exporting,
   onImport,
@@ -118,6 +122,26 @@ export function TopBar({
             },
           ]}
         />
+      </nav>
+
+      <nav className="workspace-switch" aria-label="工作区">
+        {(
+          [
+            ["edit", "编辑"],
+            ["smart", "智能精修"],
+            ["presets", "预设库"],
+            ["batch", "批量处理"],
+          ] as [Workspace, string][]
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={`workspace-tab ${workspace === value ? "active" : ""}`}
+            onClick={() => onWorkspace(value)}
+          >
+            {label}
+          </button>
+        ))}
       </nav>
 
       <div className="topbar-actions">

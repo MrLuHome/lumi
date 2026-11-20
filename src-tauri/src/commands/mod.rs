@@ -1,8 +1,11 @@
+pub mod analysis;
 pub mod background;
+pub mod batch;
 pub mod beauty;
 pub mod body;
 pub mod faces;
 pub mod library;
+pub mod preset;
 pub mod project;
 pub mod render;
 pub mod reshape;

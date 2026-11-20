@@ -184,7 +184,7 @@ fn project_roundtrip_keeps_params_and_masks() {
         name: "sample".into(),
         strength: 60.0,
     });
-    let doc = ProjectDoc::new(
+    let mut doc = ProjectDoc::new(
         vec![ProjectPhoto {
             path: fixture("portrait.jpg").to_string_lossy().into_owned(),
             params: params.clone(),
@@ -192,10 +192,14 @@ fn project_roundtrip_keeps_params_and_masks() {
             export: None,
             source_hash: String::new(),
             faces: Vec::new(),
+            subjects: Vec::new(),
+            mask_meta: None,
         }],
         0,
         ExportSettings::default(),
     );
+    // 保存时会把主体/蒙版元数据同步进项目，比较前先做同样的同步。
+    doc.photos[0].sync_subject_records();
     project::save(&path, &doc).unwrap();
     let loaded = project::load(&path).unwrap();
     assert_eq!(loaded, doc);

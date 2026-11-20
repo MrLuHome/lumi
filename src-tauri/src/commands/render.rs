@@ -53,14 +53,6 @@ impl RenderRegistry {
             }
         }
     }
-
-    pub fn cancel_all(&self) {
-        if let Ok(guard) = self.tasks.lock() {
-            for flag in guard.values() {
-                flag.store(true, Ordering::Relaxed);
-            }
-        }
-    }
 }
 
 /// 相同原图 + 相同参数 + 相同尺寸直接复用结果（撤销/重做、对比切换很常见）。

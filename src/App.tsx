@@ -3,6 +3,9 @@ import { TopBar } from "./components/TopBar";
 import { LibraryRail } from "./components/LibraryRail";
 import { CanvasStage } from "./components/CanvasStage";
 import { Inspector } from "./components/Inspector";
+import { SmartPanel } from "./components/SmartPanel";
+import { PresetPanel } from "./components/PresetPanel";
+import { BatchWorkspace } from "./components/BatchWorkspace";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/ui/Toast";
 import { usePreviewRenderer } from "./hooks/usePreviewRenderer";
@@ -59,6 +62,8 @@ export default function App() {
   const importing = useEditorStore((state) => state.importing);
   const exporting = useEditorStore((state) => state.exporting);
   const projectPath = useEditorStore((state) => state.projectPath);
+  const workspace = useEditorStore((state) => state.workspace);
+  const setWorkspace = useEditorStore((state) => state.setWorkspace);
 
   const handleImport = useCallback(async () => {
     const state = useEditorStore.getState();
@@ -357,6 +362,8 @@ export default function App() {
         canRedo={canRedo}
         canPaste={canPaste}
         compareMode={compareMode}
+        workspace={workspace}
+        onWorkspace={setWorkspace}
         importing={importing}
         exporting={exporting}
         onImport={handleImport}
@@ -376,8 +383,20 @@ export default function App() {
 
       <div className="workspace">
         <LibraryRail photos={photos} activeId={activeId} onImport={handleImport} />
-        <CanvasStage photo={photo} effectUrl={effectUrl} onImport={handleImport} />
-        <Inspector photo={photo} params={params} />
+        {workspace === "batch" ? (
+          <BatchWorkspace />
+        ) : (
+          <>
+            <CanvasStage photo={photo} effectUrl={effectUrl} onImport={handleImport} />
+            {workspace === "smart" ? (
+              <SmartPanel />
+            ) : workspace === "presets" ? (
+              <PresetPanel />
+            ) : (
+              <Inspector photo={photo} params={params} />
+            )}
+          </>
+        )}
       </div>
 
       <StatusBar photo={photo} />

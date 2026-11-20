@@ -109,6 +109,8 @@ fn three_face_project_reopens_with_params_on_correct_people() {
                 middle_record.clone(),
                 right_record.clone(),
             ],
+            subjects: Vec::new(),
+            mask_meta: None,
         }],
         0,
         ExportSettings::default(),

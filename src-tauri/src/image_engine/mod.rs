@@ -3,6 +3,7 @@
 //! 外部只通过本模块的 `pipeline::render` 得到结果，内部细节
 //! （解码、16-bit 缓冲、调色阶段、编码、导出）对命令层透明。
 
+pub mod analysis;
 pub mod buffer;
 pub mod cancel;
 pub mod color;
@@ -13,6 +14,7 @@ pub mod geometry;
 pub mod operations;
 pub mod params;
 pub mod pipeline;
+pub mod preset;
 pub mod preview;
 pub mod project;
 

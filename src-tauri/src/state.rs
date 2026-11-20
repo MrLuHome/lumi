@@ -123,6 +123,7 @@ impl ImageCache {
         Ok(cached)
     }
 
+    #[allow(dead_code)] // 目前仅测试断言使用，保留用于排查缓存占用
     pub fn memory_usage(&self) -> usize {
         self.inner
             .lock()

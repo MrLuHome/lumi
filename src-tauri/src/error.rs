@@ -21,6 +21,9 @@ pub enum AppError {
     #[error("后台任务执行失败：{0}")]
     Task(String),
 
+    #[error("参数无效：{0}")]
+    InvalidInput(String),
+
     #[error("导出已取消")]
     Cancelled,
 }

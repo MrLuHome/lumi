@@ -29,6 +29,9 @@ pub fn run() {
         .manage(RenderRegistry::default())
         .manage(RenderCache::default())
         .manage(FaceEngine::default())
+        .manage(commands::analysis::AnalysisCache::default())
+        .manage(commands::preset::PresetStore::new())
+        .manage(commands::batch::BatchEngine::default())
         .invoke_handler(tauri::generate_handler![
             commands::library::pick_images,
             commands::library::load_images,
@@ -55,6 +58,29 @@ pub fn run() {
             commands::body::body_anchor_presets,
             commands::background::pick_background_image,
             commands::background::background_image_info,
+            commands::analysis::analyze_retouch,
+            commands::analysis::apply_retouch_suggestions,
+            commands::preset::list_presets,
+            commands::preset::apply_preset_to_photo,
+            commands::preset::preset_previews,
+            commands::preset::preset_preview,
+            commands::preset::preset_params_from_edit,
+            commands::preset::save_custom_preset,
+            commands::preset::delete_custom_preset,
+            commands::preset::duplicate_custom_preset,
+            commands::preset::rename_custom_preset,
+            commands::preset::export_preset,
+            commands::preset::import_preset,
+            commands::batch::batch_start,
+            commands::batch::batch_status,
+            commands::batch::batch_pause,
+            commands::batch::batch_resume,
+            commands::batch::batch_cancel_current,
+            commands::batch::batch_cancel_all,
+            commands::batch::batch_retry_failed,
+            commands::batch::batch_clear_completed,
+            commands::batch::batch_failures,
+            commands::batch::pick_batch_output_dir,
         ])
         .run(tauri::generate_context!())
         .expect("LUMI RETOUCH 启动失败");

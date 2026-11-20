@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AnalysisResponse,
+  AppliedSuggestions,
   BackgroundImageInfo,
+  BatchExportRequest,
+  BatchSnapshot,
+  BatchTask,
   BeautyAnalysis,
   BeautyProgress,
   BodyAnchorPreset,
@@ -15,12 +20,18 @@ import type {
   MaskPreview,
   MeshPreview,
   PhotoAsset,
+  PresetList,
+  PresetParams,
+  PresetPreviews,
+  PresetSaved,
   ProjectDoc,
   ProjectFaceRecord,
   ProjectOpenResult,
   RenderProgress,
   RenderResult,
   ReshapeCapability,
+  RetouchMode,
+  RetouchSuggestion,
   SegmentationCapability,
   SkinModelStatus,
   SubjectMaskPreview,
@@ -280,6 +291,181 @@ export async function subscribeBeautyProgress(
   if (!isDesktopRuntime()) return () => {};
   const event = await import("@tauri-apps/api/event");
   const unlisten = await event.listen<BeautyProgress>("lumi://beauty-progress", (payload) =>
+    handler(payload.payload),
+  );
+  return unlisten;
+}
+
+/** 本地分析：真实统计 + 人脸检测结果，生成可编辑建议。 */
+export async function analyzeRetouch(
+  path: string,
+  params: EditParams,
+  mode: RetouchMode,
+): Promise<AnalysisResponse> {
+  if (!isDesktopRuntime()) throw new Error("智能精修建议需要在桌面端运行");
+  return invoke<AnalysisResponse>("analyze_retouch", { path, params, mode });
+}
+
+/** 把用户勾选的建议逐字段合并为普通参数，可继续编辑并撤销。 */
+export async function applyRetouchSuggestions(
+  path: string,
+  params: EditParams,
+  suggestions: RetouchSuggestion[],
+): Promise<AppliedSuggestions> {
+  if (!isDesktopRuntime()) throw new Error("应用建议需要在桌面端运行");
+  return invoke<AppliedSuggestions>("apply_retouch_suggestions", {
+    path,
+    params,
+    suggestions,
+  });
+}
+
+export async function listPresets(): Promise<PresetList> {
+  if (!isDesktopRuntime()) return { presets: [], schemaVersion: 1 };
+  return invoke<PresetList>("list_presets");
+}
+
+/** 用当前照片真实渲染每个预设的缩略图。 */
+export async function presetPreviews(
+  path: string,
+  params: EditParams,
+  size?: number,
+): Promise<PresetPreviews> {
+  if (!isDesktopRuntime()) return { previews: [], failed: [] };
+  return invoke<PresetPreviews>("preset_previews", { path, params, size: size ?? null });
+}
+
+/** 单张预设实时预览：只在缩略尺寸上渲染，不触发全尺寸运算。 */
+export async function presetPreview(
+  path: string,
+  params: EditParams,
+  presetId: string,
+  strength: number,
+  size?: number,
+): Promise<{ url: string; warnings: string[] }> {
+  if (!isDesktopRuntime()) throw new Error("预设预览需要在桌面端运行");
+  return invoke("preset_preview", { path, params, presetId, strength, size: size ?? null });
+}
+
+/** 把当前照片参数提取为可保存的预设子集（不含对象级数据）。 */
+export async function presetParamsFromEdit(params: EditParams): Promise<PresetParams> {
+  if (!isDesktopRuntime()) throw new Error("保存预设需要在桌面端运行");
+  return invoke<PresetParams>("preset_params_from_edit", { params });
+}
+
+export async function applyPresetToPhoto(
+  path: string,
+  params: EditParams,
+  presetId: string,
+  strength: number,
+): Promise<AppliedSuggestions> {
+  if (!isDesktopRuntime()) throw new Error("应用预设需要在桌面端运行");
+  return invoke<AppliedSuggestions>("apply_preset_to_photo", {
+    path,
+    params,
+    presetId,
+    strength,
+  });
+}
+
+export async function saveCustomPreset(
+  presetId: string | null,
+  name: string,
+  description: string,
+  params: PresetParams,
+): Promise<PresetSaved> {
+  if (!isDesktopRuntime()) throw new Error("保存预设需要在桌面端运行");
+  return invoke<PresetSaved>("save_custom_preset", {
+    presetId,
+    name,
+    description,
+    params,
+  });
+}
+
+export async function deleteCustomPreset(presetId: string): Promise<void> {
+  if (!isDesktopRuntime()) throw new Error("删除预设需要在桌面端运行");
+  await invoke("delete_custom_preset", { presetId });
+}
+
+export async function duplicateCustomPreset(
+  presetId: string,
+  name: string,
+): Promise<PresetSaved> {
+  if (!isDesktopRuntime()) throw new Error("复制预设需要在桌面端运行");
+  return invoke<PresetSaved>("duplicate_custom_preset", { presetId, name });
+}
+
+export async function renameCustomPreset(
+  presetId: string,
+  name: string,
+): Promise<PresetSaved> {
+  if (!isDesktopRuntime()) throw new Error("重命名预设需要在桌面端运行");
+  return invoke<PresetSaved>("rename_custom_preset", { presetId, name });
+}
+
+export async function exportPreset(
+  presetId: string,
+  destination?: string,
+): Promise<{ path: string; preset: unknown }> {
+  if (!isDesktopRuntime()) throw new Error("导出预设需要在桌面端运行");
+  return invoke("export_preset", { presetId, destination: destination ?? null });
+}
+
+export async function importPreset(source?: string): Promise<PresetSaved> {
+  if (!isDesktopRuntime()) throw new Error("导入预设需要在桌面端运行");
+  return invoke<PresetSaved>("import_preset", { source: source ?? null });
+}
+
+export async function batchStart(request: BatchExportRequest): Promise<BatchSnapshot> {
+  if (!isDesktopRuntime()) throw new Error("批量导出需要在桌面端运行");
+  return invoke<BatchSnapshot>("batch_start", { request });
+}
+
+export async function batchStatus(): Promise<BatchSnapshot> {
+  if (!isDesktopRuntime()) throw new Error("批量任务状态需要在桌面端读取");
+  return invoke<BatchSnapshot>("batch_status");
+}
+
+export async function batchPause(): Promise<BatchSnapshot> {
+  return invoke<BatchSnapshot>("batch_pause");
+}
+
+export async function batchResume(): Promise<BatchSnapshot> {
+  return invoke<BatchSnapshot>("batch_resume");
+}
+
+export async function batchCancelCurrent(): Promise<BatchSnapshot> {
+  return invoke<BatchSnapshot>("batch_cancel_current");
+}
+
+export async function batchCancelAll(): Promise<BatchSnapshot> {
+  return invoke<BatchSnapshot>("batch_cancel_all");
+}
+
+export async function batchRetryFailed(): Promise<BatchSnapshot> {
+  return invoke<BatchSnapshot>("batch_retry_failed");
+}
+
+export async function batchClearCompleted(): Promise<BatchSnapshot> {
+  return invoke<BatchSnapshot>("batch_clear_completed");
+}
+
+export async function batchFailures(): Promise<BatchTask[]> {
+  return invoke<BatchTask[]>("batch_failures");
+}
+
+export async function pickBatchOutputDir(): Promise<string | null> {
+  if (!isDesktopRuntime()) return null;
+  return invoke<string | null>("pick_batch_output_dir");
+}
+
+export async function subscribeBatchProgress(
+  handler: (snapshot: BatchSnapshot) => void,
+): Promise<() => void> {
+  if (!isDesktopRuntime()) return () => {};
+  const event = await import("@tauri-apps/api/event");
+  const unlisten = await event.listen<BatchSnapshot>("lumi://batch-progress", (payload) =>
     handler(payload.payload),
   );
   return unlisten;
