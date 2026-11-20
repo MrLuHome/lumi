@@ -164,7 +164,7 @@ Release 构建，macOS 本机：
 - `cargo test`：64 项通过，1 项手动基准忽略。
 - `pnpm tauri build --debug --bundles app`：通过，产物 `src-tauri/target/debug/bundle/macos/LUMI RETOUCH.app`（108.98 MiB）。
 - 打包应用启动验证：直接打开 `.app`，进程存活、无崩溃报告，界面正常渲染（顶栏菜单、图库、画布、参数面板、状态栏均可见）。
-- 代码已按本轮范围本地提交，未推送远端。
+- 代码已按本轮范围本地提交（`016f8f9`），未推送远端。
 
 ## 8. 未完成事项
 
