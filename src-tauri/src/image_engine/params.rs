@@ -511,6 +511,358 @@ impl FaceReshape {
     }
 }
 
+/// 手动蒙版笔触类型。
+/// - `Paint` 叠加前景，`Erase` 擦除；
+/// - `Foreground` / `Background` 是显式标记，优先于普通笔触，用于修正局部误判。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SubjectMaskStrokeKind {
+    #[default]
+    Paint,
+    Erase,
+    Foreground,
+    Background,
+}
+
+/// 人物蒙版笔触。坐标按图像宽度/高度归一化；硬度与强度分离，
+/// 同一套笔触在任意分辨率重建出相同形状的 Alpha。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubjectMaskStroke {
+    #[serde(default)]
+    pub kind: SubjectMaskStrokeKind,
+    /// 画笔半径，按图像宽度归一化（0.002..0.5）。
+    #[serde(default = "default_brush_radius")]
+    pub radius: f32,
+    /// 硬度 0..100：100 为硬边，0 为完全柔和过渡。
+    #[serde(default = "default_hardness")]
+    pub hardness: f32,
+    /// 笔触强度 0..100，用于叠加时控制最大 Alpha。
+    #[serde(default = "default_opacity")]
+    pub strength: f32,
+    #[serde(default)]
+    pub points: Vec<MaskPoint>,
+}
+
+fn default_hardness() -> f32 {
+    60.0
+}
+
+/// 手动人物蒙版（非 AI 分割）。流程：笔触 → 平滑 → 收缩/扩张 → 羽化 → 发丝细节。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubjectMaskParams {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub invert: bool,
+    /// 羽化 0..100（按图像短边换算像素半径）。
+    #[serde(default = "default_feather")]
+    pub feather: f32,
+    /// 蒙版收缩/扩张 -100..100；正值扩张，负值收缩。
+    #[serde(default)]
+    pub expand: f32,
+    /// 边缘平滑 0..100。
+    #[serde(default)]
+    pub smooth: f32,
+    /// 发丝保护 0..100：在边缘带按原图高频细节保留细碎发丝。
+    #[serde(default)]
+    pub hair_protect: f32,
+    /// 边缘去污染 0..100（背景替换时使用）。
+    #[serde(default = "default_feather")]
+    pub decontaminate: f32,
+    #[serde(default)]
+    pub strokes: Vec<SubjectMaskStroke>,
+    /// 蒙版来源：`manual` 表示本地手动笔触，不是 AI 模型输出。
+    #[serde(default = "default_manual_source")]
+    pub source: String,
+    #[serde(default = "default_manual_version")]
+    pub model_version: String,
+}
+
+fn default_manual_source() -> String {
+    "manual".into()
+}
+
+fn default_manual_version() -> String {
+    "manual-alpha-1".into()
+}
+
+impl Default for SubjectMaskParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            invert: false,
+            feather: default_feather(),
+            expand: 0.0,
+            smooth: 15.0,
+            hair_protect: 0.0,
+            decontaminate: default_feather(),
+            strokes: Vec::new(),
+            source: default_manual_source(),
+            model_version: default_manual_version(),
+        }
+    }
+}
+
+impl SubjectMaskParams {
+    pub fn has_content(&self) -> bool {
+        self.enabled && !self.strokes.is_empty()
+    }
+
+    pub fn stroke_hash(&self) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        self.invert.hash(&mut hasher);
+        self.feather.to_bits().hash(&mut hasher);
+        self.expand.to_bits().hash(&mut hasher);
+        self.smooth.to_bits().hash(&mut hasher);
+        for stroke in &self.strokes {
+            stroke.kind.hash(&mut hasher);
+            stroke.radius.to_bits().hash(&mut hasher);
+            stroke.hardness.to_bits().hash(&mut hasher);
+            stroke.strength.to_bits().hash(&mut hasher);
+            for point in &stroke.points {
+                point.x.to_bits().hash(&mut hasher);
+                point.y.to_bits().hash(&mut hasher);
+            }
+        }
+        format!("{:016x}", hasher.finish())
+    }
+}
+
+/// 身材参数。全部 -100..100，0 表示不变；正值按字段语义放大，负值收窄。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BodyShape {
+    pub waist: f32,
+    pub shoulders: f32,
+    pub hips: f32,
+    pub thighs: f32,
+    pub calves: f32,
+    pub arms: f32,
+    pub legs: f32,
+}
+
+impl BodyShape {
+    pub fn is_neutral(&self) -> bool {
+        self.fields().iter().all(|value| *value == 0.0)
+    }
+
+    pub fn fields(&self) -> [f32; 7] {
+        [
+            self.waist,
+            self.shoulders,
+            self.hips,
+            self.thighs,
+            self.calves,
+            self.arms,
+            self.legs,
+        ]
+    }
+}
+
+/// 用户手动放置的身体控制点部位。它是编辑辅助标签，不是 AI 识别结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BodyAnchorPart {
+    ShoulderLeft,
+    ShoulderRight,
+    WaistLeft,
+    WaistRight,
+    HipLeft,
+    HipRight,
+    ThighLeft,
+    ThighRight,
+    KneeLeft,
+    KneeRight,
+    CalfLeft,
+    CalfRight,
+    ArmLeft,
+    ArmRight,
+    #[default]
+    Custom,
+}
+
+/// 手动身材锚点：把 (x,y) 处的身体边缘按 (dx,dy) 移动，周围平滑跟随。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BodyAnchor {
+    #[serde(default)]
+    pub part: BodyAnchorPart,
+    pub x: f32,
+    pub y: f32,
+    /// 归一化位移（相对图像宽/高），受最大位移约束。
+    pub dx: f32,
+    pub dy: f32,
+    /// 影响半径，按图像短边归一化。
+    #[serde(default = "default_anchor_radius")]
+    pub radius: f32,
+    /// 锁定后画布拖动不会移动该锚点。
+    #[serde(default)]
+    pub locked: bool,
+}
+
+fn default_anchor_radius() -> f32 {
+    0.12
+}
+
+/// 单个身材对象的参数。`subject_id` 是稳定 UUID，与人脸 UUID 不混用。
+/// 条目可以携带独立蒙版笔触，实现多人照片中 A 的变形不影响 B。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BodyAdjust {
+    pub subject_id: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub shape: BodyShape,
+    #[serde(default)]
+    pub anchors: Vec<BodyAnchor>,
+    /// 手动推拉笔触（与第四轮同一套模式，但作用在身体蒙版内）。
+    #[serde(default)]
+    pub strokes: Vec<WarpStroke>,
+    /// 该人物的独立蒙版笔触；为空时使用全局人物蒙版。
+    #[serde(default)]
+    pub mask_strokes: Vec<SubjectMaskStroke>,
+}
+
+impl BodyAdjust {
+    pub fn new(subject_id: impl Into<String>) -> Self {
+        Self {
+            subject_id: subject_id.into(),
+            enabled: true,
+            shape: BodyShape::default(),
+            anchors: Vec::new(),
+            strokes: Vec::new(),
+            mask_strokes: Vec::new(),
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.shape.is_neutral() || !self.anchors.is_empty() || !self.strokes.is_empty()
+    }
+
+    pub fn has_own_mask(&self) -> bool {
+        !self.mask_strokes.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundMode {
+    #[default]
+    Original,
+    Blur,
+    SolidColor,
+    Gradient,
+    Image,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundFit {
+    #[default]
+    Cover,
+    Contain,
+    Stretch,
+}
+
+/// 渐变色标，`position` 约定在 0..100。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientStop {
+    pub position: f32,
+    /// `#RRGGBB`，非法颜色会被夹紧为黑色。
+    pub color: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackgroundGradient {
+    /// 角度 0..360，0 表示从左到右。
+    pub angle: f32,
+    pub stops: Vec<GradientStop>,
+}
+
+impl Default for BackgroundGradient {
+    fn default() -> Self {
+        Self {
+            angle: 0.0,
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: "#1c2733".into(),
+                },
+                GradientStop {
+                    position: 100.0,
+                    color: "#4a6076".into(),
+                },
+            ],
+        }
+    }
+}
+
+/// 背景处理参数。`mode` 为 Original 时不改变任何像素。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackgroundParams {
+    pub enabled: bool,
+    pub mode: BackgroundMode,
+    /// 背景虚化 0..100。
+    pub blur: f32,
+    /// 模拟景深 0..100：只改变背景虚化强度分布，不是真实 3D 深度。
+    pub depth: f32,
+    /// 背景亮度 -100..100。
+    pub brightness: f32,
+    pub temperature: f32,
+    pub saturation: f32,
+    /// 纯色背景 `#RRGGBB`。
+    pub color: String,
+    pub gradient: BackgroundGradient,
+    /// 本地背景图片路径；不会上传到任何服务器。
+    pub image_path: String,
+    pub image_fit: BackgroundFit,
+    /// 背景图片缩放 50..200。
+    pub image_scale: f32,
+    /// 背景图片偏移 -100..100（百分比）。
+    pub image_offset_x: f32,
+    pub image_offset_y: f32,
+    pub image_blur: f32,
+    /// 前景边缘去污染 0..100。
+    pub decontaminate: f32,
+}
+
+impl Default for BackgroundParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: BackgroundMode::Original,
+            blur: 45.0,
+            depth: 30.0,
+            brightness: 0.0,
+            temperature: 0.0,
+            saturation: 0.0,
+            color: "#1f2933".into(),
+            gradient: BackgroundGradient::default(),
+            image_path: String::new(),
+            image_fit: BackgroundFit::Cover,
+            image_scale: 100.0,
+            image_offset_x: 0.0,
+            image_offset_y: 0.0,
+            image_blur: 0.0,
+            decontaminate: 60.0,
+        }
+    }
+}
+
+impl BackgroundParams {
+    pub fn is_active(&self) -> bool {
+        self.enabled && self.mode != BackgroundMode::Original
+    }
+}
+
 /// 统一编辑参数。前后端共用同一套字段名（camelCase），
 /// 滑杆、撤销快照、Rust 渲染管线、项目文件都直接使用这个结构。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -552,6 +904,15 @@ pub struct EditParams {
     /// 按稳定人脸 ID 保存的独立塑形参数（第四轮）。
     #[serde(default)]
     pub reshape: Vec<FaceReshape>,
+    /// 第五轮：手动人物蒙版（非 AI 分割）。
+    #[serde(default)]
+    pub subject_mask: SubjectMaskParams,
+    /// 第五轮：按稳定人物 UUID 保存的身材参数。
+    #[serde(default)]
+    pub body: Vec<BodyAdjust>,
+    /// 第五轮：背景处理参数。
+    #[serde(default)]
+    pub background: BackgroundParams,
     pub manual_mask: ManualMask,
     /// 手动点选的局部修复点（可撤销、可再编辑）。
     pub repair_points: Vec<RepairPoint>,
@@ -580,6 +941,9 @@ impl Default for EditParams {
             skin_smooth: 0.0,
             faces: Vec::new(),
             reshape: Vec::new(),
+            subject_mask: SubjectMaskParams::default(),
+            body: Vec::new(),
+            background: BackgroundParams::default(),
             manual_mask: ManualMask::default(),
             repair_points: Vec::new(),
             hsl: HslParams::default(),
@@ -638,6 +1002,9 @@ impl EditParams {
         }
         self.faces.sort_by_key(|face| face.face_id);
         clamp_reshape(&mut self.reshape);
+        clamp_subject_mask(&mut self.subject_mask);
+        clamp_body(&mut self.body);
+        clamp_background(&mut self.background);
         self.manual_mask.feather = self.manual_mask.feather.clamp(0.0, 100.0);
         self.manual_mask.strength = self.manual_mask.strength.clamp(0.0, 100.0);
         for stroke in self.manual_mask.strokes.iter_mut() {
@@ -714,6 +1081,8 @@ impl EditParams {
                 .reshape
                 .iter()
                 .all(|face| !face.enabled || !face.is_active())
+            && clamped.body.iter().all(|entry| !entry.enabled || !entry.is_active())
+            && !clamped.background.is_active()
             && clamped.hsl.is_neutral()
             && clamped.curves.is_neutral()
             && clamped.lut.is_none()
@@ -751,6 +1120,158 @@ impl EditParams {
     pub fn has_reshape(&self) -> bool {
         self.reshape.iter().any(|face| face.enabled && face.is_active())
     }
+
+    /// 是否存在需要人物蒙版的工作（蒙版笔触 / 身材 / 背景）。
+    pub fn has_subject_mask(&self) -> bool {
+        self.subject_mask.has_content()
+            || self.body.iter().any(|entry| entry.enabled && entry.has_own_mask())
+    }
+
+    pub fn has_body(&self) -> bool {
+        self.body.iter().any(|entry| entry.enabled && entry.is_active())
+    }
+
+    pub fn has_background(&self) -> bool {
+        self.background.is_active()
+    }
+
+    pub fn body_match(&self, subject_id: &str) -> Option<&BodyAdjust> {
+        self.body.iter().find(|entry| entry.subject_id == subject_id)
+    }
+
+    /// 所有会参与渲染的身材对象（稳定 UUID 顺序）。
+    pub fn active_body_subjects(&self) -> Vec<&BodyAdjust> {
+        self.body
+            .iter()
+            .filter(|entry| entry.enabled && entry.is_active())
+            .collect()
+    }
+}
+
+fn clamp_subject_mask(mask: &mut SubjectMaskParams) {
+    mask.feather = mask.feather.clamp(0.0, 100.0);
+    mask.expand = mask.expand.clamp(-100.0, 100.0);
+    mask.smooth = mask.smooth.clamp(0.0, 100.0);
+    mask.hair_protect = mask.hair_protect.clamp(0.0, 100.0);
+    mask.decontaminate = mask.decontaminate.clamp(0.0, 100.0);
+    clamp_subject_strokes(&mut mask.strokes);
+    if mask.source.trim().is_empty() {
+        mask.source = default_manual_source();
+    }
+    if mask.model_version.trim().is_empty() {
+        mask.model_version = default_manual_version();
+    }
+}
+
+fn clamp_subject_strokes(strokes: &mut Vec<SubjectMaskStroke>) {
+    strokes.retain(|stroke| !stroke.points.is_empty());
+    strokes.truncate(400);
+    for stroke in strokes.iter_mut() {
+        stroke.radius = stroke.radius.clamp(0.002, 0.5);
+        stroke.hardness = stroke.hardness.clamp(0.0, 100.0);
+        stroke.strength = stroke.strength.clamp(0.0, 100.0);
+        stroke.points.truncate(8000);
+        stroke
+            .points
+            .retain(|point| point.x.is_finite() && point.y.is_finite());
+        for point in stroke.points.iter_mut() {
+            point.x = point.x.clamp(0.0, 1.0);
+            point.y = point.y.clamp(0.0, 1.0);
+        }
+    }
+    strokes.retain(|stroke| !stroke.points.is_empty());
+}
+
+/// 身材参数夹紧：所有数值 -100..100，笔触/锚点有数量上限，
+/// 位移按 15% 上限预先收敛，防止异常项目文件产生不可控变形。
+fn clamp_body(entries: &mut Vec<BodyAdjust>) {
+    entries.retain(|entry| !entry.subject_id.trim().is_empty());
+    entries.truncate(32);
+    for entry in entries.iter_mut() {
+        clamp_signed(&mut [
+            &mut entry.shape.waist,
+            &mut entry.shape.shoulders,
+            &mut entry.shape.hips,
+            &mut entry.shape.thighs,
+            &mut entry.shape.calves,
+            &mut entry.shape.arms,
+            &mut entry.shape.legs,
+        ]);
+        entry.anchors.truncate(200);
+        for anchor in entry.anchors.iter_mut() {
+            anchor.x = anchor.x.clamp(0.0, 1.0);
+            anchor.y = anchor.y.clamp(0.0, 1.0);
+            anchor.dx = anchor.dx.clamp(-0.15, 0.15);
+            anchor.dy = anchor.dy.clamp(-0.15, 0.15);
+            anchor.radius = anchor.radius.clamp(0.02, 0.5);
+        }
+        entry.strokes.retain(|stroke| !stroke.points.is_empty());
+        entry.strokes.truncate(400);
+        for stroke in entry.strokes.iter_mut() {
+            stroke.radius = stroke.radius.clamp(0.004, 0.25);
+            stroke.strength = stroke.strength.clamp(0.0, 100.0);
+            stroke.feather = stroke.feather.clamp(0.0, 100.0);
+            stroke.points.truncate(4000);
+            stroke
+                .points
+                .retain(|point| point.x.is_finite() && point.y.is_finite());
+            for point in stroke.points.iter_mut() {
+                point.x = point.x.clamp(0.0, 1.0);
+                point.y = point.y.clamp(0.0, 1.0);
+            }
+        }
+        entry.strokes.retain(|stroke| !stroke.points.is_empty());
+        clamp_subject_strokes(&mut entry.mask_strokes);
+    }
+    entries.retain(|entry| entry.enabled || entry.is_active() || !entry.mask_strokes.is_empty());
+    entries.sort_by(|a, b| a.subject_id.cmp(&b.subject_id));
+    entries.dedup_by(|a, b| a.subject_id == b.subject_id);
+}
+
+fn clamp_background(bg: &mut BackgroundParams) {
+    bg.blur = bg.blur.clamp(0.0, 100.0);
+    bg.depth = bg.depth.clamp(0.0, 100.0);
+    clamp_signed(&mut [
+        &mut bg.brightness,
+        &mut bg.temperature,
+        &mut bg.saturation,
+    ]);
+    bg.image_scale = bg.image_scale.clamp(50.0, 200.0);
+    bg.image_offset_x = bg.image_offset_x.clamp(-100.0, 100.0);
+    bg.image_offset_y = bg.image_offset_y.clamp(-100.0, 100.0);
+    bg.image_blur = bg.image_blur.clamp(0.0, 100.0);
+    bg.decontaminate = bg.decontaminate.clamp(0.0, 100.0);
+    bg.color = sanitize_hex_color(&bg.color, "#1f2933");
+    bg.gradient.angle = bg.gradient.angle.clamp(0.0, 360.0);
+    bg.gradient.stops.truncate(8);
+    for stop in bg.gradient.stops.iter_mut() {
+        stop.position = stop.position.clamp(0.0, 100.0);
+        stop.color = sanitize_hex_color(&stop.color, "#000000");
+    }
+    bg.gradient
+        .stops
+        .sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
+    if bg.gradient.stops.is_empty() {
+        bg.gradient = BackgroundGradient::default();
+    }
+    if bg.mode == BackgroundMode::Image && bg.image_path.trim().is_empty() {
+        bg.mode = BackgroundMode::Original;
+    }
+}
+
+/// 只接受 `#RRGGBB`（可省略 `#`），其余一律回退，避免把任意字符串传给渲染器。
+pub fn sanitize_hex_color(value: &str, fallback: &str) -> String {
+    let normalize = |candidate: &str| {
+        let trimmed = candidate.trim().trim_start_matches('#');
+        if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+            Some(format!("#{}", trimmed.to_ascii_uppercase()))
+        } else {
+            None
+        }
+    };
+    normalize(value)
+        .or_else(|| normalize(fallback))
+        .unwrap_or_else(|| "#000000".to_string())
 }
 
 fn clamp_signed(values: &mut [&mut f32]) {
@@ -891,5 +1412,103 @@ mod tests {
         assert_eq!(params.faces[0].face_id, 1);
         assert_eq!(params.faces[1].face_id, 5);
         assert!(params.is_neutral());
+    }
+
+    #[test]
+    fn body_params_clamp_and_keep_stable_subject_ids() {
+        let params = EditParams {
+            body: vec![
+                BodyAdjust {
+                    subject_id: "b-subject".into(),
+                    enabled: true,
+                    shape: BodyShape {
+                        waist: 180.0,
+                        shoulders: -300.0,
+                        ..Default::default()
+                    },
+                    anchors: vec![BodyAnchor {
+                        part: BodyAnchorPart::WaistLeft,
+                        x: 2.0,
+                        y: -1.0,
+                        dx: 0.9,
+                        dy: -0.9,
+                        radius: 0.01,
+                        locked: true,
+                    }],
+                    strokes: Vec::new(),
+                    mask_strokes: Vec::new(),
+                },
+                BodyAdjust::new("a-subject"),
+            ],
+            ..Default::default()
+        }
+        .clamped();
+        assert_eq!(params.body[0].subject_id, "a-subject");
+        assert_eq!(params.body[1].shape.waist, 100.0);
+        assert_eq!(params.body[1].shape.shoulders, -100.0);
+        assert_eq!(params.body[1].anchors[0].x, 1.0);
+        assert_eq!(params.body[1].anchors[0].y, 0.0);
+        assert_eq!(params.body[1].anchors[0].dx, 0.15);
+        assert!(params.has_body());
+        assert!(!params.is_neutral());
+    }
+
+    #[test]
+    fn background_params_validate_colors_and_mode() {
+        let params = EditParams {
+            background: BackgroundParams {
+                enabled: true,
+                mode: BackgroundMode::Image,
+                image_path: "  ".into(),
+                color: "not-a-color".into(),
+                blur: 240.0,
+                brightness: -300.0,
+                gradient: BackgroundGradient {
+                    angle: 999.0,
+                    stops: vec![
+                        GradientStop {
+                            position: 220.0,
+                            color: "#abcdef".into(),
+                        },
+                        GradientStop {
+                            position: -10.0,
+                            color: "zzz".into(),
+                        },
+                    ],
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .clamped();
+        assert_eq!(params.background.mode, BackgroundMode::Original);
+        assert_eq!(params.background.color, "#1F2933");
+        assert_eq!(params.background.blur, 100.0);
+        assert_eq!(params.background.brightness, -100.0);
+        assert_eq!(params.background.gradient.angle, 360.0);
+        assert_eq!(params.background.gradient.stops[0].position, 0.0);
+        assert_eq!(params.background.gradient.stops[0].color, "#000000");
+        assert_eq!(params.background.gradient.stops[1].position, 100.0);
+        assert!(!params.has_background());
+        assert!(params.is_neutral());
+    }
+
+    #[test]
+    fn subject_mask_hash_changes_with_strokes() {
+        let mut mask = SubjectMaskParams {
+            enabled: true,
+            strokes: vec![SubjectMaskStroke {
+                kind: SubjectMaskStrokeKind::Paint,
+                radius: 0.1,
+                hardness: 50.0,
+                strength: 100.0,
+                points: vec![MaskPoint { x: 0.2, y: 0.3 }],
+            }],
+            ..Default::default()
+        };
+        let first = mask.stroke_hash();
+        mask.strokes[0].points[0].x = 0.4;
+        assert_ne!(first, mask.stroke_hash());
+        assert!(mask.has_content());
     }
 }

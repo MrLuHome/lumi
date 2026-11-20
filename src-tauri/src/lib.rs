@@ -49,6 +49,12 @@ pub fn run() {
             commands::reshape::export_face_records,
             commands::reshape::restore_faces,
             commands::reshape::confirm_face_match,
+            commands::segmentation::segmentation_capability,
+            commands::segmentation::preview_subject_mask,
+            commands::body::body_capability,
+            commands::body::body_anchor_presets,
+            commands::background::pick_background_image,
+            commands::background::background_image_info,
         ])
         .run(tauri::generate_context!())
         .expect("LUMI RETOUCH 启动失败");

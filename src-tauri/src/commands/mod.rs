@@ -1,6 +1,9 @@
+pub mod background;
 pub mod beauty;
+pub mod body;
 pub mod faces;
 pub mod library;
 pub mod project;
 pub mod render;
 pub mod reshape;
+pub mod segmentation;

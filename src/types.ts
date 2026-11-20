@@ -1,7 +1,16 @@
 export type {
   AdjustmentKey,
+  BackgroundFit,
+  BackgroundGradient,
+  BackgroundMode,
+  BackgroundParams,
   BeautyKey,
   BeautyParams,
+  BodyAdjust,
+  BodyAnchor,
+  BodyAnchorPart,
+  BodyShape,
+  BodyShapeKey,
   CurveChannel,
   CurvePoint,
   CurveSet,
@@ -12,6 +21,7 @@ export type {
   FaceReshape,
   FaceShape,
   FaceShapeKey,
+  GradientStop,
   ManualWarp,
   WarpMode,
   WarpStroke,
@@ -25,6 +35,9 @@ export type {
   ParamDefinition,
   ParamGroup,
   RepairPoint,
+  SubjectMaskParams,
+  SubjectMaskStroke,
+  SubjectMaskStrokeKind,
 } from "./state/params";
 
 /** 与 Rust `ImageItem` 对应。 */
@@ -53,7 +66,96 @@ export interface RenderResult {
   elapsedMs: number;
   computed: boolean;
   reshape: FaceReshapeReport[];
+  /** 第五轮身材处理报告。 */
+  body: BodyReport[];
+  /** 第五轮背景处理报告。 */
+  background: BackgroundReport | null;
+  /** 第五轮手动蒙版报告。 */
+  mask: MaskReport | null;
   warnings: string[];
+}
+
+/** 与 Rust `BodyReport` 对应。 */
+export interface BodyReport {
+  subjectId: string;
+  displacementMaxRatio: number;
+  foldedCells: number;
+  affectedPixels: number;
+  degraded: boolean;
+  elapsedMs: number;
+  notes: string[];
+}
+
+/** 与 Rust `BackgroundReport` 对应。 */
+export interface BackgroundReport {
+  mode: string;
+  maskedPixels: number;
+  elapsedMs: number;
+  degraded: boolean;
+  notes: string[];
+}
+
+/** 与 Rust `MaskReport` 对应。 */
+export interface MaskReport {
+  source: string;
+  modelVersion: string;
+  coverage: number;
+  edgeRatio: number;
+  strokes: number;
+  elapsedMs: number;
+}
+
+/** 与 Rust `SegmentationCapability` 对应：AI 分割是否可用及原因。 */
+export interface SegmentationCapability {
+  aiAvailable: boolean;
+  manualAvailable: boolean;
+  providers: MaskProviderInfo[];
+  note: string;
+}
+
+export interface MaskProviderInfo {
+  id: string;
+  version: string;
+  license: string;
+  available: boolean;
+  reason: string;
+}
+
+/** 与 Rust `SubjectMaskPreview` 对应。 */
+export interface SubjectMaskPreview {
+  url: string;
+  width: number;
+  height: number;
+  coverage: number;
+  edgeRatio: number;
+  source: string;
+  modelVersion: string;
+  strokes: number;
+  note: string;
+}
+
+/** 与 Rust `PoseCapability` 对应：姿态/自动身材是否可用及原因。 */
+export interface BodyCapability {
+  poseAvailable: boolean;
+  provider: string;
+  license: string;
+  reason: string;
+  note: string;
+}
+
+/** 与 Rust `BodyAnchorPreset` 对应：从手动蒙版轮廓得到的锚点建议位置。 */
+export interface BodyAnchorPreset {
+  part: import("./state/params").BodyAnchorPart;
+  x: number;
+  y: number;
+}
+
+/** 与 Rust `BackgroundImageInfo` 对应。 */
+export interface BackgroundImageInfo {
+  path: string;
+  name: string;
+  width: number;
+  height: number;
 }
 
 /** 与 Rust `FaceReshapeReport` 对应：塑形质量与自动降强度结果。 */
@@ -242,6 +344,26 @@ export interface MeshPreview {
   version: number;
 }
 
+/** 与 Rust `ProjectSubject` 对应：第五轮人物身材记录。 */
+export interface ProjectSubject {
+  subjectId: string;
+  maskSource: string;
+  maskModelVersion: string;
+  maskStrokes: number;
+  body: import("./state/params").BodyShape;
+  anchors: number;
+}
+
+/** 与 Rust `MaskMeta` 对应：蒙版来源与版本，不保存 Alpha 像素。 */
+export interface MaskMeta {
+  source: string;
+  modelId: string;
+  modelVersion: string;
+  coverage: number;
+  strokeHash: string;
+  revision: number;
+}
+
 /** 与 Rust `ProjectDoc` / `ProjectPhoto` 对应。 */
 export interface ProjectPhoto {
   path: string;
@@ -250,6 +372,8 @@ export interface ProjectPhoto {
   export: import("./state/params").ExportSettings | null;
   sourceHash: string;
   faces: ProjectFaceRecord[];
+  subjects: ProjectSubject[];
+  maskMeta: MaskMeta | null;
 }
 
 export interface ProjectDoc {

@@ -1913,6 +1913,58 @@
   pointer-events: none;
 }
 
+/* 手动人物蒙版预览：红色遮罩或黑白 Alpha */
+.stage-subject-mask {
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.body-anchor-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.body-anchor-range {
+  fill: rgba(224, 181, 124, 0.08);
+  stroke: rgba(224, 181, 124, 0.35);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.body-anchor-point {
+  fill: rgba(242, 201, 143, 0.95);
+  stroke: rgba(18, 16, 12, 0.8);
+  stroke-width: 1.5;
+}
+
+.body-anchor-link {
+  stroke: rgba(224, 181, 124, 0.8);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
+
+.body-anchor.is-locked .body-anchor-point {
+  fill: rgba(160, 168, 180, 0.95);
+}
+
+.body-anchor.is-locked .body-anchor-range {
+  stroke: rgba(160, 168, 180, 0.45);
+}
+
+.color-input {
+  width: 46px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
 .stage.is-brushing {
   cursor: none;
 }

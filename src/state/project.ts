@@ -11,10 +11,13 @@ export function buildProjectDoc(state: EditorState): ProjectDoc {
     export: state.exportSettings,
     sourceHash: state.projectSourceHashes[photo.id] ?? "",
     faces: state.projectFaceRecords[photo.id] ?? [],
+    // 第五轮：人物/蒙版记录由 Rust 端保存时按参数同步，这里只提供占位。
+    subjects: [],
+    maskMeta: null,
   }));
   const found = state.photos.findIndex((photo) => photo.id === state.activeId);
   return {
-    version: 2,
+    version: 3,
     createdAt: new Date().toISOString(),
     activeIndex: found >= 0 ? found : 0,
     export: state.exportSettings,

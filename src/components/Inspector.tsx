@@ -12,6 +12,9 @@ import { CurveEditor } from "./CurveEditor";
 import { FacePanel } from "./FacePanel";
 import { BeautyPanel } from "./BeautyPanel";
 import { ReshapePanel } from "./ReshapePanel";
+import { SubjectMaskPanel } from "./SubjectMaskPanel";
+import { BodyPanel } from "./BodyPanel";
+import { BackgroundPanel } from "./BackgroundPanel";
 
 interface InspectorProps {
   photo: PhotoAsset | null;
@@ -115,6 +118,53 @@ export function Inspector({ photo, params }: InspectorProps) {
 
       <div className={`inspector-body ${photo ? "" : "is-disabled"}`}>
         <BeautyPanel photo={photo} />
+        <section className={`param-group ${isOpen("subject-mask") ? "is-open" : ""}`}>
+          <header className="param-group-head">
+            <button
+              type="button"
+              className="param-group-toggle"
+              onClick={() => toggle("subject-mask")}
+            >
+              <ChevronDown size={12} className="chev" />
+              <span>人物蒙版（手动）</span>
+            </button>
+          </header>
+          {isOpen("subject-mask") && (
+            <div className="param-group-body">
+              <SubjectMaskPanel photo={photo} />
+            </div>
+          )}
+        </section>
+        <section className={`param-group ${isOpen("body") ? "is-open" : ""}`}>
+          <header className="param-group-head">
+            <button type="button" className="param-group-toggle" onClick={() => toggle("body")}>
+              <ChevronDown size={12} className="chev" />
+              <span>身材调整</span>
+            </button>
+          </header>
+          {isOpen("body") && (
+            <div className="param-group-body">
+              <BodyPanel photo={photo} />
+            </div>
+          )}
+        </section>
+        <section className={`param-group ${isOpen("background") ? "is-open" : ""}`}>
+          <header className="param-group-head">
+            <button
+              type="button"
+              className="param-group-toggle"
+              onClick={() => toggle("background")}
+            >
+              <ChevronDown size={12} className="chev" />
+              <span>背景处理</span>
+            </button>
+          </header>
+          {isOpen("background") && (
+            <div className="param-group-body">
+              <BackgroundPanel photo={photo} />
+            </div>
+          )}
+        </section>
         <section className={`param-group ${isOpen("reshape") ? "is-open" : ""}`}>
           <header className="param-group-head">
             <button type="button" className="param-group-toggle" onClick={() => toggle("reshape")}>

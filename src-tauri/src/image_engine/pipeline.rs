@@ -1,5 +1,10 @@
+use std::time::Instant;
+
+use crate::ai_engine::background::{apply_background, BackgroundReport};
+use crate::ai_engine::body::{self, BodyReport, SubjectMasks};
 use crate::ai_engine::face_frame::{FaceFrame, FaceGeometry};
 use crate::ai_engine::retouch::{apply_face_retouch, FaceRetouchReport};
+use crate::ai_engine::segmentation;
 use crate::ai_engine::skin_segmentation::{apply_ownership, build_skin_mask, SkinMask};
 use crate::error::AppResult;
 use crate::face_reshape::{self, FaceReshapeReport};
@@ -11,12 +16,28 @@ use serde::Serialize;
 
 pub type ProgressFn<'a> = &'a mut dyn FnMut(f32, &'static str);
 
+/// 手动蒙版报告。`source` 固定为 `manual`，不含任何 AI 模型输出。
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskReport {
+    pub source: String,
+    pub model_version: String,
+    pub coverage: f32,
+    pub edge_ratio: f32,
+    pub strokes: usize,
+    pub elapsed_ms: u128,
+}
+
 /// 管线副产物：塑形质量报告与用户可见警告。预览/导出都使用它，
 /// 前端据此显示“已自动降强度”等提示，不再静默输出异常结果。
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineReport {
     pub reshape: Vec<FaceReshapeReport>,
+    /// 第五轮：每个身材对象的处理结果。
+    pub body: Vec<BodyReport>,
+    pub background: Option<BackgroundReport>,
+    pub mask: Option<MaskReport>,
     pub warnings: Vec<String>,
 }
 
@@ -62,6 +83,116 @@ pub fn render_with_report(
     cancel.check()?;
 
     let mut output = image.clone();
+
+    // 第五轮：手动人物蒙版 → 身材 → 背景。全部都只改变人物蒙版内/外的对应区域，
+    // 没有相关参数时不会走到这里，旧像素路径保持不变。
+    let needs_subject_work =
+        params.has_body() || params.has_background() || params.has_subject_mask();
+    let mut subject_masks: Option<SubjectMasks> = None;
+    if needs_subject_work {
+        progress(0.02, "人物蒙版");
+        let started = Instant::now();
+        let global = segmentation::build_subject_mask(&output, &params.subject_mask);
+        let mut masks = SubjectMasks::new(output.width(), output.height());
+        masks.global = global.alpha.clone();
+        for entry in params.body.iter().filter(|entry| entry.enabled) {
+            if !entry.has_own_mask() {
+                continue;
+            }
+            let mask = segmentation::build_mask_from_strokes(
+                &output,
+                &entry.mask_strokes,
+                &params.subject_mask,
+            );
+            masks.subjects.push((entry.subject_id.clone(), mask.alpha));
+        }
+        let combined = masks.combined();
+        let covered = combined.iter().filter(|value| **value > 0.5).count();
+        report.mask = Some(MaskReport {
+            source: global.source.clone(),
+            model_version: global.model_version.clone(),
+            coverage: if combined.is_empty() {
+                0.0
+            } else {
+                covered as f32 / combined.len() as f32
+            },
+            edge_ratio: global.edge_ratio(),
+            strokes: params
+                .subject_mask
+                .strokes
+                .len()
+                + params
+                    .body
+                    .iter()
+                    .map(|entry| entry.mask_strokes.len())
+                    .sum::<usize>(),
+            elapsed_ms: started.elapsed().as_millis(),
+        });
+        subject_masks = Some(masks);
+        cancel.check()?;
+    }
+
+    if params.has_body() {
+        let active: Vec<_> = params
+            .body
+            .iter()
+            .filter(|entry| entry.enabled && entry.is_active())
+            .cloned()
+            .collect();
+        let masks = subject_masks.get_or_insert_with(|| {
+            SubjectMasks::new(output.width(), output.height())
+        });
+        progress(0.10, "身材调整");
+        let body_reports = body::apply_body(&mut output, masks, &active, faces, cancel)?;
+        for entry in &body_reports {
+            for note in &entry.notes {
+                report
+                    .warnings
+                    .push(format!("人物 {}：{}", entry.subject_id, note));
+            }
+            if entry.degraded {
+                report.warnings.push(format!(
+                    "人物 {} 的变形已自动降强度以保护图像",
+                    entry.subject_id
+                ));
+            }
+        }
+        if body_reports.iter().all(|entry| entry.affected_pixels == 0) {
+            report
+                .warnings
+                .push("未检测到可用的身材蒙版，身材调整未改变像素".into());
+        }
+        report.body = body_reports;
+        cancel.check()?;
+    }
+
+    if params.has_background() {
+        let combined = subject_masks
+            .as_ref()
+            .map(|masks| masks.combined())
+            .unwrap_or_default();
+        let has_subject = combined.iter().any(|value| *value > 0.5);
+        if has_subject {
+            progress(0.18, "背景处理");
+            let background = apply_background(
+                &mut output,
+                &combined,
+                &params.background,
+                cancel,
+            )?;
+            for note in &background.notes {
+                report.warnings.push(note.clone());
+            }
+            report.background = Some(background);
+        } else {
+            progress(0.18, "背景处理已跳过");
+            report
+                .warnings
+                .push("背景处理需要人物蒙版：请先用蒙版画笔标记人物，已跳过背景".into());
+        }
+        cancel.check()?;
+    }
+
     let wants_beauty = params.skin_smooth > 0.0
         || params.faces.iter().any(|face| face.enabled && face.beauty.is_active());
 
@@ -265,6 +396,121 @@ mod tests {
         };
         let error = render(&image, &params, &[], &CancelToken::default()).unwrap_err();
         assert!(error.to_string().contains("lumi.cube") || error.to_string().contains("No such"));
+    }
+
+    #[test]
+    fn background_replaces_only_outside_manual_mask() {
+        use crate::image_engine::params::{
+            BackgroundMode, BackgroundParams, MaskPoint, SubjectMaskParams, SubjectMaskStroke,
+            SubjectMaskStrokeKind,
+        };
+        let image: Image16 = Image16::from_pixel(64, 64, Rgba([30_000, 30_000, 30_000, 65535]));
+        let params = EditParams {
+            subject_mask: SubjectMaskParams {
+                enabled: true,
+                feather: 0.0,
+                smooth: 0.0,
+                hair_protect: 0.0,
+                strokes: vec![SubjectMaskStroke {
+                    kind: SubjectMaskStrokeKind::Paint,
+                    radius: 0.25,
+                    hardness: 100.0,
+                    strength: 100.0,
+                    points: vec![MaskPoint { x: 0.5, y: 0.5 }],
+                }],
+                ..Default::default()
+            },
+            background: BackgroundParams {
+                enabled: true,
+                mode: BackgroundMode::SolidColor,
+                color: "#FF0000".into(),
+                decontaminate: 0.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (rendered, report) =
+            render_with_report(&image, &params, &[], &CancelToken::default(), &mut |_, _| {})
+                .unwrap();
+        assert!(report.background.is_some());
+        assert_eq!(rendered.get_pixel(0, 0).0[0], 0xFFFF);
+        assert_eq!(rendered.get_pixel(0, 0).0[1], 0);
+        assert_eq!(rendered.get_pixel(32, 32).0, [30_000, 30_000, 30_000, 65535]);
+    }
+
+    #[test]
+    fn body_edit_changes_subject_not_corner() {
+        use crate::image_engine::params::{
+            BodyAdjust, BodyShape, MaskPoint, SubjectMaskParams, SubjectMaskStroke,
+            SubjectMaskStrokeKind,
+        };
+        let image: Image16 = Image16::from_fn(64, 64, |x, y| {
+            Rgba([
+                (x as u16 * 800).min(60000),
+                (y as u16 * 800).min(60000),
+                20000,
+                65535,
+            ])
+        });
+        let corner_before = image.get_pixel(0, 0).0;
+        let params = EditParams {
+            subject_mask: SubjectMaskParams {
+                enabled: true,
+                feather: 0.0,
+                smooth: 0.0,
+                hair_protect: 0.0,
+                strokes: vec![SubjectMaskStroke {
+                    kind: SubjectMaskStrokeKind::Paint,
+                    radius: 0.3,
+                    hardness: 100.0,
+                    strength: 100.0,
+                    points: vec![MaskPoint { x: 0.5, y: 0.5 }],
+                }],
+                ..Default::default()
+            },
+            body: vec![BodyAdjust {
+                subject_id: "subject-1".into(),
+                enabled: true,
+                shape: BodyShape {
+                    waist: -90.0,
+                    ..Default::default()
+                },
+                anchors: Vec::new(),
+                strokes: Vec::new(),
+                mask_strokes: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let (rendered, report) =
+            render_with_report(&image, &params, &[], &CancelToken::default(), &mut |_, _| {})
+                .unwrap();
+        assert_eq!(rendered.get_pixel(0, 0).0, corner_before);
+        assert_eq!(report.body.len(), 1);
+        assert!(report.body[0].affected_pixels > 0);
+        assert_ne!(rendered.into_raw(), image.into_raw());
+    }
+
+    #[test]
+    fn background_without_mask_warns_and_keeps_pixels() {
+        use crate::image_engine::params::{BackgroundMode, BackgroundParams};
+        let image: Image16 = Image16::from_pixel(16, 16, Rgba([1000, 2000, 3000, 65535]));
+        let params = EditParams {
+            background: BackgroundParams {
+                enabled: true,
+                mode: BackgroundMode::SolidColor,
+                color: "#00FF00".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (rendered, report) =
+            render_with_report(&image, &params, &[], &CancelToken::default(), &mut |_, _| {})
+                .unwrap();
+        assert_eq!(rendered.into_raw(), image.into_raw());
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("人物蒙版")));
     }
 
     #[test]

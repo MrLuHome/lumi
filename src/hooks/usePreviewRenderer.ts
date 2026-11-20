@@ -82,6 +82,9 @@ export function usePreviewRenderer(): void {
         current.markRendered(photo.id, result.previewUrl, cacheKey, result.elapsedMs, {
           warnings: result.warnings,
           reshape: result.reshape,
+          body: result.body,
+          background: result.background,
+          mask: result.mask,
         });
       } catch (error) {
         if (disposed || requestId !== activeRequest.current) return;

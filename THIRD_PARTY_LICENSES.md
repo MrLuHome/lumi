@@ -46,6 +46,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | YuNet face detection ONNX | 2023mar | https://huggingface.co/opencv/face_detection_yunet（镜像自 OpenCV Zoo） | MIT | 是（MIT 允许商业使用与再分发） | 打包进 Tauri `bundle.resources`，路径 `resources/models/yunet/` | 文件：`face_detection_yunet_2023mar.onnx`；SHA256 `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`；大小 232,589 字节；输入 `1×3×640×640` float32 BGR（0..255）；输出 12 个张量：`cls_8/16/32`、`obj_8/16/32`、`bbox_8/16/32`、`kps_8/16/32`；CPU 推理（tract）。必须随包保留 MIT LICENSE 原文（`resources/models/yunet/LICENSE`） |
 | 皮肤区域分割权重（第三轮） | — | — | — | 未打包 | 不随包分发 | **当前没有可确认允许商用的权重，因此未打包任何分割模型。** 评估过 BiSeNet Face Parsing / CelebAMask-HQ 系权重、InsightFace 系解析模型与 MediaPipe Face Mesh：前两者的训练数据（CelebAMask-HQ 等）与权重条款多限制研究用途，仓库代码许可证不能推断权重可商用；MediaPipe Face Mesh 为 Apache-2.0，但 tflite→ONNX 转换后的权重分发与 tract 算子兼容性尚未完成法律与技术验证。第三轮实际使用自研关键点几何蒙版（YuNet 5 点 + 肤色似然），未使用任何未审查授权的权重。`skin_segmentation/model.rs` 保留注册表与商用许可闸门，后续拿到书面商用授权后按 SHA256 与许可证白名单校验加载。 |
+| 人像/通用分割候选（第五轮评估） | — | — | — | 不引入 | 不下载、不打包 | BiRefNet 权重授权与训练数据条款未完整核验；SAM 2 依赖与桌面分发成本未验证；MediaPipe Pose / `.task` 桌面分发未定且与 tract 不兼容；RVM 为 GPL-3.0。以上均不进入正式版本，详见 `docs/ROUND5_MODEL_LICENSES.md`。第五轮人物蒙版、身材与背景全部为本地确定性算法，未新增权重。 |
 
 ## 4. 数据集
 

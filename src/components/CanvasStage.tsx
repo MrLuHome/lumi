@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ImagePlus } from "lucide-react";
 import type { MeshPreview, PhotoAsset } from "../types";
-import { reshapeMesh } from "../lib/backend";
-import { selectActiveFaces, selectActiveParams, useEditorStore } from "../state/editorStore";
+import { previewSubjectMask, reshapeMesh } from "../lib/backend";
+import { selectActiveBodyAdjust, selectActiveFaces, selectActiveParams, useEditorStore } from "../state/editorStore";
 import { isDesktopRuntime } from "../lib/platform";
 
 interface CanvasStageProps {
@@ -42,6 +42,19 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   const warpStrength = useEditorStore((state) => state.warpStrength);
   const warpFeather = useEditorStore((state) => state.warpFeather);
   const showMesh = useEditorStore((state) => state.showMesh);
+  const subjectBrush = useEditorStore((state) => state.subjectBrush);
+  const subjectBrushRadius = useEditorStore((state) => state.subjectBrushRadius);
+  const subjectBrushHardness = useEditorStore((state) => state.subjectBrushHardness);
+  const subjectBrushStrength = useEditorStore((state) => state.subjectBrushStrength);
+  const subjectMaskView = useEditorStore((state) => state.subjectMaskView);
+  const showSubjectMask = useEditorStore((state) => state.showSubjectMask);
+  const subjectMaskPreview = useEditorStore((state) => state.subjectMaskPreview);
+  const bodyTool = useEditorStore((state) => state.bodyTool);
+  const bodyRadius = useEditorStore((state) => state.bodyRadius);
+  const bodyStrength = useEditorStore((state) => state.bodyStrength);
+  const bodyFeather = useEditorStore((state) => state.bodyFeather);
+  const showBodyAnchors = useEditorStore((state) => state.showBodyAnchors);
+  const bodyAdjust = useEditorStore(selectActiveBodyAdjust);
   const params = useEditorStore(selectActiveParams);
   const repairPoints = params.repairPoints;
 
@@ -58,6 +71,15 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
     panY: number;
   } | null>(null);
   const splitPointer = useRef<number | null>(null);
+  const anchorDrag = useRef<{
+    index: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    originalDx: number;
+    originalDy: number;
+  } | null>(null);
   const activeFaceEntry = faceResult?.faces[activeFace] ?? null;
 
   // 网格显示：使用后端真实控制网格（原图像素坐标），不是装饰性线条。
@@ -81,6 +103,39 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
       window.clearTimeout(timer);
     };
   }, [showMesh, photo, activeFaceEntry, params]);
+
+  // 手动人物蒙版预览：与渲染共用同一套本地算法，仅用于编辑辅助。
+  useEffect(() => {
+    if (!photo || !isDesktopRuntime()) return;
+    if (!showSubjectMask && subjectBrush === "off") {
+      return;
+    }
+    const mask = params.subjectMask;
+    let disposed = false;
+    const state = useEditorStore.getState();
+    if (mask.strokes.length === 0) {
+      state.setSubjectMaskPreview(null);
+      return;
+    }
+    state.setSubjectMaskStatus("loading");
+    const timer = window.setTimeout(() => {
+      previewSubjectMask(photo.path, mask, subjectMaskView)
+        .then((preview) => {
+          if (disposed) return;
+          useEditorStore.getState().setSubjectMaskPreview(preview);
+        })
+        .catch((error) => {
+          if (disposed) return;
+          useEditorStore
+            .getState()
+            .setSubjectMaskError(error instanceof Error ? error.message : String(error));
+        });
+    }, 180);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [photo, params.subjectMask, subjectMaskView, showSubjectMask, subjectBrush]);
 
   // 视口尺寸与"适应窗口"比例
   useEffect(() => {
@@ -127,6 +182,51 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!photo || event.button !== 0) return;
     if ((event.target as HTMLElement).closest(".split-handle")) return;
+    // 锚点拖拽优先：锚点坐标保存为归一化比例，缩放/平移后仍能命中。
+    if (showBodyAnchors && bodyAdjust && bodyAdjust.anchors.length > 0) {
+      const point = toImagePoint(event.clientX, event.clientY);
+      if (point) {
+        const state = useEditorStore.getState();
+        const threshold = 14 / state.zoom;
+        const index = bodyAdjust.anchors.findIndex(
+          (anchor) =>
+            Math.hypot(anchor.x * photo.width - point.x, anchor.y * photo.height - point.y) <=
+            threshold,
+        );
+        const anchor = index >= 0 ? bodyAdjust.anchors[index] : undefined;
+        if (anchor && !anchor.locked) {
+          anchorDrag.current = {
+            index,
+            startX: event.clientX,
+            startY: event.clientY,
+            originX: anchor.x,
+            originY: anchor.y,
+            originalDx: anchor.dx,
+            originalDy: anchor.dy,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          return;
+        }
+      }
+    }
+    if (subjectBrush !== "off") {
+      const point = toImagePoint(event.clientX, event.clientY);
+      if (!point) return;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDraft({ points: [point] });
+      return;
+    }
+    if (bodyTool !== "off") {
+      if (!params.subjectMask.strokes.length && !bodyAdjust?.maskStrokes.length) {
+        useEditorStore.getState().notify("info", "请先绘制人物蒙版，身材调整只作用在人物区域");
+        return;
+      }
+      const point = toImagePoint(event.clientX, event.clientY);
+      if (!point) return;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDraft({ points: [point] });
+      return;
+    }
     if (warpTool !== "off") {
       if (!activeFaceEntry) {
         useEditorStore.getState().notify("info", "请先在「人脸信息」中检测并选择一张人脸");
@@ -167,6 +267,38 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const anchor = anchorDrag.current;
+    if (anchor && photo) {
+      const state = useEditorStore.getState();
+      const offsetX = (event.clientX - anchor.startX) / state.zoom / photo.width;
+      const offsetY = (event.clientY - anchor.startY) / state.zoom / photo.height;
+      const dx = Math.min(0.15, Math.max(-0.15, anchor.originalDx + offsetX));
+      const dy = Math.min(0.15, Math.max(-0.15, anchor.originalDy + offsetY));
+      const x = Math.min(1, Math.max(0, anchor.originX + offsetX));
+      const y = Math.min(1, Math.max(0, anchor.originY + offsetY));
+      state.updateBody(
+        (entry) => ({
+          ...entry,
+          anchors: entry.anchors.map((item, index) =>
+            index === anchor.index ? { ...item, x, y, dx, dy } : item,
+          ),
+        }),
+        "拖动锚点",
+        `body:anchor:${anchor.index}`,
+      );
+      return;
+    }
+    if (subjectBrush !== "off" || bodyTool !== "off") {
+      const point = toImagePoint(event.clientX, event.clientY);
+      setCursor(point);
+      if (draft && point) {
+        const last = draft.points[draft.points.length - 1];
+        if (!last || Math.hypot(point.x - last.x, point.y - last.y) >= 1.5) {
+          setDraft({ points: [...draft.points, point] });
+        }
+      }
+      return;
+    }
     if (warpTool !== "off") {
       const point = toImagePoint(event.clientX, event.clientY);
       setCursor(point);
@@ -198,6 +330,53 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   };
 
   const endPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (anchorDrag.current) {
+      anchorDrag.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
+    if (subjectBrush !== "off" && draft && photo) {
+      const points = draft.points.map((point) => ({
+        x: point.x / photo.width,
+        y: point.y / photo.height,
+      }));
+      if (points.length > 0) {
+        useEditorStore.getState().appendSubjectMaskStroke({
+          kind: subjectBrush,
+          radius: subjectBrushRadius,
+          hardness: subjectBrushHardness,
+          strength: subjectBrushStrength,
+          points,
+        });
+      }
+      setDraft(null);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
+    if (bodyTool !== "off" && draft && photo) {
+      const points = draft.points.map((point) => ({
+        x: point.x / photo.width,
+        y: point.y / photo.height,
+      }));
+      if (points.length > 0) {
+        useEditorStore.getState().appendBodyStroke({
+          mode: bodyTool,
+          radius: bodyRadius,
+          strength: bodyStrength,
+          feather: bodyFeather,
+          points,
+        });
+      }
+      setDraft(null);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
     if (warpTool !== "off" && draft && photo && activeFaceEntry) {
       const points = draft.points.map((point) => ({
         x: point.x / photo.width,
@@ -281,9 +460,11 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
       className={`stage ${panning ? "is-panning" : ""} ${photo ? "has-photo" : ""} ${
         warpTool !== "off"
           ? "is-brushing is-warping"
-          : brushMode !== "off"
-            ? `is-brushing is-${brushMode}`
-            : ""
+          : subjectBrush !== "off" || bodyTool !== "off"
+            ? "is-brushing"
+            : brushMode !== "off"
+              ? `is-brushing is-${brushMode}`
+              : ""
       }`}
       ref={containerRef}
       onPointerDown={handlePointerDown}
@@ -333,6 +514,54 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
                 alt="皮肤蒙版"
                 draggable={false}
               />
+            )}
+
+            {(showSubjectMask || subjectBrush !== "off") && subjectMaskPreview && (
+              <img
+                className="stage-image stage-subject-mask"
+                src={subjectMaskPreview.url}
+                alt="手动人物蒙版（非 AI 分割）"
+                draggable={false}
+              />
+            )}
+
+            {showBodyAnchors && bodyAdjust && bodyAdjust.anchors.length > 0 && (
+              <svg
+                className="body-anchor-overlay"
+                viewBox={`0 0 ${photo.width} ${photo.height}`}
+                preserveAspectRatio="none"
+                aria-label="手动身体锚点"
+              >
+                {bodyAdjust.anchors.map((anchor, index) => (
+                  <g
+                    key={`${anchor.part}-${index}`}
+                    className={`body-anchor ${anchor.locked ? "is-locked" : ""}`}
+                  >
+                    <circle
+                      cx={anchor.x * photo.width}
+                      cy={anchor.y * photo.height}
+                      r={anchor.radius * photo.width}
+                      className="body-anchor-range"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <circle
+                      cx={(anchor.x + anchor.dx) * photo.width}
+                      cy={(anchor.y + anchor.dy) * photo.height}
+                      r={Math.max(5, photo.width * 0.008)}
+                      className="body-anchor-point"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <line
+                      x1={anchor.x * photo.width}
+                      y1={anchor.y * photo.height}
+                      x2={(anchor.x + anchor.dx) * photo.width}
+                      y2={(anchor.y + anchor.dy) * photo.height}
+                      className="body-anchor-link"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </g>
+                ))}
+              </svg>
             )}
 
             {showFaceOverlay && faceResult && faceResult.faces.length > 0 && (
@@ -402,6 +631,63 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
                     vectorEffect="non-scaling-stroke"
                   />
                 ))}
+              </svg>
+            )}
+
+            {(subjectBrush !== "off" || bodyTool !== "off") && (cursor || draft) && (
+              <svg
+                className="brush-overlay"
+                viewBox={`0 0 ${photo.width} ${photo.height}`}
+                preserveAspectRatio="none"
+                aria-label={subjectBrush !== "off" ? "手动人物蒙版画笔" : "身材推拉笔刷"}
+              >
+                {draft && draft.points.length > 0 ? (
+                  draft.points.length === 1 ? (
+                    <circle
+                      cx={draft.points[0]!.x}
+                      cy={draft.points[0]!.y}
+                      r={
+                        (subjectBrush !== "off" ? subjectBrushRadius : bodyRadius) * photo.width
+                      }
+                      className={
+                        subjectBrush === "erase" || subjectBrush === "background"
+                          ? "brush-stroke is-erase"
+                          : "brush-stroke"
+                      }
+                    />
+                  ) : (
+                    <polyline
+                      points={draft.points.map((point) => `${point.x},${point.y}`).join(" ")}
+                      fill="none"
+                      strokeWidth={
+                        (subjectBrush !== "off" ? subjectBrushRadius : bodyRadius) *
+                        photo.width *
+                        2
+                      }
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className={
+                        subjectBrush === "erase" || subjectBrush === "background"
+                          ? "brush-stroke is-erase"
+                          : "brush-stroke"
+                      }
+                    />
+                  )
+                ) : null}
+                {cursor && !draft ? (
+                  <circle
+                    cx={cursor.x}
+                    cy={cursor.y}
+                    r={
+                      (subjectBrush !== "off" ? subjectBrushRadius : bodyRadius) * photo.width
+                    }
+                    className={
+                      subjectBrush === "erase" || subjectBrush === "background"
+                        ? "brush-cursor is-erase"
+                        : "brush-cursor"
+                    }
+                  />
+                ) : null}
               </svg>
             )}
 

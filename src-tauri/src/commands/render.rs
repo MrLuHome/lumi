@@ -118,6 +118,15 @@ pub struct RenderResult {
     /// 塑形质量报告：是否自动降强度、参与变形的控制点/三角面数量等。
     #[serde(default)]
     pub reshape: Vec<FaceReshapeReport>,
+    /// 第五轮身材处理报告。
+    #[serde(default)]
+    pub body: Vec<crate::ai_engine::body::BodyReport>,
+    /// 第五轮背景处理报告。
+    #[serde(default)]
+    pub background: Option<crate::ai_engine::background::BackgroundReport>,
+    /// 第五轮手动蒙版报告。
+    #[serde(default)]
+    pub mask: Option<pipeline::MaskReport>,
     /// 用户可见警告（低置信度、自动降强度、无脸等）。
     #[serde(default)]
     pub warnings: Vec<String>,
@@ -209,6 +218,9 @@ pub async fn render_preview(
             elapsed_ms: started.elapsed().as_millis() as u64,
             computed: true,
             reshape: report.reshape,
+            body: report.body,
+            background: report.background,
+            mask: report.mask,
             warnings: report.warnings,
         });
         render_cache.put(key, result.clone());
@@ -318,6 +330,9 @@ mod tests {
             elapsed_ms: 1,
             computed: true,
             reshape: Vec::new(),
+            body: Vec::new(),
+            background: None,
+            mask: None,
             warnings: Vec::new(),
         })
     }

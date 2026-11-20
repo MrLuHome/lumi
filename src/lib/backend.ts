@@ -1,7 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  BackgroundImageInfo,
   BeautyAnalysis,
   BeautyProgress,
+  BodyAnchorPreset,
+  BodyCapability,
   EditParams,
   ExportResult,
   ExportSettings,
@@ -18,7 +21,10 @@ import type {
   RenderProgress,
   RenderResult,
   ReshapeCapability,
+  SegmentationCapability,
   SkinModelStatus,
+  SubjectMaskPreview,
+  SubjectMaskParams,
 } from "../types";
 import { isDesktopRuntime } from "./platform";
 
@@ -137,6 +143,64 @@ export async function previewSkinMask(path: string, params: EditParams): Promise
 export async function reshapeCapability(): Promise<ReshapeCapability> {
   if (!isDesktopRuntime()) throw new Error("塑形能力查询需要在桌面端运行");
   return invoke<ReshapeCapability>("reshape_capability");
+}
+
+/** 第五轮：手动人物蒙版能力与 AI 分割不可用原因。 */
+export async function segmentationCapability(): Promise<SegmentationCapability> {
+  if (!isDesktopRuntime()) {
+    return {
+      aiAvailable: false,
+      manualAvailable: true,
+      providers: [],
+      note: "手动人物蒙版：本地笔触 + Alpha 处理，非 AI 自动分割",
+    };
+  }
+  return invoke<SegmentationCapability>("segmentation_capability");
+}
+
+/** 生成手动蒙版预览；`mode` 为 overlay（红色遮罩）或 alpha（黑白）。 */
+export async function previewSubjectMask(
+  path: string,
+  params: SubjectMaskParams,
+  mode: "overlay" | "alpha" = "overlay",
+): Promise<SubjectMaskPreview> {
+  if (!isDesktopRuntime()) throw new Error("人物蒙版预览需要在桌面端运行");
+  return invoke<SubjectMaskPreview>("preview_subject_mask", { path, params, mode });
+}
+
+/** 第五轮：身材能力与姿态模型不可用原因。 */
+export async function bodyCapability(): Promise<BodyCapability> {
+  if (!isDesktopRuntime()) {
+    return {
+      poseAvailable: false,
+      provider: "disabled",
+      license: "",
+      reason: "浏览器模式不执行本地算法",
+      note: "身材调整使用手动蒙版轮廓 + 用户锚点，不依赖 AI 姿态。",
+    };
+  }
+  return invoke<BodyCapability>("body_capability");
+}
+
+/** 根据手动蒙版轮廓给出锚点建议；锚点仍需用户确认。 */
+export async function bodyAnchorPresets(
+  path: string,
+  mask: SubjectMaskParams,
+): Promise<BodyAnchorPreset[]> {
+  if (!isDesktopRuntime()) throw new Error("锚点建议需要在桌面端运行");
+  return invoke<BodyAnchorPreset[]>("body_anchor_presets", { path, mask });
+}
+
+/** 选择本地背景图片（不复制、不上传）。 */
+export async function pickBackgroundImage(): Promise<BackgroundImageInfo | null> {
+  if (!isDesktopRuntime()) return null;
+  return invoke<BackgroundImageInfo | null>("pick_background_image");
+}
+
+/** 项目重开时校验背景图片是否仍可用。 */
+export async function backgroundImageInfo(path: string): Promise<BackgroundImageInfo> {
+  if (!isDesktopRuntime()) throw new Error("背景图片校验需要在桌面端运行");
+  return invoke<BackgroundImageInfo>("background_image_info", { path });
 }
 
 /** 获取真实控制网格，用于画布网格显示。 */

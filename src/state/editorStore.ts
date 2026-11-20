@@ -1,8 +1,12 @@
 import { create } from "zustand";
 import type {
+  BackgroundImageInfo,
+  BackgroundReport,
   BeautyAnalysis,
   BeautyParams,
   BeautyProgress,
+  BodyCapability,
+  BodyReport,
   EditParams,
   ExportSettings,
   FaceDetectionResult,
@@ -12,12 +16,15 @@ import type {
   FaceReshapeReport,
   FaceRestoreResult,
   MaskPreview,
+  MaskReport,
   MaskStroke,
   PhotoAsset,
   ProjectDoc,
   ProjectFaceRecord,
   RenderProgress,
+  SegmentationCapability,
   SkinModelStatus,
+  SubjectMaskPreview,
 } from "../types";
 import {
   BEAUTY_LABELS,
@@ -26,22 +33,30 @@ import {
   PARAM_GROUPS,
   PARAM_LABELS,
   type BeautyKey,
+  type BodyAnchor,
+  type BodyShapeKey,
   type CurveChannel,
   type CurvePoint,
   type HslKey,
   type ManualMask,
   type FaceShapeKey,
+  type SubjectMaskStroke,
+  type SubjectMaskStrokeKind,
   type WarpMode,
   type WarpStroke,
   clampParams,
   cloneParams,
+  defaultBackground,
   defaultBeauty,
+  defaultBodyAnchor,
   defaultFaceBeauty,
   defaultFaceReshape,
+  findBodyAdjust,
   findFaceBeauty,
   findFaceReshape,
   isNeutral,
   paramsEqual,
+  withBodyAdjust,
   withFaceBeauty,
   withFaceReshape,
 } from "./params";
@@ -148,6 +163,35 @@ export interface EditorState {
   /** 画笔半径，按图像宽度归一化。 */
   brushRadius: number;
 
+  /** 第五轮：手动人物蒙版画笔；off 时画布恢复普通行为。 */
+  subjectBrush: SubjectMaskStrokeKind | "off";
+  subjectBrushRadius: number;
+  subjectBrushHardness: number;
+  subjectBrushStrength: number;
+  /** 蒙版显示模式：红色遮罩 / 黑白 Alpha。 */
+  subjectMaskView: "overlay" | "alpha";
+  /** 是否在画布显示手动蒙版预览。 */
+  showSubjectMask: boolean;
+  /** 笔触写入全局蒙版还是当前人物独立蒙版。 */
+  subjectMaskTarget: "global" | "subject";
+  subjectMaskPreview: SubjectMaskPreview | null;
+  subjectMaskStatus: MaskStatus;
+  subjectMaskError: string | null;
+  segmentationCapability: SegmentationCapability | null;
+
+  /** 第五轮：身材调整工具与参数。 */
+  bodyTool: WarpMode | "off";
+  bodyRadius: number;
+  bodyStrength: number;
+  bodyFeather: number;
+  bodyAnchorRadius: number;
+  bodySubjectId: string;
+  bodyCapability: BodyCapability | null;
+  showBodyAnchors: boolean;
+  bodyReports: BodyReport[];
+  backgroundReport: BackgroundReport | null;
+  maskReport: MaskReport | null;
+
   importing: boolean;
   exporting: boolean;
   dragActive: boolean;
@@ -191,7 +235,13 @@ export interface EditorState {
     url: string,
     key: string,
     elapsedMs: number,
-    extra?: { warnings?: string[]; reshape?: FaceReshapeReport[] },
+    extra?: {
+      warnings?: string[];
+      reshape?: FaceReshapeReport[];
+      body?: BodyReport[];
+      background?: BackgroundReport | null;
+      mask?: MaskReport | null;
+    },
   ) => void;
   setRenderStatus: (status: RenderStatus) => void;
   setRenderError: (message: string) => void;
@@ -249,6 +299,59 @@ export interface EditorState {
   setMaskError: (message: string) => void;
   setBrushMode: (mode: BrushMode) => void;
   setBrushRadius: (radius: number) => void;
+
+  setSubjectBrush: (kind: SubjectMaskStrokeKind | "off") => void;
+  setSubjectBrushRadius: (radius: number) => void;
+  setSubjectBrushHardness: (value: number) => void;
+  setSubjectBrushStrength: (value: number) => void;
+  setSubjectMaskView: (view: "overlay" | "alpha") => void;
+  setShowSubjectMask: (value: boolean) => void;
+  setSubjectMaskTarget: (target: "global" | "subject") => void;
+  updateSubjectMask: (
+    updater: (mask: EditParams["subjectMask"]) => EditParams["subjectMask"],
+    label: string,
+    coalesceKey?: string,
+  ) => void;
+  appendSubjectMaskStroke: (stroke: SubjectMaskStroke) => void;
+  undoSubjectMaskStroke: () => void;
+  clearSubjectMask: () => void;
+  setSubjectMaskEnabled: (enabled: boolean) => void;
+  setSubjectMaskPreview: (preview: SubjectMaskPreview | null) => void;
+  setSubjectMaskStatus: (status: MaskStatus) => void;
+  setSubjectMaskError: (message: string) => void;
+  setSegmentationCapability: (capability: SegmentationCapability) => void;
+
+  setBodyTool: (tool: WarpMode | "off") => void;
+  setBodyRadius: (radius: number) => void;
+  setBodyStrength: (value: number) => void;
+  setBodyFeather: (value: number) => void;
+  setBodyAnchorRadius: (radius: number) => void;
+  setBodySubjectId: (subjectId: string) => void;
+  setBodyCapability: (capability: BodyCapability) => void;
+  setShowBodyAnchors: (value: boolean) => void;
+  updateBodyShape: (key: BodyShapeKey, value: number) => void;
+  updateBody: (
+    updater: (entry: EditParams["body"][number]) => EditParams["body"][number],
+    label: string,
+    coalesceKey?: string,
+  ) => void;
+  addBodyAnchor: (anchor: BodyAnchor) => void;
+  addBodyAnchorPresets: (presets: { part: BodyAnchor["part"]; x: number; y: number }[]) => void;
+  updateBodyAnchor: (index: number, patch: Partial<BodyAnchor>) => void;
+  removeBodyAnchor: (index: number) => void;
+  lockBodyAnchor: (index: number, locked: boolean) => void;
+  clearBodyAnchors: () => void;
+  appendBodyStroke: (stroke: WarpStroke) => void;
+  undoBodyStroke: () => void;
+  clearBodyStrokes: () => void;
+  resetBodyAdjust: () => void;
+  resetBackground: () => void;
+  setBackgroundImage: (info: BackgroundImageInfo | null) => void;
+  updateBackground: (
+    updater: (background: EditParams["background"]) => EditParams["background"],
+    label: string,
+    coalesceKey?: string,
+  ) => void;
 
   setImporting: (value: boolean) => void;
   setExporting: (value: boolean) => void;
@@ -383,6 +486,30 @@ export function createEditorStore() {
       maskError: null,
       brushMode: "off",
       brushRadius: 0.03,
+
+      subjectBrush: "off",
+      subjectBrushRadius: 0.04,
+      subjectBrushHardness: 60,
+      subjectBrushStrength: 100,
+      subjectMaskView: "overlay",
+      showSubjectMask: false,
+      subjectMaskTarget: "global",
+      subjectMaskPreview: null,
+      subjectMaskStatus: "idle",
+      subjectMaskError: null,
+      segmentationCapability: null,
+
+      bodyTool: "off",
+      bodyRadius: 0.08,
+      bodyStrength: 60,
+      bodyFeather: 50,
+      bodyAnchorRadius: 0.12,
+      bodySubjectId: "subject-1",
+      bodyCapability: null,
+      showBodyAnchors: true,
+      bodyReports: [],
+      backgroundReport: null,
+      maskReport: null,
 
       importing: false,
       exporting: false,
@@ -699,6 +826,9 @@ export function createEditorStore() {
           renderProgress: null,
           renderWarnings: extra?.warnings ?? [],
           reshapeReports: extra?.reshape ?? [],
+          bodyReports: extra?.body ?? [],
+          backgroundReport: extra?.background ?? null,
+          maskReport: extra?.mask ?? null,
         })),
 
       setRenderStatus: (status) => set({ renderStatus: status }),
@@ -819,6 +949,8 @@ export function createEditorStore() {
         set({
           warpTool: tool,
           brushMode: tool === "off" ? get().brushMode : "off",
+          bodyTool: tool === "off" ? get().bodyTool : "off",
+          subjectBrush: tool === "off" ? get().subjectBrush : "off",
         }),
       setWarpRadius: (radius) => set({ warpRadius: clamp(radius, 0.004, 0.25) }),
       setWarpStrength: (value) => set({ warpStrength: clamp(value, 0, 100) }),
@@ -1104,6 +1236,274 @@ export function createEditorStore() {
       setBrushMode: (mode) => set({ brushMode: mode }),
       setBrushRadius: (radius) => set({ brushRadius: clamp(radius, 0.004, 0.2) }),
 
+      setSubjectBrush: (kind) =>
+        set({
+          subjectBrush: kind,
+          warpTool: "off",
+          bodyTool: "off",
+          brushMode: "off",
+        }),
+      setSubjectBrushRadius: (radius) => set({ subjectBrushRadius: clamp(radius, 0.002, 0.5) }),
+      setSubjectBrushHardness: (value) => set({ subjectBrushHardness: clamp(value, 0, 100) }),
+      setSubjectBrushStrength: (value) => set({ subjectBrushStrength: clamp(value, 0, 100) }),
+      setSubjectMaskView: (view) => set({ subjectMaskView: view }),
+      setShowSubjectMask: (value) => set({ showSubjectMask: value }),
+      setSubjectMaskTarget: (target) => set({ subjectMaskTarget: target }),
+      updateSubjectMask: (updater, label, coalesceKey) =>
+        apply(
+          (current) => ({ ...current, subjectMask: updater(current.subjectMask) }),
+          label,
+          coalesceKey,
+        ),
+      appendSubjectMaskStroke: (stroke) => {
+        const state = get();
+        if (state.subjectMaskTarget === "subject") {
+          apply(
+            (current) =>
+              withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+                ...entry,
+                maskStrokes: [...entry.maskStrokes, stroke].slice(-400),
+              })),
+            "人物独立蒙版笔触",
+          );
+          return;
+        }
+        apply(
+          (current) => ({
+            ...current,
+            subjectMask: {
+              ...current.subjectMask,
+              enabled: true,
+              strokes: [...current.subjectMask.strokes, stroke].slice(-400),
+            },
+          }),
+          "人物蒙版笔触",
+        );
+      },
+      undoSubjectMaskStroke: () => {
+        const state = get();
+        if (state.subjectMaskTarget === "subject") {
+          apply(
+            (current) =>
+              withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+                ...entry,
+                maskStrokes: entry.maskStrokes.slice(0, -1),
+              })),
+            "撤销人物独立蒙版笔触",
+          );
+          return;
+        }
+        apply(
+          (current) => ({
+            ...current,
+            subjectMask: { ...current.subjectMask, strokes: current.subjectMask.strokes.slice(0, -1) },
+          }),
+          "撤销人物蒙版笔触",
+        );
+      },
+      clearSubjectMask: () =>
+        apply(
+          (current) => ({
+            ...current,
+            subjectMask: {
+              ...current.subjectMask,
+              enabled: false,
+              strokes: [],
+              invert: false,
+            },
+          }),
+          "清除人物蒙版",
+        ),
+      setSubjectMaskEnabled: (enabled) =>
+        apply(
+          (current) => ({ ...current, subjectMask: { ...current.subjectMask, enabled } }),
+          enabled ? "启用人物蒙版" : "停用人物蒙版",
+        ),
+      setSubjectMaskPreview: (preview) =>
+        set({ subjectMaskPreview: preview, subjectMaskStatus: preview ? "ready" : "idle" }),
+      setSubjectMaskStatus: (status) => set({ subjectMaskStatus: status }),
+      setSubjectMaskError: (message) =>
+        set({ subjectMaskStatus: "error", subjectMaskError: message }),
+      setSegmentationCapability: (capability) =>
+        set({ segmentationCapability: capability }),
+
+      setBodyTool: (tool) =>
+        set({
+          bodyTool: tool,
+          warpTool: "off",
+          subjectBrush: "off",
+          brushMode: "off",
+        }),
+      setBodyRadius: (radius) => set({ bodyRadius: clamp(radius, 0.004, 0.25) }),
+      setBodyStrength: (value) => set({ bodyStrength: clamp(value, 0, 100) }),
+      setBodyFeather: (value) => set({ bodyFeather: clamp(value, 0, 100) }),
+      setBodyAnchorRadius: (radius) => set({ bodyAnchorRadius: clamp(radius, 0.02, 0.5) }),
+      setBodySubjectId: (subjectId) =>
+        set({ bodySubjectId: subjectId.trim() ? subjectId : "subject-1" }),
+      setBodyCapability: (capability) => set({ bodyCapability: capability }),
+      setShowBodyAnchors: (value) => set({ showBodyAnchors: value }),
+      updateBodyShape: (key, value) => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+              ...entry,
+              shape: { ...entry.shape, [key]: value },
+            })),
+          `身材 · ${key}`,
+          `body:${state.bodySubjectId}:${key}`,
+        );
+      },
+      updateBody: (updater, label, coalesceKey) => {
+        const state = get();
+        apply(
+          (current) => withBodyAdjust(current, state.bodySubjectId, updater),
+          label,
+          coalesceKey,
+        );
+      },
+      addBodyAnchor: (anchor) => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+              ...entry,
+              anchors: [...entry.anchors, anchor].slice(-200),
+            })),
+          `添加锚点 · ${anchor.part}`,
+        );
+      },
+      addBodyAnchorPresets: (presets) => {
+        const state = get();
+        if (presets.length === 0) return;
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => {
+              const anchors = [...entry.anchors];
+              for (const preset of presets) {
+                if (anchors.some((anchor) => anchor.part === preset.part)) continue;
+                anchors.push({
+                  ...defaultBodyAnchor(preset.part),
+                  x: clamp(preset.x, 0, 1),
+                  y: clamp(preset.y, 0, 1),
+                  radius: state.bodyAnchorRadius,
+                });
+              }
+              return { ...entry, anchors: anchors.slice(-200) };
+            }),
+          "添加锚点建议",
+        );
+      },
+      updateBodyAnchor: (index, patch) => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+              ...entry,
+              anchors: entry.anchors.map((anchor, i) =>
+                i === index ? { ...anchor, ...patch } : anchor,
+              ),
+            })),
+          "编辑锚点",
+        );
+      },
+      removeBodyAnchor: (index) => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+              ...entry,
+              anchors: entry.anchors.filter((_, i) => i !== index),
+            })),
+          "删除锚点",
+        );
+      },
+      lockBodyAnchor: (index, locked) => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+              ...entry,
+              anchors: entry.anchors.map((anchor, i) => (i === index ? { ...anchor, locked } : anchor)),
+            })),
+          locked ? "锁定锚点" : "解锁锚点",
+        );
+      },
+      clearBodyAnchors: () => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({ ...entry, anchors: [] })),
+          "清除锚点",
+        );
+      },
+      appendBodyStroke: (stroke) => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+              ...entry,
+              strokes: [...entry.strokes, stroke].slice(-400),
+            })),
+          "身材推拉笔触",
+        );
+      },
+      undoBodyStroke: () => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({
+              ...entry,
+              strokes: entry.strokes.slice(0, -1),
+            })),
+          "撤销身材笔触",
+        );
+      },
+      clearBodyStrokes: () => {
+        const state = get();
+        apply(
+          (current) =>
+            withBodyAdjust(current, state.bodySubjectId, (entry) => ({ ...entry, strokes: [] })),
+          "清除身材笔触",
+        );
+      },
+      resetBodyAdjust: () => {
+        const state = get();
+        apply(
+          (current) => ({
+            ...current,
+            body: current.body.filter((entry) => entry.subjectId !== state.bodySubjectId),
+          }),
+          "重置身材",
+        );
+      },
+      resetBackground: () =>
+        apply(
+          (current) => ({ ...current, background: defaultBackground() }),
+          "重置背景",
+        ),
+      setBackgroundImage: (info) =>
+        apply(
+          (current) => ({
+            ...current,
+            background: info
+              ? {
+                  ...current.background,
+                  enabled: true,
+                  mode: "image",
+                  imagePath: info.path,
+                }
+              : { ...current.background, mode: current.background.imagePath ? "image" : "original" },
+          }),
+          info ? "选择背景图片" : "清除背景图片",
+        ),
+      updateBackground: (updater, label, coalesceKey) =>
+        apply(
+          (current) => ({ ...current, background: updater(current.background) }),
+          label,
+          coalesceKey,
+        ),
+
       setImporting: (value) => set({ importing: value }),
       setExporting: (value) => set({ exporting: value }),
       setDragActive: (value) => set({ dragActive: value }),
@@ -1150,6 +1550,10 @@ export const selectActiveFaceBeauty = (state: EditorState) => {
   if (!face) return null;
   return findFaceBeauty(selectActiveParams(state), face.id) ?? null;
 };
+
+/** 当前编辑人物的身材参数条目；没有时返回 null。 */
+export const selectActiveBodyAdjust = (state: EditorState) =>
+  findBodyAdjust(selectActiveParams(state), state.bodySubjectId) ?? null;
 
 /** 效果图 URL：参数归零时直接复用原图，省掉一次后端渲染。 */
 export function selectEffectUrl(state: EditorState): string | null {

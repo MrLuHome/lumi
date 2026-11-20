@@ -4,22 +4,41 @@ import {
   PARAM_GROUPS,
   PARAM_INDEX,
   activeParamCount,
+  bodyAdjustIsActive,
   clampParams,
+  defaultBackground,
   defaultBeauty,
+  defaultBodyAdjust,
   defaultFaceReshape,
+  defaultSubjectMask,
   faceReshapeIsActive,
   findFaceBeauty,
   formatParamValue,
   isNeutral,
   paramsEqual,
   paramsKey,
+  subjectMaskHasContent,
+  withBodyAdjust,
   withFaceBeauty,
   withFaceReshape,
 } from "./params";
 
 describe("参数定义", () => {
   const numericKeys = Object.keys(DEFAULT_PARAMS).filter(
-    (key) => !["hsl", "curves", "lut", "faces", "reshape", "manualMask", "repairPoints", "skinSmooth"].includes(key),
+    (key) =>
+      ![
+        "hsl",
+        "curves",
+        "lut",
+        "faces",
+        "reshape",
+        "subjectMask",
+        "body",
+        "background",
+        "manualMask",
+        "repairPoints",
+        "skinSmooth",
+      ].includes(key),
   );
 
   it("每个数值参数在参数组中恰好出现一次", () => {
@@ -237,5 +256,85 @@ describe("面部塑形参数", () => {
     expect(params.reshape.find((face) => face.faceId === 1)?.face.slim).toBe(0);
     expect(params.reshape.find((face) => face.faceId === 2)?.face.slim).toBe(40);
     expect(params.reshape.find((face) => face.faceId === 2)?.faceUuid).toBe("uuid-b");
+  });
+});
+
+describe("第五轮人物蒙版与背景参数", () => {
+  it("默认蒙版没有笔触且不激活", () => {
+    const mask = defaultSubjectMask();
+    expect(subjectMaskHasContent(mask)).toBe(false);
+    expect(isNeutral(DEFAULT_PARAMS)).toBe(true);
+    expect(activeParamCount(DEFAULT_PARAMS)).toBe(0);
+  });
+
+  it("笔触、坐标与 Alpha 处理参数都被夹紧", () => {
+    const clamped = clampParams({
+      ...DEFAULT_PARAMS,
+      subjectMask: {
+        ...defaultSubjectMask(),
+        enabled: true,
+        feather: 500,
+        expand: -400,
+        smooth: -20,
+        strokes: [
+          {
+            kind: "foreground",
+            radius: 2,
+            hardness: -5,
+            strength: 300,
+            points: [
+              { x: -1, y: 2 },
+              { x: 0.4, y: 0.5 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(clamped.subjectMask.feather).toBe(100);
+    expect(clamped.subjectMask.expand).toBe(-100);
+    expect(clamped.subjectMask.smooth).toBe(0);
+    expect(clamped.subjectMask.strokes[0]?.radius).toBe(0.5);
+    expect(clamped.subjectMask.strokes[0]?.hardness).toBe(0);
+    expect(clamped.subjectMask.strokes[0]?.strength).toBe(100);
+    expect(clamped.subjectMask.strokes[0]?.points[0]).toEqual({ x: 0, y: 1 });
+    expect(activeParamCount(clamped)).toBe(1);
+  });
+
+  it("身材参数按人物隔离并可撤销到默认", () => {
+    let params = withBodyAdjust(DEFAULT_PARAMS, "subject-1", (entry) => ({
+      ...entry,
+      shape: { ...entry.shape, waist: 40 },
+      anchors: [
+        { part: "waistLeft", x: -1, y: 0.5, dx: 2, dy: 0, radius: 2, locked: true },
+      ],
+    }));
+    params = withBodyAdjust(clampParams(params), "subject-2", (entry) => ({
+      ...entry,
+      shape: { ...entry.shape, hips: 25 },
+    }));
+    expect(params.body).toHaveLength(2);
+    expect(params.body[0]?.subjectId).toBe("subject-1");
+    expect(params.body[0]?.shape.waist).toBe(40);
+    expect(params.body[1]?.shape.hips).toBe(25);
+    expect(bodyAdjustIsActive(defaultBodyAdjust("subject-1"))).toBe(false);
+    expect(activeParamCount(params)).toBe(2);
+  });
+
+  it("背景模式与颜色被校验，空图片路径退回原始背景", () => {
+    const clamped = clampParams({
+      ...DEFAULT_PARAMS,
+      background: {
+        ...defaultBackground(),
+        enabled: true,
+        mode: "image",
+        imagePath: "",
+        color: "red",
+        blur: 400,
+      },
+    });
+    expect(clamped.background.mode).toBe("original");
+    expect(clamped.background.blur).toBe(100);
+    expect(clamped.background.color).toBe("#1F2933");
+    expect(activeParamCount(clamped)).toBe(0);
   });
 });

@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::face_reshape::identity::ProjectFace;
 use crate::image_engine::export::ExportSettings;
-use crate::image_engine::params::EditParams;
+use crate::image_engine::params::{BodyShape, EditParams};
 
-/// 版本 2：新增源图哈希与持久化人脸记录（UUID / 检测框 / 关键点）。
-/// 版本 1 项目仍然可以打开，缺失字段使用默认值。
-pub const PROJECT_VERSION: u32 = 2;
+/// 版本 3：新增人物对象、蒙版元数据与身材/背景参数。
+/// 版本 1/2 项目仍然可以打开，缺失字段使用默认值。
+pub const PROJECT_VERSION: u32 = 3;
 pub const PROJECT_EXTENSION: &str = "lumi";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -66,22 +66,95 @@ fn default_opacity() -> f32 {
     100.0
 }
 
+/// 第五轮人物记录。`subject_id` 与 `params.body[].subjectId` 一致，
+/// 不复用人脸 UUID，避免身材与人脸参数在重开后错配。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectSubject {
+    pub subject_id: String,
+    pub mask_source: String,
+    pub mask_model_version: String,
+    pub mask_strokes: usize,
+    pub body: BodyShape,
+    pub anchors: usize,
+}
+
+/// 蒙版来源与版本。不保存 Alpha 像素，只保存可重放的笔触与哈希。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MaskMeta {
+    /// 当前固定为 `manual`；未来 AI 模型可用时写入模型 ID。
+    pub source: String,
+    pub model_id: String,
+    pub model_version: String,
+    /// 最近一次渲染的覆盖率。由前端或渲染报告回填，无法计算时为 0。
+    pub coverage: f32,
+    pub stroke_hash: String,
+    pub revision: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct ProjectPhoto {
     pub path: String,
-    #[serde(default)]
     pub params: EditParams,
-    #[serde(default)]
     pub masks: Vec<MaskLayer>,
-    #[serde(default)]
     pub export: Option<ExportSettings>,
     /// 原图文件 SHA-256。重开时若变化，不自动套用任何人脸参数。
-    #[serde(default)]
     pub source_hash: String,
     /// 持久化人脸记录：UUID、检测框、初始关键点、置信度、模型版本。
-    #[serde(default)]
     pub faces: Vec<ProjectFace>,
+    /// 第五轮人物记录（身材对象、独立蒙版笔触数量、锚点数量）。
+    pub subjects: Vec<ProjectSubject>,
+    /// 第五轮蒙版元数据。
+    pub mask_meta: Option<MaskMeta>,
+}
+
+impl Default for ProjectPhoto {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            params: EditParams::default(),
+            masks: Vec::new(),
+            export: None,
+            source_hash: String::new(),
+            faces: Vec::new(),
+            subjects: Vec::new(),
+            mask_meta: None,
+        }
+    }
+}
+
+impl ProjectPhoto {
+    /// 保存前把第五轮记录与 `params` 同步，避免两份数据不一致。
+    pub fn sync_subject_records(&mut self) {
+        self.subjects = self
+            .params
+            .body
+            .iter()
+            .map(|entry| ProjectSubject {
+                subject_id: entry.subject_id.clone(),
+                mask_source: if entry.has_own_mask() {
+                    "manual".into()
+                } else {
+                    self.params.subject_mask.source.clone()
+                },
+                mask_model_version: self.params.subject_mask.model_version.clone(),
+                mask_strokes: entry.mask_strokes.len(),
+                body: entry.shape,
+                anchors: entry.anchors.len(),
+            })
+            .collect();
+        let mask = &self.params.subject_mask;
+        self.mask_meta = Some(MaskMeta {
+            source: mask.source.clone(),
+            model_id: "manual-alpha".into(),
+            model_version: mask.model_version.clone(),
+            coverage: 0.0,
+            stroke_hash: mask.stroke_hash(),
+            revision: 1,
+        });
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -126,7 +199,11 @@ pub fn save(path: &Path, project: &ProjectDoc) -> AppResult<()> {
             project.version, PROJECT_VERSION
         )));
     }
-    let json = serde_json::to_vec_pretty(project)
+    let mut project = project.clone();
+    for photo in project.photos.iter_mut() {
+        photo.sync_subject_records();
+    }
+    let json = serde_json::to_vec_pretty(&project)
         .map_err(|error| AppError::Task(format!("项目序列化失败：{error}")))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -191,6 +268,8 @@ mod tests {
                 export: Some(ExportSettings::default()),
                 source_hash: "abc123".into(),
                 faces: Vec::new(),
+                subjects: Vec::new(),
+                mask_meta: None,
             }],
             0,
             ExportSettings::default(),
@@ -235,6 +314,8 @@ mod tests {
                 export: None,
                 source_hash: "deadbeef".into(),
                 faces: vec![face.clone()],
+                subjects: Vec::new(),
+                mask_meta: None,
             }],
             0,
             ExportSettings::default(),
@@ -243,6 +324,87 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.version, PROJECT_VERSION);
         assert_eq!(loaded.photos[0].faces, vec![face]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn v3_roundtrip_keeps_subject_body_and_mask_meta() {
+        use crate::image_engine::params::{
+            BackgroundMode, BackgroundParams, BodyAdjust, BodyShape, MaskPoint,
+            SubjectMaskParams, SubjectMaskStroke, SubjectMaskStrokeKind,
+        };
+        let dir = std::env::temp_dir().join("lumi-project-v3");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v3.lumi");
+        let mut params = EditParams::default();
+        params.subject_mask = SubjectMaskParams {
+            enabled: true,
+            strokes: vec![SubjectMaskStroke {
+                kind: SubjectMaskStrokeKind::Paint,
+                radius: 0.2,
+                hardness: 70.0,
+                strength: 100.0,
+                points: vec![MaskPoint { x: 0.5, y: 0.6 }],
+            }],
+            ..Default::default()
+        };
+        params.body = vec![BodyAdjust {
+            subject_id: "subject-uuid-1".into(),
+            enabled: true,
+            shape: BodyShape {
+                waist: -30.0,
+                ..Default::default()
+            },
+            anchors: Vec::new(),
+            strokes: Vec::new(),
+            mask_strokes: Vec::new(),
+        }];
+        params.background = BackgroundParams {
+            enabled: true,
+            mode: BackgroundMode::SolidColor,
+            color: "#102030".into(),
+            ..Default::default()
+        };
+        let project = ProjectDoc::new(
+            vec![ProjectPhoto {
+                path: "/photos/body.jpg".into(),
+                params,
+                ..Default::default()
+            }],
+            0,
+            ExportSettings::default(),
+        );
+        save(&path, &project).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.version, PROJECT_VERSION);
+        let photo = &loaded.photos[0];
+        assert_eq!(photo.params.body[0].subject_id, "subject-uuid-1");
+        assert_eq!(photo.params.body[0].shape.waist, -30.0);
+        assert_eq!(photo.params.background.mode, BackgroundMode::SolidColor);
+        assert_eq!(photo.subjects.len(), 1);
+        assert_eq!(photo.subjects[0].subject_id, "subject-uuid-1");
+        let meta = photo.mask_meta.as_ref().unwrap();
+        assert_eq!(meta.source, "manual");
+        assert!(!meta.stroke_hash.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn v2_project_without_new_fields_loads_with_defaults() {
+        let dir = std::env::temp_dir().join("lumi-project-v2");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v2.lumi");
+        std::fs::write(
+            &path,
+            br#"{"version":2,"createdAt":"0","activeIndex":0,"export":{"format":"jpeg","quality":92},"photos":[{"path":"/legacy.jpg","params":{"exposure":12}}]}"#,
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        let photo = &loaded.photos[0];
+        assert!(photo.params.body.is_empty());
+        assert!(!photo.params.background.is_active());
+        assert!(photo.subjects.is_empty());
+        assert!(photo.mask_meta.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 
