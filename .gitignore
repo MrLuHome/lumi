@@ -1,0 +1,16 @@
+# macOS 系统文件
+.DS_Store
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+._*
+
+# Office 临时锁文件（.~ 开头）
+.~*
+
+# 临时与中间产物
+.screenshots/.tmp/
+**/work/
+*.tmp
+*.log
