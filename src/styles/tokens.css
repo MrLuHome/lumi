@@ -1,0 +1,54 @@
+:root {
+  color-scheme: dark;
+
+  /* 表面 */
+  --bg-app: #0b0c0e;
+  --bg-chrome: #101215;
+  --bg-panel: #121417;
+  --bg-elevated: #191c21;
+  --bg-hover: #1d2127;
+
+  /* 描边 */
+  --line: #23262c;
+  --line-soft: #1a1d22;
+  --line-strong: #2c3037;
+
+  /* 文字 */
+  --text-1: #eef0f3;
+  --text-2: #a9b0b9;
+  --text-3: #737b86;
+  --text-4: #4d545d;
+
+  /* 强调色：暖金，贴合 LUMI 的光感 */
+  --accent: #e0b57c;
+  --accent-strong: #f1c78f;
+  --accent-ink: #23180a;
+  --accent-soft: rgba(224, 181, 124, 0.12);
+  --accent-line: rgba(224, 181, 124, 0.35);
+
+  --danger: #ea8074;
+  --success: #85cfa9;
+  --info: #8fb6da;
+
+  --radius-sm: 3px;
+  --radius: 5px;
+  --radius-lg: 8px;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  --shadow-image: 0 30px 90px rgba(0, 0, 0, 0.62);
+
+  --topbar-h: 52px;
+  --status-h: 30px;
+  --rail-w: 252px;
+  --inspector-w: 318px;
+}
+
+@media (max-width: 1320px) {
+  :root {
+    --rail-w: 222px;
+    --inspector-w: 296px;
+  }
+}

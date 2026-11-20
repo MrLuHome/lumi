@@ -14,3 +14,13 @@
 **/work/
 *.tmp
 *.log
+
+# 前端依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+
+# Rust / Tauri 构建产物
+src-tauri/target/
+src-tauri/gen/schemas/
