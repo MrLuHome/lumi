@@ -38,6 +38,9 @@ pub struct FaceModelStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DetectedFace {
     pub id: usize,
+    /// 稳定人脸 UUID，由跟踪器/项目恢复分配。
+    #[serde(default)]
+    pub uuid: String,
     pub score: f32,
     /// 原图像素坐标。
     pub x: f32,
@@ -218,6 +221,7 @@ impl FaceEngine {
 fn to_face(candidate: &Candidate) -> DetectedFace {
     DetectedFace {
         id: 0,
+        uuid: String::new(),
         score: candidate.score,
         x: candidate.left().max(0.0),
         y: candidate.top().max(0.0),

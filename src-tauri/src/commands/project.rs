@@ -4,9 +4,10 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::face_reshape::identity::{self, ProjectFace};
 use crate::image_engine::operations::estimate_white_balance;
 use crate::image_engine::project::{self, ProjectDoc, PROJECT_EXTENSION};
-use crate::state::ImageCache;
+use crate::state::{FaceRepository, ImageCache};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,9 +24,36 @@ pub struct ProjectOpened {
 }
 
 /// 保存非破坏性项目：只写参数、蒙版、导出设置，不写预览图。
+/// 同时写入源图哈希与当前检测出的人脸身份记录，供重开时匹配。
 #[tauri::command]
-pub async fn save_project(project: ProjectDoc, destination: Option<String>) -> AppResult<ProjectSaved> {
+pub async fn save_project(
+    repo: State<'_, FaceRepository>,
+    mut project: ProjectDoc,
+    destination: Option<String>,
+) -> AppResult<ProjectSaved> {
+    let repo = repo.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        for photo in project.photos.iter_mut() {
+            if let Some(entry) = repo.get(Path::new(&photo.path)) {
+                if !entry.faces.is_empty() {
+                    photo.faces = entry
+                        .faces
+                        .iter()
+                        .filter(|face| face.is_usable())
+                        .map(|face| {
+                            let mut record =
+                                ProjectFace::from_frame(face, identity::MATCH_MODEL_VERSION);
+                            record.ensure_uuid();
+                            record
+                        })
+                        .collect();
+                }
+            }
+            if photo.source_hash.is_empty() {
+                photo.source_hash =
+                    identity::source_hash(Path::new(&photo.path)).unwrap_or_default();
+            }
+        }
         let target = match destination {
             Some(value) if !value.trim().is_empty() => PathBuf::from(value),
             _ => {

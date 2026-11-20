@@ -9,10 +9,12 @@ export function buildProjectDoc(state: EditorState): ProjectDoc {
     params: cloneParams(state.params[photo.id] ?? DEFAULT_PARAMS),
     masks: [],
     export: state.exportSettings,
+    sourceHash: state.projectSourceHashes[photo.id] ?? "",
+    faces: state.projectFaceRecords[photo.id] ?? [],
   }));
   const found = state.photos.findIndex((photo) => photo.id === state.activeId);
   return {
-    version: 1,
+    version: 2,
     createdAt: new Date().toISOString(),
     activeIndex: found >= 0 ? found : 0,
     export: state.exportSettings,

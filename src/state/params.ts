@@ -54,8 +54,160 @@ export type BeautyKey = keyof BeautyParams;
 
 export interface FaceBeauty {
   faceId: number;
+  /** 稳定人脸 UUID；项目保存与重开匹配的主键。 */
+  faceUuid: string;
   enabled: boolean;
   beauty: BeautyParams;
+}
+
+/** 轮廓级脸型参数，全部 -100..100。LEVEL 2 只开放整体宽度/长度/轮廓微调。 */
+export interface FaceShape {
+  slim: number;
+  left: number;
+  right: number;
+  jaw: number;
+  cheekbone: number;
+  width: number;
+  length: number;
+  balance: number;
+}
+
+export type FaceShapeKey = keyof FaceShape;
+
+/** LEVEL 3 参数：结构保留以便项目兼容，当前引擎会清零且 UI 禁用。 */
+export interface EyeShape {
+  size: number;
+  left: number;
+  right: number;
+  width: number;
+  height: number;
+  distance: number;
+  corner: number;
+}
+
+export interface NoseShape {
+  bridge: number;
+  alar: number;
+  tip: number;
+  height: number;
+  balance: number;
+}
+
+export interface MouthShape {
+  width: number;
+  upper: number;
+  lower: number;
+  corner: number;
+  symmetry: number;
+  size: number;
+}
+
+export interface ChinShape {
+  length: number;
+  width: number;
+  point: number;
+  jawline: number;
+}
+
+export type WarpMode = "push" | "pull" | "zoomIn" | "zoomOut" | "protect" | "restore";
+
+/** 手动变形笔触，坐标按原图归一化。 */
+export interface WarpStroke {
+  mode: WarpMode;
+  /** 半径，按图像宽度归一化。 */
+  radius: number;
+  /** 0..100。 */
+  strength: number;
+  /** 羽化 0..100。 */
+  feather: number;
+  points: MaskPoint[];
+}
+
+export interface ManualWarp {
+  enabled: boolean;
+  strokes: WarpStroke[];
+}
+
+/** 单张人脸的塑形参数。 */
+export interface FaceReshape {
+  faceId: number;
+  faceUuid: string;
+  enabled: boolean;
+  face: FaceShape;
+  eyes: EyeShape;
+  nose: NoseShape;
+  mouth: MouthShape;
+  chin: ChinShape;
+  manual: ManualWarp;
+}
+
+export function defaultFaceShape(): FaceShape {
+  return { slim: 0, left: 0, right: 0, jaw: 0, cheekbone: 0, width: 0, length: 0, balance: 0 };
+}
+
+function emptyEyes(): EyeShape {
+  return { size: 0, left: 0, right: 0, width: 0, height: 0, distance: 0, corner: 0 };
+}
+
+function emptyNose(): NoseShape {
+  return { bridge: 0, alar: 0, tip: 0, height: 0, balance: 0 };
+}
+
+function emptyMouth(): MouthShape {
+  return { width: 0, upper: 0, lower: 0, corner: 0, symmetry: 0, size: 0 };
+}
+
+function emptyChin(): ChinShape {
+  return { length: 0, width: 0, point: 0, jawline: 0 };
+}
+
+export function defaultFaceReshape(faceId: number, faceUuid = ""): FaceReshape {
+  return {
+    faceId,
+    faceUuid,
+    enabled: true,
+    face: defaultFaceShape(),
+    eyes: emptyEyes(),
+    nose: emptyNose(),
+    mouth: emptyMouth(),
+    chin: emptyChin(),
+    manual: { enabled: false, strokes: [] },
+  };
+}
+
+export function faceShapeIsActive(face: FaceShape): boolean {
+  return (Object.keys(face) as FaceShapeKey[]).some((key) => Math.abs(face[key]) >= 0.001);
+}
+
+export function faceReshapeIsActive(entry: FaceReshape): boolean {
+  return (
+    faceShapeIsActive(entry.face) ||
+    (entry.manual.enabled && entry.manual.strokes.length > 0)
+  );
+}
+
+export function findFaceReshape(params: EditParams, faceId: number): FaceReshape | undefined {
+  return params.reshape.find((face) => face.faceId === faceId);
+}
+
+/** 返回替换了指定人脸塑形参数的副本；没有条目时自动创建。 */
+export function withFaceReshape(
+  params: EditParams,
+  faceId: number,
+  faceUuid: string,
+  updater: (face: FaceReshape) => FaceReshape,
+): EditParams {
+  const existing = findFaceReshape(params, faceId) ?? defaultFaceReshape(faceId, faceUuid);
+  const next = updater({
+    ...existing,
+    faceUuid: existing.faceUuid || faceUuid,
+    face: { ...existing.face },
+    manual: { ...existing.manual, strokes: [...existing.manual.strokes] },
+  });
+  const reshape = params.reshape.filter((face) => face.faceId !== faceId);
+  reshape.push(next);
+  reshape.sort((a, b) => a.faceId - b.faceId);
+  return { ...params, reshape };
 }
 
 export interface MaskPoint {
@@ -105,6 +257,8 @@ export interface EditParams {
   /** 第二轮旧字段，保留项目兼容；新逻辑一律使用按人脸参数。 */
   skinSmooth: number;
   faces: FaceBeauty[];
+  /** 第四轮：按稳定 faceUuid 归属的面部塑形参数。 */
+  reshape: FaceReshape[];
   manualMask: ManualMask;
   repairPoints: RepairPoint[];
   hsl: HslParams;
@@ -189,8 +343,8 @@ export function beautyIsActive(beauty: BeautyParams): boolean {
   return BEAUTY_KEYS.some((key) => Math.abs(beauty[key]) >= 0.001);
 }
 
-export function defaultFaceBeauty(faceId: number): FaceBeauty {
-  return { faceId, enabled: true, beauty: defaultBeauty() };
+export function defaultFaceBeauty(faceId: number, faceUuid = ""): FaceBeauty {
+  return { faceId, faceUuid, enabled: true, beauty: defaultBeauty() };
 }
 
 export function findFaceBeauty(params: EditParams, faceId: number): FaceBeauty | undefined {
@@ -202,9 +356,14 @@ export function withFaceBeauty(
   params: EditParams,
   faceId: number,
   updater: (face: FaceBeauty) => FaceBeauty,
+  faceUuid = "",
 ): EditParams {
-  const existing = findFaceBeauty(params, faceId) ?? defaultFaceBeauty(faceId);
-  const next = updater({ ...existing, beauty: { ...existing.beauty } });
+  const existing = findFaceBeauty(params, faceId) ?? defaultFaceBeauty(faceId, faceUuid);
+  const next = updater({
+    ...existing,
+    faceUuid: existing.faceUuid || faceUuid,
+    beauty: { ...existing.beauty },
+  });
   const faces = params.faces.filter((face) => face.faceId !== faceId);
   faces.push(next);
   faces.sort((a, b) => a.faceId - b.faceId);
@@ -284,6 +443,7 @@ export function defaultParams(): EditParams {
     vignette: 0,
     skinSmooth: 0,
     faces: [],
+    reshape: [],
     manualMask: defaultManualMask(),
     repairPoints: [],
     hsl: neutralHsl(),
@@ -369,7 +529,12 @@ export function clampParams(input: EditParams): EditParams {
       for (const key of BEAUTY_KEYS) {
         beauty[key] = clampValue(face.beauty?.[key], 0, 100);
       }
-      return { faceId, enabled: face.enabled !== false, beauty };
+      return {
+        faceId,
+        faceUuid: typeof face.faceUuid === "string" ? face.faceUuid : "",
+        enabled: face.enabled !== false,
+        beauty,
+      };
     })
     .filter((face) => {
       if (seen.has(face.faceId)) return false;
@@ -377,6 +542,61 @@ export function clampParams(input: EditParams): EditParams {
       return true;
     })
     .sort((a, b) => a.faceId - b.faceId);
+
+  const reshapeSource = Array.isArray(source.reshape) ? source.reshape : [];
+  const seenReshape = new Set<number>();
+  const warpModes: WarpMode[] = ["push", "pull", "zoomIn", "zoomOut", "protect", "restore"];
+  next.reshape = reshapeSource
+    .filter((entry) => Number.isFinite(entry?.faceId))
+    .map((entry) => {
+      const faceId = Math.max(0, Math.round(entry.faceId));
+      const base = defaultFaceReshape(
+        faceId,
+        typeof entry.faceUuid === "string" ? entry.faceUuid : "",
+      );
+      base.enabled = entry.enabled !== false;
+      for (const key of Object.keys(base.face) as FaceShapeKey[]) {
+        base.face[key] = clampValue(entry.face?.[key], -100, 100);
+      }
+      for (const key of Object.keys(base.eyes) as (keyof EyeShape)[]) {
+        base.eyes[key] = clampValue(entry.eyes?.[key], -100, 100);
+      }
+      for (const key of Object.keys(base.nose) as (keyof NoseShape)[]) {
+        base.nose[key] = clampValue(entry.nose?.[key], -100, 100);
+      }
+      for (const key of Object.keys(base.mouth) as (keyof MouthShape)[]) {
+        base.mouth[key] = clampValue(entry.mouth?.[key], -100, 100);
+      }
+      for (const key of Object.keys(base.chin) as (keyof ChinShape)[]) {
+        base.chin[key] = clampValue(entry.chin?.[key], -100, 100);
+      }
+      const strokes = Array.isArray(entry.manual?.strokes) ? entry.manual.strokes : [];
+      base.manual = {
+        enabled: entry.manual?.enabled === true,
+        strokes: strokes
+          .filter((stroke) => warpModes.includes(stroke?.mode) && Array.isArray(stroke?.points) && stroke.points.length > 0)
+          .slice(0, 400)
+          .map((stroke) => ({
+            mode: stroke.mode,
+            radius: clampValue(stroke.radius, 0.004, 0.25),
+            strength: clampValue(stroke.strength, 0, 100),
+            feather: clampValue(stroke.feather, 0, 100),
+            points: stroke.points
+              .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+              .slice(0, 4000)
+              .map((point) => ({ x: clampValue(point.x, 0, 1), y: clampValue(point.y, 0, 1) })),
+          }))
+          .filter((stroke) => stroke.points.length > 0),
+      };
+      return base;
+    })
+    .filter((entry) => {
+      if (seenReshape.has(entry.faceId)) return false;
+      seenReshape.add(entry.faceId);
+      return true;
+    })
+    .sort((a, b) => a.faceId - b.faceId);
+
   const manual = source.manualMask as Partial<ManualMask> | undefined;
   const strokes = Array.isArray(manual?.strokes) ? manual.strokes : [];
   next.manualMask = {
@@ -472,6 +692,9 @@ export function activeParamCount(params: EditParams): number {
   if (params.skinSmooth > 0.001) count += 1;
   for (const face of params.faces) {
     if (face.enabled && beautyIsActive(face.beauty)) count += 1;
+  }
+  for (const face of params.reshape) {
+    if (face.enabled && faceReshapeIsActive(face)) count += 1;
   }
   return count;
 }

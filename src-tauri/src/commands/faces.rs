@@ -101,6 +101,7 @@ pub async fn detect_faces(
             {
                 if frame.iou(best) > 0.2 {
                     face.id = best.id as usize;
+                    face.uuid = best.uuid.clone();
                 }
             }
         }

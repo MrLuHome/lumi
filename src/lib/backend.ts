@@ -8,12 +8,16 @@ import type {
   FaceDetectionResult,
   FaceModelStatus,
   FaceProgress,
+  FaceRestoreResult,
   MaskPreview,
+  MeshPreview,
   PhotoAsset,
   ProjectDoc,
+  ProjectFaceRecord,
   ProjectOpenResult,
   RenderProgress,
   RenderResult,
+  ReshapeCapability,
   SkinModelStatus,
 } from "../types";
 import { isDesktopRuntime } from "./platform";
@@ -129,6 +133,62 @@ export async function previewSkinMask(path: string, params: EditParams): Promise
   return invoke<MaskPreview>("preview_skin_mask", { path, params });
 }
 
+/** 当前真实可用的塑形能力（LEVEL 1 + LEVEL 2）。 */
+export async function reshapeCapability(): Promise<ReshapeCapability> {
+  if (!isDesktopRuntime()) throw new Error("塑形能力查询需要在桌面端运行");
+  return invoke<ReshapeCapability>("reshape_capability");
+}
+
+/** 获取真实控制网格，用于画布网格显示。 */
+export async function reshapeMesh(
+  path: string,
+  faceId: number,
+  params: EditParams,
+): Promise<MeshPreview | null> {
+  if (!isDesktopRuntime()) return null;
+  return invoke<MeshPreview | null>("reshape_mesh", { path, faceId, params });
+}
+
+/** 保存项目前读取持久化人脸记录（UUID / 框 / 关键点 / 模型版本）。 */
+export async function exportFaceRecords(
+  path: string,
+): Promise<{ sourceHash: string; faces: ProjectFaceRecord[] }> {
+  if (!isDesktopRuntime()) return { sourceHash: "", faces: [] };
+  return invoke("export_face_records", { path });
+}
+
+/** 项目重开：重新检测后按几何匹配并恢复稳定 UUID。 */
+export async function restoreFaces(
+  path: string,
+  records: ProjectFaceRecord[],
+  sourceHash?: string,
+): Promise<FaceRestoreResult> {
+  if (!isDesktopRuntime()) {
+    return {
+      restored: [],
+      pending: [],
+      missing: records,
+      sourceChanged: false,
+      faces: [],
+    };
+  }
+  return invoke<FaceRestoreResult>("restore_faces", {
+    path,
+    records,
+    sourceHash: sourceHash ?? null,
+  });
+}
+
+/** 人工确认低置信匹配：把项目中的 UUID 绑定到当前检测脸。 */
+export async function confirmFaceMatch(
+  path: string,
+  faceId: number,
+  faceUuid: string,
+): Promise<{ faces: FaceDetectionResult["faces"] }> {
+  if (!isDesktopRuntime()) throw new Error("人脸确认需要在桌面端运行");
+  return invoke("confirm_face_match", { path, faceId, faceUuid });
+}
+
 export async function subscribeRenderProgress(
   handler: (progress: RenderProgress) => void,
 ): Promise<() => void> {
@@ -139,7 +199,6 @@ export async function subscribeRenderProgress(
   );
   return unlisten;
 }
-
 export async function subscribeFaceProgress(
   handler: (progress: FaceProgress) => void,
 ): Promise<() => void> {

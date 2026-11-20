@@ -11,6 +11,7 @@ import { HslPanel } from "./HslPanel";
 import { CurveEditor } from "./CurveEditor";
 import { FacePanel } from "./FacePanel";
 import { BeautyPanel } from "./BeautyPanel";
+import { ReshapePanel } from "./ReshapePanel";
 
 interface InspectorProps {
   photo: PhotoAsset | null;
@@ -114,6 +115,19 @@ export function Inspector({ photo, params }: InspectorProps) {
 
       <div className={`inspector-body ${photo ? "" : "is-disabled"}`}>
         <BeautyPanel photo={photo} />
+        <section className={`param-group ${isOpen("reshape") ? "is-open" : ""}`}>
+          <header className="param-group-head">
+            <button type="button" className="param-group-toggle" onClick={() => toggle("reshape")}>
+              <ChevronDown size={12} className="chev" />
+              <span>面部塑形</span>
+            </button>
+          </header>
+          {isOpen("reshape") && (
+            <div className="param-group-body">
+              <ReshapePanel photo={photo} />
+            </div>
+          )}
+        </section>
         {PARAM_GROUPS.map((group) => {
           const open = isOpen(group.id);
           const groupDirty = group.params.some((definition) => params[definition.key] !== 0);

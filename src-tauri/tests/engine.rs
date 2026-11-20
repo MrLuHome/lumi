@@ -190,6 +190,8 @@ fn project_roundtrip_keeps_params_and_masks() {
             params: params.clone(),
             masks: Vec::new(),
             export: None,
+            source_hash: String::new(),
+            faces: Vec::new(),
         }],
         0,
         ExportSettings::default(),

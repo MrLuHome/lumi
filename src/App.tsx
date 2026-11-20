@@ -7,10 +7,12 @@ import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/ui/Toast";
 import { usePreviewRenderer } from "./hooks/usePreviewRenderer";
 import {
+  detectFaces,
   exportImage,
   importPaths,
   openProject,
   pickImages,
+  restoreFaces,
   saveProject,
   subscribeBeautyProgress,
   subscribeFaceProgress,
@@ -136,6 +138,44 @@ export default function App() {
           ? `已恢复项目（${items.length}/${opened.project.photos.length} 张照片，${missing} 张文件缺失）`
           : `已打开项目：${baseName(opened.path)}`,
       );
+
+      // 重新检测并与项目保存的人脸身份记录匹配，恢复每张脸的参数。
+      let pending = 0;
+      let missingFaces = 0;
+      let changed = 0;
+      for (const item of items) {
+        const snapshot = useEditorStore.getState();
+        const records = snapshot.projectFaceRecords[item.id] ?? [];
+        if (records.length === 0) continue;
+        try {
+          const detection = await detectFaces(item.path);
+          useEditorStore.getState().setFaces(item.id, detection);
+          const restored = await restoreFaces(
+            item.path,
+            records,
+            snapshot.projectSourceHashes[item.id],
+          );
+          useEditorStore.getState().applyFaceRestore(item.id, restored);
+          pending += restored.pending.length;
+          missingFaces += restored.missing.length;
+          if (restored.sourceChanged) changed += 1;
+        } catch {
+          // 单张照片检测失败不影响项目其余部分。
+        }
+      }
+      if (changed > 0) {
+        useEditorStore
+          .getState()
+          .notify("info", `${changed} 张照片的原图文件已变化，人脸参数需人工确认`);
+      } else if (pending > 0) {
+        useEditorStore
+          .getState()
+          .notify("info", `${pending} 张人脸匹配置信度不足，请在人脸面板确认`);
+      } else if (missingFaces > 0) {
+        useEditorStore
+          .getState()
+          .notify("info", `${missingFaces} 张人脸的编辑记录已保留（本次未检测到）`);
+      }
     } catch (error) {
       const message = toMessage(error);
       if (!isCancelled(message)) useEditorStore.getState().notify("error", message);

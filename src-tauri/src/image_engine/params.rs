@@ -180,7 +180,11 @@ impl BeautyParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FaceBeauty {
+    /// 旧字段：UUID 不可用时的回退匹配。
     pub face_id: u32,
+    /// 稳定人脸 UUID，项目保存与重开匹配的主键。
+    #[serde(default)]
+    pub face_uuid: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -191,6 +195,7 @@ impl FaceBeauty {
     pub fn new(face_id: u32) -> Self {
         Self {
             face_id,
+            face_uuid: String::new(),
             enabled: true,
             beauty: BeautyParams::default(),
         }
@@ -282,6 +287,230 @@ pub struct RepairPoint {
     pub radius: f32,
 }
 
+/// 脸型塑形。全部 -100..100，0 表示不变；正值按字段语义放大，负值反向。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FaceShape {
+    pub slim: f32,
+    pub left: f32,
+    pub right: f32,
+    pub jaw: f32,
+    pub cheekbone: f32,
+    pub width: f32,
+    pub length: f32,
+    pub balance: f32,
+}
+
+impl FaceShape {
+    pub fn is_neutral(&self) -> bool {
+        self.fields().iter().all(|value| *value == 0.0)
+    }
+
+    pub fn fields(&self) -> [f32; 8] {
+        [
+            self.slim,
+            self.left,
+            self.right,
+            self.jaw,
+            self.cheekbone,
+            self.width,
+            self.length,
+            self.balance,
+        ]
+    }
+}
+
+/// 眼部塑形。尺寸类正值放大；距离正值拉远。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EyeShape {
+    pub size: f32,
+    pub left: f32,
+    pub right: f32,
+    pub width: f32,
+    pub height: f32,
+    pub distance: f32,
+    pub corner: f32,
+}
+
+impl EyeShape {
+    pub fn is_neutral(&self) -> bool {
+        self.fields().iter().all(|value| *value == 0.0)
+    }
+
+    pub fn fields(&self) -> [f32; 7] {
+        [
+            self.size,
+            self.left,
+            self.right,
+            self.width,
+            self.height,
+            self.distance,
+            self.corner,
+        ]
+    }
+}
+
+/// 鼻部塑形。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NoseShape {
+    pub bridge: f32,
+    pub alar: f32,
+    pub tip: f32,
+    pub height: f32,
+    pub balance: f32,
+}
+
+impl NoseShape {
+    pub fn is_neutral(&self) -> bool {
+        self.fields().iter().all(|value| *value == 0.0)
+    }
+
+    pub fn fields(&self) -> [f32; 5] {
+        [self.bridge, self.alar, self.tip, self.height, self.balance]
+    }
+}
+
+/// 唇部塑形。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MouthShape {
+    pub width: f32,
+    pub upper: f32,
+    pub lower: f32,
+    pub corner: f32,
+    pub symmetry: f32,
+    pub size: f32,
+}
+
+impl MouthShape {
+    pub fn is_neutral(&self) -> bool {
+        self.fields().iter().all(|value| *value == 0.0)
+    }
+
+    pub fn fields(&self) -> [f32; 6] {
+        [
+            self.width,
+            self.upper,
+            self.lower,
+            self.corner,
+            self.symmetry,
+            self.size,
+        ]
+    }
+}
+
+/// 下巴塑形。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChinShape {
+    pub length: f32,
+    pub width: f32,
+    pub point: f32,
+    pub jawline: f32,
+}
+
+impl ChinShape {
+    pub fn is_neutral(&self) -> bool {
+        self.fields().iter().all(|value| *value == 0.0)
+    }
+
+    pub fn fields(&self) -> [f32; 4] {
+        [self.length, self.width, self.point, self.jawline]
+    }
+}
+
+/// 手动局部变形模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WarpMode {
+    #[default]
+    Push,
+    Pull,
+    ZoomIn,
+    ZoomOut,
+    Protect,
+    Restore,
+}
+
+/// 单次手动推拉笔触。坐标按图像归一化，缩放画布后仍然准确。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WarpStroke {
+    #[serde(default)]
+    pub mode: WarpMode,
+    /// 笔刷半径，按图像宽度归一化（0.004..0.25）。
+    #[serde(default = "default_brush_radius")]
+    pub radius: f32,
+    /// 强度 0..100。
+    #[serde(default = "default_opacity")]
+    pub strength: f32,
+    /// 羽化 0..100。
+    #[serde(default = "default_feather")]
+    pub feather: f32,
+    #[serde(default)]
+    pub points: Vec<MaskPoint>,
+}
+
+/// 单张人脸的手动变形记录。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ManualWarp {
+    pub enabled: bool,
+    pub strokes: Vec<WarpStroke>,
+}
+
+/// 单张人脸的塑形参数，按稳定人脸 ID 保存。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceReshape {
+    pub face_id: u32,
+    /// 稳定人脸 UUID；为空时回退到 face_id。
+    #[serde(default)]
+    pub face_uuid: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub face: FaceShape,
+    #[serde(default)]
+    pub eyes: EyeShape,
+    #[serde(default)]
+    pub nose: NoseShape,
+    #[serde(default)]
+    pub mouth: MouthShape,
+    #[serde(default)]
+    pub chin: ChinShape,
+    #[serde(default)]
+    pub manual: ManualWarp,
+}
+
+impl FaceReshape {
+    pub fn new(face_id: u32) -> Self {
+        Self {
+            face_id,
+            face_uuid: String::new(),
+            enabled: true,
+            face: FaceShape::default(),
+            eyes: EyeShape::default(),
+            nose: NoseShape::default(),
+            mouth: MouthShape::default(),
+            chin: ChinShape::default(),
+            manual: ManualWarp::default(),
+        }
+    }
+
+    /// 是否包含任何会改变像素的塑形参数。
+    pub fn is_active(&self) -> bool {
+        !self.face.is_neutral()
+            || !self.eyes.is_neutral()
+            || !self.nose.is_neutral()
+            || !self.mouth.is_neutral()
+            || !self.chin.is_neutral()
+            || (self.manual.enabled && !self.manual.strokes.is_empty())
+    }
+}
+
 /// 统一编辑参数。前后端共用同一套字段名（camelCase），
 /// 滑杆、撤销快照、Rust 渲染管线、项目文件都直接使用这个结构。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -320,6 +549,9 @@ pub struct EditParams {
     pub skin_smooth: f32,
     /// 按稳定人脸 ID 保存的独立美肤参数。
     pub faces: Vec<FaceBeauty>,
+    /// 按稳定人脸 ID 保存的独立塑形参数（第四轮）。
+    #[serde(default)]
+    pub reshape: Vec<FaceReshape>,
     pub manual_mask: ManualMask,
     /// 手动点选的局部修复点（可撤销、可再编辑）。
     pub repair_points: Vec<RepairPoint>,
@@ -347,6 +579,7 @@ impl Default for EditParams {
             vignette: 0.0,
             skin_smooth: 0.0,
             faces: Vec::new(),
+            reshape: Vec::new(),
             manual_mask: ManualMask::default(),
             repair_points: Vec::new(),
             hsl: HslParams::default(),
@@ -404,6 +637,7 @@ impl EditParams {
             }
         }
         self.faces.sort_by_key(|face| face.face_id);
+        clamp_reshape(&mut self.reshape);
         self.manual_mask.feather = self.manual_mask.feather.clamp(0.0, 100.0);
         self.manual_mask.strength = self.manual_mask.strength.clamp(0.0, 100.0);
         for stroke in self.manual_mask.strokes.iter_mut() {
@@ -476,6 +710,10 @@ impl EditParams {
             && clamped.vignette == 0.0
             && clamped.skin_smooth == 0.0
             && clamped.faces.iter().all(|face| !face.enabled || face.beauty.is_neutral())
+            && clamped
+                .reshape
+                .iter()
+                .all(|face| !face.enabled || !face.is_active())
             && clamped.hsl.is_neutral()
             && clamped.curves.is_neutral()
             && clamped.lut.is_none()
@@ -485,6 +723,114 @@ impl EditParams {
     pub fn face_beauty(&self, face_id: u32) -> Option<&FaceBeauty> {
         self.faces.iter().find(|face| face.face_id == face_id)
     }
+
+    pub fn face_reshape(&self, face_id: u32) -> Option<&FaceReshape> {
+        self.reshape.iter().find(|face| face.face_id == face_id)
+    }
+
+    /// UUID 优先、face_id 回退的参数查找。
+    pub fn face_beauty_match(&self, uuid: &str, face_id: u32) -> Option<&FaceBeauty> {
+        if !uuid.is_empty() {
+            if let Some(entry) = self.faces.iter().find(|entry| entry.face_uuid == uuid) {
+                return Some(entry);
+            }
+        }
+        self.faces.iter().find(|entry| entry.face_id == face_id)
+    }
+
+    pub fn face_reshape_match(&self, uuid: &str, face_id: u32) -> Option<&FaceReshape> {
+        if !uuid.is_empty() {
+            if let Some(entry) = self.reshape.iter().find(|entry| entry.face_uuid == uuid) {
+                return Some(entry);
+            }
+        }
+        self.reshape.iter().find(|entry| entry.face_id == face_id)
+    }
+
+    /// 是否存在任何启用的塑形参数。
+    pub fn has_reshape(&self) -> bool {
+        self.reshape.iter().any(|face| face.enabled && face.is_active())
+    }
+}
+
+fn clamp_signed(values: &mut [&mut f32]) {
+    for value in values {
+        if value.is_finite() {
+            **value = (**value).clamp(-100.0, 100.0);
+        } else {
+            **value = 0.0;
+        }
+    }
+}
+
+/// 塑形参数与笔触的深夹紧。数值范围与前端一致，笔触数量和点数有上限，
+/// 防止异常项目文件把网格计算拖入不可控状态。
+fn clamp_reshape(entries: &mut Vec<FaceReshape>) {
+    entries.retain(|face| face.face_id < u32::MAX);
+    for face in entries.iter_mut() {
+        clamp_signed(&mut [
+            &mut face.face.slim,
+            &mut face.face.left,
+            &mut face.face.right,
+            &mut face.face.jaw,
+            &mut face.face.cheekbone,
+            &mut face.face.width,
+            &mut face.face.length,
+            &mut face.face.balance,
+        ]);
+        clamp_signed(&mut [
+            &mut face.eyes.size,
+            &mut face.eyes.left,
+            &mut face.eyes.right,
+            &mut face.eyes.width,
+            &mut face.eyes.height,
+            &mut face.eyes.distance,
+            &mut face.eyes.corner,
+        ]);
+        clamp_signed(&mut [
+            &mut face.nose.bridge,
+            &mut face.nose.alar,
+            &mut face.nose.tip,
+            &mut face.nose.height,
+            &mut face.nose.balance,
+        ]);
+        clamp_signed(&mut [
+            &mut face.mouth.width,
+            &mut face.mouth.upper,
+            &mut face.mouth.lower,
+            &mut face.mouth.corner,
+            &mut face.mouth.symmetry,
+            &mut face.mouth.size,
+        ]);
+        clamp_signed(&mut [
+            &mut face.chin.length,
+            &mut face.chin.width,
+            &mut face.chin.point,
+            &mut face.chin.jawline,
+        ]);
+
+        face.manual.strokes.retain(|stroke| !stroke.points.is_empty());
+        face.manual.strokes.truncate(400);
+        for stroke in face.manual.strokes.iter_mut() {
+            stroke.radius = stroke.radius.clamp(0.004, 0.25);
+            stroke.strength = stroke.strength.clamp(0.0, 100.0);
+            stroke.feather = stroke.feather.clamp(0.0, 100.0);
+            stroke.points.truncate(4000);
+            stroke
+                .points
+                .retain(|point| point.x.is_finite() && point.y.is_finite());
+            for point in stroke.points.iter_mut() {
+                point.x = point.x.clamp(0.0, 1.0);
+                point.y = point.y.clamp(0.0, 1.0);
+            }
+        }
+        face.manual.strokes.retain(|stroke| !stroke.points.is_empty());
+    }
+    entries.retain(|face| face.enabled || face.is_active());
+    entries.sort_by_key(|face| face.face_id);
+    entries.dedup_by(|a, b| {
+        (!a.face_uuid.is_empty() && a.face_uuid == b.face_uuid) || a.face_id == b.face_id
+    });
 }
 
 #[cfg(test)]
@@ -496,6 +842,7 @@ mod tests {
         let mut params = EditParams::default();
         params.faces.push(FaceBeauty {
             face_id: 3,
+            face_uuid: String::new(),
             enabled: true,
             beauty: BeautyParams {
                 skin_smooth: 150.0,

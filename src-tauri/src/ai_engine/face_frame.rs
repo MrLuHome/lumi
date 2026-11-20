@@ -17,6 +17,10 @@ pub struct NormPoint {
 #[serde(rename_all = "camelCase")]
 pub struct FaceFrame {
     pub id: u32,
+    /// 稳定人脸 UUID。跨检测、跨项目重开都使用它作为真正的持久身份，
+    /// `id` 只是 UUID 的稳定哈希，方便旧逻辑与前端索引。
+    #[serde(default)]
+    pub uuid: String,
     pub score: f32,
     pub x: f32,
     pub y: f32,
@@ -32,6 +36,7 @@ impl FaceFrame {
         let h = height.max(1) as f32;
         Self {
             id: face.id as u32,
+            uuid: String::new(),
             score: face.score,
             x: face.x / w,
             y: face.y / h,
@@ -50,6 +55,23 @@ impl FaceFrame {
 
     pub fn is_usable(&self) -> bool {
         self.landmarks.len() >= 5 && self.width > 0.01 && self.height > 0.01
+    }
+
+    /// 持久身份：UUID 优先，旧数据回退到稳定哈希。
+    pub fn stable_key(&self) -> String {
+        if self.uuid.is_empty() {
+            format!("legacy-{}", self.id)
+        } else {
+            self.uuid.clone()
+        }
+    }
+
+    /// 补齐 UUID 并从 UUID 重新推导整型 ID，保证重开项目后仍指向同一张脸。
+    pub fn ensure_identity(&mut self) {
+        if self.uuid.is_empty() {
+            self.uuid = new_face_uuid();
+        }
+        self.id = id_from_uuid(&self.uuid);
     }
 
     pub fn iou(&self, other: &FaceFrame) -> f32 {
@@ -78,17 +100,49 @@ fn clamp_unit(value: f32) -> f32 {
     }
 }
 
+/// 生成 UUID v4 形式的人脸 ID。不依赖额外 crate，时间 + 进程内计数器足够
+/// 避免同一项目内碰撞；它不是可跨项目识别身份的 embedding。
+pub fn new_face_uuid() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let a = (nanos >> 32) as u32;
+    let b = (nanos >> 16) as u16;
+    let c = 0x4000 | ((nanos as u16) & 0x0fff);
+    let d = 0x8000 | ((count as u16) & 0x3fff);
+    let e = (nanos.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ count) & 0xffff_ffff_ffff;
+    format!("{a:08x}-{b:04x}-{c:04x}-{d:04x}-{e:012x}")
+}
+
+/// 把 UUID 映射为稳定的 32 位正整数 ID（FNV-1a），检测顺序变化无关。
+pub fn id_from_uuid(uuid: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in uuid.as_bytes() {
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    let id = hash & 0x7fff_ffff;
+    if id == 0 {
+        1
+    } else {
+        id
+    }
+}
+
 /// 人脸 ID 跟踪器：优先按 IoU 匹配上一轮结果，匹配不上才分配新 ID。
 /// 检测顺序变化、阈值抖动都不会让已有参数错配到另一张脸。
 #[derive(Debug, Default)]
-pub struct FaceTracker {
-    next_id: u32,
-}
+pub struct FaceTracker;
 
 impl FaceTracker {
     pub fn assign(&mut self, previous: &[FaceFrame], mut current: Vec<FaceFrame>) -> Vec<FaceFrame> {
         let mut used = vec![false; previous.len()];
-        let mut assigned: Vec<Option<u32>> = vec![None; current.len()];
+        let mut assigned: Vec<Option<usize>> = vec![None; current.len()];
 
         // 贪心匹配：重叠度最高的先配对。
         let mut pairs: Vec<(usize, usize, f32)> = Vec::new();
@@ -106,23 +160,31 @@ impl FaceTracker {
                 continue;
             }
             used[previous_index] = true;
-            assigned[current_index] = Some(previous[previous_index].id);
+            assigned[current_index] = Some(previous_index);
         }
 
         for (index, face) in current.iter_mut().enumerate() {
-            let id = match assigned[index] {
-                Some(id) => id,
-                None => {
-                    let id = self.next_id;
-                    self.next_id = self.next_id.saturating_add(1);
-                    id
+            match assigned[index] {
+                Some(previous_index) => {
+                    // UUID 跟着同一张脸走，整型 ID 由 UUID 重新推导。
+                    face.uuid = if previous[previous_index].uuid.is_empty() {
+                        new_face_uuid()
+                    } else {
+                        previous[previous_index].uuid.clone()
+                    };
                 }
-            };
-            face.id = id;
+                None => {
+                    if face.uuid.is_empty() {
+                        face.uuid = new_face_uuid();
+                    }
+                }
+            }
+            face.id = id_from_uuid(&face.uuid);
         }
         current.sort_by_key(|face| face.id);
         current
     }
+
 }
 
 /// 单张人脸的像素几何，皮肤蒙版与局部操作都基于这个坐标系。
@@ -212,6 +274,7 @@ mod tests {
     fn face(id: usize, x: f32) -> DetectedFace {
         DetectedFace {
             id,
+            uuid: String::new(),
             score: 0.9,
             x,
             y: 100.0,
@@ -257,6 +320,7 @@ mod tests {
     fn geometry_uses_eye_distance_as_unit() {
         let detected = DetectedFace {
             id: 0,
+            uuid: String::new(),
             score: 0.9,
             x: 100.0,
             y: 100.0,

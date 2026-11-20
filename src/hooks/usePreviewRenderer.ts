@@ -79,7 +79,10 @@ export function usePreviewRenderer(): void {
         if (current.activeId !== photo.id) return;
         const liveParams = current.params[photo.id];
         if (!liveParams || paramsKey(liveParams) !== key) return;
-        current.markRendered(photo.id, result.previewUrl, cacheKey, result.elapsedMs);
+        current.markRendered(photo.id, result.previewUrl, cacheKey, result.elapsedMs, {
+          warnings: result.warnings,
+          reshape: result.reshape,
+        });
       } catch (error) {
         if (disposed || requestId !== activeRequest.current) return;
         const current = useEditorStore.getState();

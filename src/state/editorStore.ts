@@ -6,12 +6,16 @@ import type {
   EditParams,
   ExportSettings,
   FaceDetectionResult,
+  FaceMatchEntry,
   FaceModelStatus,
   FaceProgress,
+  FaceReshapeReport,
+  FaceRestoreResult,
   MaskPreview,
   MaskStroke,
   PhotoAsset,
   ProjectDoc,
+  ProjectFaceRecord,
   RenderProgress,
   SkinModelStatus,
 } from "../types";
@@ -26,14 +30,20 @@ import {
   type CurvePoint,
   type HslKey,
   type ManualMask,
+  type FaceShapeKey,
+  type WarpMode,
+  type WarpStroke,
   clampParams,
   cloneParams,
   defaultBeauty,
   defaultFaceBeauty,
+  defaultFaceReshape,
   findFaceBeauty,
+  findFaceReshape,
   isNeutral,
   paramsEqual,
   withFaceBeauty,
+  withFaceReshape,
 } from "./params";
 import {
   createHistory,
@@ -82,6 +92,9 @@ export interface EditorState {
   clipboard: EditParams | null;
   exportSettings: ExportSettings;
   projectPath: string | null;
+  /** 项目载入时保存的原始人脸记录与源图哈希，用于重开匹配。 */
+  projectFaceRecords: Record<string, ProjectFaceRecord[]>;
+  projectSourceHashes: Record<string, string>;
 
   renderedPreviews: Record<string, RenderedPreview>;
   compareMode: CompareMode;
@@ -106,6 +119,20 @@ export interface EditorState {
   activeFace: number;
   showFaceOverlay: boolean;
   modelStatus: FaceModelStatus | null;
+  /** 项目重开时需要用户确认的低置信人脸匹配。 */
+  pendingFaceMatches: Record<string, FaceMatchEntry[]>;
+  /** 本次检测中消失、但项目里仍保留的人脸记录。 */
+  missingFaceRecords: Record<string, ProjectFaceRecord[]>;
+
+  /** 手动变形工具；off 时画布恢复普通平移/画笔行为。 */
+  warpTool: WarpMode | "off";
+  warpRadius: number;
+  warpStrength: number;
+  warpFeather: number;
+  showMesh: boolean;
+  /** 当前渲染的塑形质量报告与警告。 */
+  reshapeReports: FaceReshapeReport[];
+  renderWarnings: string[];
 
   beautyAnalysis: Record<string, BeautyAnalysis>;
   beautyStatus: BeautyStatus;
@@ -159,7 +186,13 @@ export interface EditorState {
   fitToWindow: () => void;
   actualPixels: () => void;
 
-  markRendered: (photoId: string, url: string, key: string, elapsedMs: number) => void;
+  markRendered: (
+    photoId: string,
+    url: string,
+    key: string,
+    elapsedMs: number,
+    extra?: { warnings?: string[]; reshape?: FaceReshapeReport[] },
+  ) => void;
   setRenderStatus: (status: RenderStatus) => void;
   setRenderError: (message: string) => void;
   setRenderProgress: (progress: RenderProgress | null) => void;
@@ -171,6 +204,23 @@ export interface EditorState {
   setActiveFace: (index: number) => void;
   setShowFaceOverlay: (value: boolean) => void;
   setModelStatus: (status: FaceModelStatus) => void;
+  /** 项目重开后应用后端恢复结果：只按 UUID 恢复高置信人脸参数。 */
+  applyFaceRestore: (photoId: string, result: FaceRestoreResult) => void;
+  /** 人工确认后，用后端返回的新人脸列表重新绑定 UUID。 */
+  applyConfirmedFaces: (photoId: string, faces: FaceDetectionResult["faces"]) => void;
+
+  setWarpTool: (tool: WarpMode | "off") => void;
+  setWarpRadius: (radius: number) => void;
+  setWarpStrength: (value: number) => void;
+  setWarpFeather: (value: number) => void;
+  setShowMesh: (value: boolean) => void;
+  updateFaceShape: (faceId: number, key: FaceShapeKey, value: number) => void;
+  appendWarpStroke: (faceId: number, stroke: WarpStroke) => void;
+  undoWarpStroke: (faceId: number) => void;
+  clearWarpStrokes: (faceId: number) => void;
+  resetFaceReshape: (faceId: number) => void;
+  resetAllReshape: () => void;
+  copyFaceReshapeToOthers: (faceId: number) => void;
 
   setBeautyStatus: (status: BeautyStatus) => void;
   setBeautyProgress: (progress: BeautyProgress | null) => void;
@@ -284,6 +334,8 @@ export function createEditorStore() {
       clipboard: null,
       exportSettings: DEFAULT_EXPORT,
       projectPath: null,
+      projectFaceRecords: {},
+      projectSourceHashes: {},
 
       renderedPreviews: {},
       compareMode: "off",
@@ -308,6 +360,16 @@ export function createEditorStore() {
       activeFace: 0,
       showFaceOverlay: true,
       modelStatus: null,
+      pendingFaceMatches: {},
+      missingFaceRecords: {},
+
+      warpTool: "off",
+      warpRadius: 0.06,
+      warpStrength: 60,
+      warpFeather: 50,
+      showMesh: false,
+      reshapeReports: [],
+      renderWarnings: [],
 
       beautyAnalysis: {},
       beautyStatus: "idle",
@@ -422,6 +484,8 @@ export function createEditorStore() {
         const byPath = new Map(items.map((item) => [item.path, item]));
         const params: Record<string, EditParams> = {};
         const history: Record<string, HistoryStack<EditParams>> = {};
+        const projectFaceRecords: Record<string, ProjectFaceRecord[]> = {};
+        const projectSourceHashes: Record<string, string> = {};
         for (const item of items) {
           params[item.id] = DEFAULT_PARAMS;
           history[item.id] = createHistory<EditParams>();
@@ -430,6 +494,8 @@ export function createEditorStore() {
           const item = byPath.get(entry.path);
           if (!item) continue;
           params[item.id] = clampParams(entry.params);
+          projectFaceRecords[item.id] = entry.faces ?? [];
+          projectSourceHashes[item.id] = entry.sourceHash ?? "";
         }
         const active = items[clamp(project.activeIndex ?? 0, 0, items.length - 1)] ?? items[0]!;
         set({
@@ -438,10 +504,14 @@ export function createEditorStore() {
           history,
           activeId: active.id,
           exportSettings: project.export ?? DEFAULT_EXPORT,
+          projectFaceRecords,
+          projectSourceHashes,
           renderedPreviews: {},
           faces: {},
           faceStatus: "idle",
           faceError: null,
+          pendingFaceMatches: {},
+          missingFaceRecords: {},
           renderError: null,
           autoFit: true,
           pan: { x: 0, y: 0 },
@@ -620,13 +690,15 @@ export function createEditorStore() {
         get().setZoom(1);
       },
 
-      markRendered: (photoId, url, key, elapsedMs) =>
+      markRendered: (photoId, url, key, elapsedMs, extra) =>
         set((state) => ({
           renderedPreviews: { ...state.renderedPreviews, [photoId]: { url, key, elapsedMs } },
           renderStatus: "ready",
           renderElapsedMs: elapsedMs,
           renderError: null,
           renderProgress: null,
+          renderWarnings: extra?.warnings ?? [],
+          reshapeReports: extra?.reshape ?? [],
         })),
 
       setRenderStatus: (status) => set({ renderStatus: status }),
@@ -637,14 +709,28 @@ export function createEditorStore() {
       setFaces: (photoId, result) => {
         const state = get();
         const current = state.params[photoId] ?? DEFAULT_PARAMS;
-        const existing = new Map(current.faces.map((face) => [face.faceId, face]));
-        // 检测结果与参数按稳定 ID 对齐：保留已有参数，新增人脸补默认项。
-        const faces = result.faces
-          .map((face) => existing.get(face.id) ?? defaultFaceBeauty(face.id))
+        // 检测结果与参数按稳定 UUID 对齐；UUID 不可用时回退旧 faceId。
+        const beauty = result.faces
+          .map((face) => {
+            const matched =
+              current.faces.find((entry) => entry.faceUuid && entry.faceUuid === face.uuid) ??
+              current.faces.find((entry) => entry.faceId === face.id) ??
+              defaultFaceBeauty(face.id, face.uuid);
+            return { ...matched, faceId: face.id, faceUuid: face.uuid || matched.faceUuid };
+          })
+          .sort((a, b) => a.faceId - b.faceId);
+        const reshape = result.faces
+          .map((face) => {
+            const matched =
+              current.reshape.find((entry) => entry.faceUuid && entry.faceUuid === face.uuid) ??
+              current.reshape.find((entry) => entry.faceId === face.id) ??
+              defaultFaceReshape(face.id, face.uuid);
+            return { ...matched, faceId: face.id, faceUuid: face.uuid || matched.faceUuid };
+          })
           .sort((a, b) => a.faceId - b.faceId);
         set({
           faces: { ...state.faces, [photoId]: result },
-          params: { ...state.params, [photoId]: { ...current, faces } },
+          params: { ...state.params, [photoId]: { ...current, faces: beauty, reshape } },
           faceStatus: "ready",
           faceError: null,
           faceProgress: null,
@@ -654,6 +740,188 @@ export function createEditorStore() {
           maskError: null,
           brushMode: "off",
         });
+      },
+
+      applyFaceRestore: (photoId, result) => {
+        const state = get();
+        const current = state.params[photoId] ?? DEFAULT_PARAMS;
+        const restored = new Map(result.restored.map((entry) => [entry.faceId, entry.faceUuid]));
+        const beauty = result.faces
+          .map((face) => {
+            const uuid = restored.get(face.id);
+            const matched = uuid
+              ? current.faces.find((entry) => entry.faceUuid === uuid)
+              : undefined;
+            return {
+              ...(matched ?? defaultFaceBeauty(face.id, face.uuid)),
+              faceId: face.id,
+              faceUuid: uuid ?? face.uuid,
+            };
+          })
+          .sort((a, b) => a.faceId - b.faceId);
+        const reshape = result.faces
+          .map((face) => {
+            const uuid = restored.get(face.id);
+            const matched = uuid
+              ? current.reshape.find((entry) => entry.faceUuid === uuid)
+              : undefined;
+            return {
+              ...(matched ?? defaultFaceReshape(face.id, face.uuid)),
+              faceId: face.id,
+              faceUuid: uuid ?? face.uuid,
+            };
+          })
+          .sort((a, b) => a.faceId - b.faceId);
+        const previous = state.faces[photoId];
+        if (!previous) return;
+        set({
+          faces: {
+            ...state.faces,
+            [photoId]: { ...previous, faces: result.faces },
+          },
+          params: { ...state.params, [photoId]: { ...current, faces: beauty, reshape } },
+          pendingFaceMatches: { ...state.pendingFaceMatches, [photoId]: result.pending },
+          missingFaceRecords: { ...state.missingFaceRecords, [photoId]: result.missing },
+          faceStatus: "ready",
+          faceProgress: null,
+          faceError: null,
+          activeFace: 0,
+        });
+      },
+
+      applyConfirmedFaces: (photoId, faces) => {
+        const state = get();
+        const result = state.faces[photoId];
+        if (!result) return;
+        const current = state.params[photoId] ?? DEFAULT_PARAMS;
+        const byUuid = new Map(faces.map((face) => [face.uuid, face.id]));
+        set({
+          faces: { ...state.faces, [photoId]: { ...result, faces } },
+          params: {
+            ...state.params,
+            [photoId]: {
+              ...current,
+              faces: current.faces.map((entry) => ({
+                ...entry,
+                faceId: byUuid.get(entry.faceUuid) ?? entry.faceId,
+              })),
+              reshape: current.reshape.map((entry) => ({
+                ...entry,
+                faceId: byUuid.get(entry.faceUuid) ?? entry.faceId,
+              })),
+            },
+          },
+          pendingFaceMatches: { ...state.pendingFaceMatches, [photoId]: [] },
+        });
+      },
+
+      setWarpTool: (tool) =>
+        set({
+          warpTool: tool,
+          brushMode: tool === "off" ? get().brushMode : "off",
+        }),
+      setWarpRadius: (radius) => set({ warpRadius: clamp(radius, 0.004, 0.25) }),
+      setWarpStrength: (value) => set({ warpStrength: clamp(value, 0, 100) }),
+      setWarpFeather: (value) => set({ warpFeather: clamp(value, 0, 100) }),
+      setShowMesh: (value) => set({ showMesh: value }),
+
+      updateFaceShape: (faceId, key, value) => {
+        const state = get();
+        const face = selectActiveFace(state);
+        const uuid = face?.uuid ?? "";
+        apply(
+          (current) =>
+            withFaceReshape(current, faceId, uuid, (entry) => ({
+              ...entry,
+              face: { ...entry.face, [key]: value },
+            })),
+          `面部塑形 · ${key}`,
+          `reshape:${faceId}:${key}`,
+        );
+      },
+
+      appendWarpStroke: (faceId, stroke) => {
+        const state = get();
+        const face = selectActiveFace(state);
+        const uuid = face?.uuid ?? "";
+        apply(
+          (current) =>
+            withFaceReshape(current, faceId, uuid, (entry) => ({
+              ...entry,
+              manual: {
+                enabled: true,
+                strokes: [...entry.manual.strokes, stroke].slice(-400),
+              },
+            })),
+          "手动塑形笔触",
+        );
+      },
+
+      undoWarpStroke: (faceId) =>
+        apply(
+          (current) =>
+            withFaceReshape(current, faceId, "", (entry) => ({
+              ...entry,
+              manual: { ...entry.manual, strokes: entry.manual.strokes.slice(0, -1) },
+            })),
+          "撤销塑形笔触",
+        ),
+
+      clearWarpStrokes: (faceId) =>
+        apply(
+          (current) =>
+            withFaceReshape(current, faceId, "", (entry) => ({
+              ...entry,
+              manual: { ...entry.manual, strokes: [] },
+            })),
+          "清除塑形笔触",
+        ),
+
+      resetFaceReshape: (faceId) =>
+        apply(
+          (current) => ({
+            ...current,
+            reshape: current.reshape.filter((entry) => entry.faceId !== faceId),
+          }),
+          "重置该人脸塑形",
+        ),
+
+      resetAllReshape: () =>
+        apply((current) => ({ ...current, reshape: [] }), "重置全部塑形"),
+
+      copyFaceReshapeToOthers: (faceId) => {
+        const state = get();
+        const params = selectActiveParams(state);
+        const source = findFaceReshape(params, faceId);
+        if (!source) return;
+        const result = selectActiveFaces(state);
+        const targets = (result?.faces ?? []).filter((face) => face.id !== faceId);
+        if (targets.length === 0) {
+          get().notify("info", "当前照片没有其他可复制的人脸");
+          return;
+        }
+        apply(
+          (current) => ({
+            ...current,
+            reshape: current.reshape.map((entry) => {
+              const target = targets.find((face) => face.id === entry.faceId);
+              if (!target) return entry;
+              return {
+                ...entry,
+                face: { ...source.face },
+                manual: {
+                  enabled: source.manual.enabled,
+                  strokes: source.manual.strokes.map((stroke) => ({
+                    ...stroke,
+                    points: stroke.points.map((point) => ({ ...point })),
+                  })),
+                },
+              };
+            }),
+          }),
+          "复制人脸塑形",
+        );
+        get().notify("success", "已把当前人物塑形参数复制到其他人");
       },
       setFaceStatus: (status) => set({ faceStatus: status }),
       setFaceProgress: (progress) => set({ faceProgress: progress }),
@@ -676,44 +944,67 @@ export function createEditorStore() {
         })),
       setSkinModel: (status) => set({ skinModel: status }),
 
-      updateFaceBeauty: (faceId, key, value) =>
+      updateFaceBeauty: (faceId, key, value) => {
+        const uuid = selectActiveFace(get())?.uuid ?? "";
         apply(
           (current) =>
-            withFaceBeauty(current, faceId, (face) => ({
-              ...face,
-              beauty: { ...face.beauty, [key]: value },
-            })),
+            withFaceBeauty(
+              current,
+              faceId,
+              (face) => ({
+                ...face,
+                beauty: { ...face.beauty, [key]: value },
+              }),
+              uuid,
+            ),
           BEAUTY_LABELS[key],
           `beauty:${faceId}:${key}`,
-        ),
+        );
+      },
 
-      setFaceEnabled: (faceId, enabled) =>
+      setFaceEnabled: (faceId, enabled) => {
+        const uuid = selectActiveFace(get())?.uuid ?? "";
         apply(
           (current) =>
-            withFaceBeauty(current, faceId, (face) => ({ ...face, enabled })),
+            withFaceBeauty(current, faceId, (face) => ({ ...face, enabled }), uuid),
           enabled ? "启用该人脸" : "停用该人脸",
-        ),
+        );
+      },
 
-      resetFaceBeauty: (faceId) =>
+      resetFaceBeauty: (faceId) => {
+        const uuid = selectActiveFace(get())?.uuid ?? "";
         apply(
           (current) =>
-            withFaceBeauty(current, faceId, (face) => ({
-              ...face,
-              beauty: defaultBeauty(),
-            })),
+            withFaceBeauty(
+              current,
+              faceId,
+              (face) => ({
+                ...face,
+                beauty: defaultBeauty(),
+              }),
+              uuid,
+            ),
           "重置该人脸",
-        ),
+        );
+      },
 
-      applyBeautySuggestion: (faceId, beauty, label) =>
+      applyBeautySuggestion: (faceId, beauty, label) => {
+        const uuid = selectActiveFace(get())?.uuid ?? "";
         apply(
           (current) =>
-            withFaceBeauty(current, faceId, (face) => ({
-              ...face,
-              enabled: true,
-              beauty: { ...beauty },
-            })),
+            withFaceBeauty(
+              current,
+              faceId,
+              (face) => ({
+                ...face,
+                enabled: true,
+                beauty: { ...beauty },
+              }),
+              uuid,
+            ),
           label ?? "应用 AI 建议",
-        ),
+        );
+      },
 
       copyFaceParamsToOthers: (faceId) => {
         const state = get();

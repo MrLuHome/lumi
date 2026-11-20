@@ -2,12 +2,23 @@ use crate::ai_engine::face_frame::{FaceFrame, FaceGeometry};
 use crate::ai_engine::retouch::{apply_face_retouch, FaceRetouchReport};
 use crate::ai_engine::skin_segmentation::{apply_ownership, build_skin_mask, SkinMask};
 use crate::error::AppResult;
+use crate::face_reshape::{self, FaceReshapeReport};
 use crate::image_engine::buffer::Image16;
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::operations::{detail, grade};
 use crate::image_engine::params::{BeautyParams, EditParams};
+use serde::Serialize;
 
 pub type ProgressFn<'a> = &'a mut dyn FnMut(f32, &'static str);
+
+/// 管线副产物：塑形质量报告与用户可见警告。预览/导出都使用它，
+/// 前端据此显示“已自动降强度”等提示，不再静默输出异常结果。
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineReport {
+    pub reshape: Vec<FaceReshapeReport>,
+    pub warnings: Vec<String>,
+}
 
 /// 完整渲染管线：
 /// 皮肤蒙版 → 瑕疵 → 自然磨皮 → 肤色 → 眼周 → 白平衡/光影/HSL/曲线/LUT
@@ -31,10 +42,22 @@ pub fn render_with_progress(
     cancel: &CancelToken,
     progress: ProgressFn<'_>,
 ) -> AppResult<Image16> {
+    render_with_report(image, params, faces, cancel, progress).map(|(image, _)| image)
+}
+
+/// 与 `render_with_progress` 相同，但额外返回塑形质量报告。
+pub fn render_with_report(
+    image: &Image16,
+    params: &EditParams,
+    faces: &[FaceFrame],
+    cancel: &CancelToken,
+    progress: ProgressFn<'_>,
+) -> AppResult<(Image16, PipelineReport)> {
     let params = params.clone().clamped();
+    let mut report = PipelineReport::default();
     if params.is_neutral() {
         progress(1.0, "复用原图");
-        return Ok(image.clone());
+        return Ok((image.clone(), report));
     }
     cancel.check()?;
 
@@ -46,9 +69,40 @@ pub fn render_with_progress(
         if faces.is_empty() {
             // 不静默退化成全图磨皮：明确提示需要先检测人脸。
             progress(0.06, "未检测到人脸，已跳过美肤");
+            report.warnings.push("未检测到人脸，已跳过美肤".into());
         } else {
             progress(0.06, "皮肤分割");
             apply_beauty(&mut output, &params, faces, cancel, &mut *progress)?;
+        }
+    }
+
+    if params.has_reshape() {
+        if faces.is_empty() {
+            progress(0.38, "未检测到人脸，已跳过塑形");
+            report.warnings.push("面部塑形需要先检测人脸".into());
+        } else {
+            progress(0.38, "面部塑形");
+            let reports = face_reshape::apply_face_reshape(
+                &mut output,
+                faces,
+                &params.reshape,
+                cancel,
+            )?;
+            for entry in &reports {
+                if entry.degraded {
+                    report.warnings.push(format!(
+                        "人脸 #{} 的塑形已自动降强度（{:.0}%），请检查参数",
+                        entry.face_id,
+                        entry.applied_scale * 100.0
+                    ));
+                }
+                for note in &entry.notes {
+                    if note.contains("置信度") || note.contains("安全范围") || note.contains("未改变") {
+                        report.warnings.push(format!("人脸 #{}：{}", entry.face_id, note));
+                    }
+                }
+            }
+            report.reshape = reports;
         }
     }
 
@@ -78,7 +132,7 @@ pub fn render_with_progress(
     }
 
     progress(0.96, "编码");
-    Ok(output)
+    Ok((output, report))
 }
 
 fn apply_beauty(
@@ -100,7 +154,7 @@ fn apply_beauty(
             continue;
         }
         let beauty = params
-            .face_beauty(face.id)
+            .face_beauty_match(&face.uuid, face.id)
             .filter(|entry| entry.enabled)
             .map(|entry| entry.beauty.clone())
             .unwrap_or_default();
@@ -224,6 +278,7 @@ mod tests {
         let params = EditParams {
             faces: vec![FaceBeauty {
                 face_id: 0,
+                face_uuid: String::new(),
                 enabled: true,
                 beauty: BeautyParams {
                     skin_smooth: 100.0,

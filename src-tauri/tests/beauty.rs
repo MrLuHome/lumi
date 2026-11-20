@@ -39,6 +39,7 @@ fn face_frame(id: u32, cx: f32, cy: f32, d: f32, width: u32, height: u32) -> Fac
     };
     FaceFrame {
         id,
+        uuid: String::new(),
         score: 0.95,
         x: (cx - 1.6 * d) / w,
         y: (cy - 1.4 * d) / h,
@@ -118,6 +119,7 @@ fn beauty_params(beauty: BeautyParams) -> EditParams {
     EditParams {
         faces: vec![FaceBeauty {
             face_id: 0,
+            face_uuid: String::new(),
             enabled: true,
             beauty,
         }],
@@ -433,11 +435,13 @@ fn multi_face_parameters_do_not_leak_across_faces() {
         faces: vec![
             FaceBeauty {
                 face_id: 0,
+                face_uuid: String::new(),
                 enabled: true,
                 beauty: BeautyParams::default(),
             },
             FaceBeauty {
                 face_id: 1,
+                face_uuid: String::new(),
                 enabled: true,
                 beauty: BeautyParams {
                     skin_smooth: 90.0,
@@ -550,6 +554,7 @@ fn cancelled_beauty_render_stops_with_error() {
     let params = EditParams {
         faces: vec![FaceBeauty {
             face_id: 0,
+            face_uuid: String::new(),
             enabled: true,
             beauty: BeautyParams {
                 skin_smooth: 50.0,
@@ -610,6 +615,7 @@ fn full_resolution_beauty_output_keeps_dimensions_and_source() {
     let params = EditParams {
         faces: vec![FaceBeauty {
             face_id: 0,
+            face_uuid: String::new(),
             enabled: true,
             beauty: BeautyParams {
                 skin_smooth: 35.0,
@@ -660,6 +666,7 @@ fn benchmark_beauty() {
     let params = EditParams {
         faces: vec![FaceBeauty {
             face_id: 0,
+            face_uuid: String::new(),
             enabled: true,
             beauty,
         }],

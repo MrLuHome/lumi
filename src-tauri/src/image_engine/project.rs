@@ -3,10 +3,13 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
+use crate::face_reshape::identity::ProjectFace;
 use crate::image_engine::export::ExportSettings;
 use crate::image_engine::params::EditParams;
 
-pub const PROJECT_VERSION: u32 = 1;
+/// 版本 2：新增源图哈希与持久化人脸记录（UUID / 检测框 / 关键点）。
+/// 版本 1 项目仍然可以打开，缺失字段使用默认值。
+pub const PROJECT_VERSION: u32 = 2;
 pub const PROJECT_EXTENSION: &str = "lumi";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -73,6 +76,12 @@ pub struct ProjectPhoto {
     pub masks: Vec<MaskLayer>,
     #[serde(default)]
     pub export: Option<ExportSettings>,
+    /// 原图文件 SHA-256。重开时若变化，不自动套用任何人脸参数。
+    #[serde(default)]
+    pub source_hash: String,
+    /// 持久化人脸记录：UUID、检测框、初始关键点、置信度、模型版本。
+    #[serde(default)]
+    pub faces: Vec<ProjectFace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -180,6 +189,8 @@ mod tests {
                     }],
                 }],
                 export: Some(ExportSettings::default()),
+                source_hash: "abc123".into(),
+                faces: Vec::new(),
             }],
             0,
             ExportSettings::default(),
@@ -190,6 +201,48 @@ mod tests {
         assert_eq!(loaded.photos[0].params.exposure, 24.0);
         assert_eq!(loaded.photos[0].masks.len(), 1);
         assert_eq!(loaded.photos[0].masks[0].kind, MaskKind::Radial);
+        assert_eq!(loaded.photos[0].source_hash, "abc123");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn project_roundtrip_keeps_face_identity_records() {
+        use crate::ai_engine::face_frame::NormPoint;
+        use crate::face_reshape::identity::FaceBox;
+
+        let dir = std::env::temp_dir().join("lumi-project-faces");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("group.lumi");
+        let face = ProjectFace {
+            uuid: "11111111-2222-4333-8444-555555555555".into(),
+            bbox: FaceBox {
+                x: 0.1,
+                y: 0.2,
+                width: 0.2,
+                height: 0.24,
+            },
+            landmarks: vec![NormPoint { x: 0.15, y: 0.3 }; 5],
+            score: 0.94,
+            model: "yunet-5".into(),
+            confidence: 0.94,
+            mask_ref: None,
+        };
+        let project = ProjectDoc::new(
+            vec![ProjectPhoto {
+                path: "/photos/group.jpg".into(),
+                params: EditParams::default(),
+                masks: Vec::new(),
+                export: None,
+                source_hash: "deadbeef".into(),
+                faces: vec![face.clone()],
+            }],
+            0,
+            ExportSettings::default(),
+        );
+        save(&path, &project).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.version, PROJECT_VERSION);
+        assert_eq!(loaded.photos[0].faces, vec![face]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

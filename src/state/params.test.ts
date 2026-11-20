@@ -6,17 +6,20 @@ import {
   activeParamCount,
   clampParams,
   defaultBeauty,
+  defaultFaceReshape,
+  faceReshapeIsActive,
   findFaceBeauty,
   formatParamValue,
   isNeutral,
   paramsEqual,
   paramsKey,
   withFaceBeauty,
+  withFaceReshape,
 } from "./params";
 
 describe("参数定义", () => {
   const numericKeys = Object.keys(DEFAULT_PARAMS).filter(
-    (key) => !["hsl", "curves", "lut", "faces", "manualMask", "repairPoints", "skinSmooth"].includes(key),
+    (key) => !["hsl", "curves", "lut", "faces", "reshape", "manualMask", "repairPoints", "skinSmooth"].includes(key),
   );
 
   it("每个数值参数在参数组中恰好出现一次", () => {
@@ -126,8 +129,8 @@ describe("多人脸美肤参数", () => {
     const clamped = clampParams({
       ...DEFAULT_PARAMS,
       faces: [
-        { faceId: 2, enabled: true, beauty: { ...defaultBeauty(), skinSmooth: 500, whitening: -20 } },
-        { faceId: 1, enabled: false, beauty: defaultBeauty() },
+        { faceId: 2, faceUuid: "", enabled: true, beauty: { ...defaultBeauty(), skinSmooth: 500, whitening: -20 } },
+        { faceId: 1, faceUuid: "", enabled: false, beauty: defaultBeauty() },
       ],
     });
     expect(clamped.faces.map((face) => face.faceId)).toEqual([1, 2]);
@@ -168,5 +171,71 @@ describe("多人脸美肤参数", () => {
     expect(clamped.manualMask.strokes[0]?.radius).toBe(0.25);
     expect(clamped.manualMask.strokes[0]?.points[0]).toEqual({ x: 0, y: 1 });
     expect(clamped.repairPoints[0]).toEqual({ x: 0, y: 1, radius: 0.25 });
+  });
+});
+
+describe("面部塑形参数", () => {
+  it("默认不产生任何变形", () => {
+    const entry = defaultFaceReshape(2, "uuid-2");
+    expect(faceReshapeIsActive(entry)).toBe(false);
+    expect(entry.faceUuid).toBe("uuid-2");
+    expect(isNeutral(DEFAULT_PARAMS)).toBe(true);
+    expect(activeParamCount(DEFAULT_PARAMS)).toBe(0);
+  });
+
+  it("参数、笔触与坐标都被夹紧", () => {
+    const clamped = clampParams({
+      ...DEFAULT_PARAMS,
+      reshape: [
+        {
+          faceId: 3,
+          faceUuid: "uuid-3",
+          enabled: true,
+          face: { slim: 500, left: -400, right: 20, jaw: 0, cheekbone: 0, width: 0, length: 0, balance: 0 },
+          eyes: { size: 999, left: 0, right: 0, width: 0, height: 0, distance: 0, corner: 0 },
+          nose: { bridge: 0, alar: 0, tip: 0, height: 0, balance: 0 },
+          mouth: { width: 0, upper: 0, lower: 0, corner: 0, symmetry: 0, size: 0 },
+          chin: { length: 0, width: 0, point: 0, jawline: 0 },
+          manual: {
+            enabled: true,
+            strokes: [
+              {
+                mode: "push",
+                radius: 2,
+                strength: 500,
+                feather: -20,
+                points: [
+                  { x: -1, y: 2 },
+                  { x: 0.4, y: 0.5 },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const entry = clamped.reshape[0]!;
+    expect(entry.face.slim).toBe(100);
+    expect(entry.face.left).toBe(-100);
+    expect(entry.eyes.size).toBe(100);
+    expect(entry.manual.strokes[0]?.radius).toBe(0.25);
+    expect(entry.manual.strokes[0]?.strength).toBe(100);
+    expect(entry.manual.strokes[0]?.feather).toBe(0);
+    expect(entry.manual.strokes[0]?.points[0]).toEqual({ x: 0, y: 1 });
+    expect(activeParamCount(clamped)).toBe(1);
+  });
+
+  it("复合更新只改目标人脸并保留其余人脸", () => {
+    const first = defaultFaceReshape(1, "uuid-a");
+    const second = defaultFaceReshape(2, "uuid-b");
+    let params = { ...DEFAULT_PARAMS, reshape: [first, second] };
+    params = withFaceReshape(params, 2, "uuid-b", (entry) => ({
+      ...entry,
+      face: { ...entry.face, slim: 40 },
+    }));
+    expect(findFaceBeauty(params, 2)).toBeUndefined();
+    expect(params.reshape.find((face) => face.faceId === 1)?.face.slim).toBe(0);
+    expect(params.reshape.find((face) => face.faceId === 2)?.face.slim).toBe(40);
+    expect(params.reshape.find((face) => face.faceId === 2)?.faceUuid).toBe("uuid-b");
   });
 });

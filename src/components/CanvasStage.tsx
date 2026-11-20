@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ImagePlus } from "lucide-react";
-import type { PhotoAsset } from "../types";
+import type { MeshPreview, PhotoAsset } from "../types";
+import { reshapeMesh } from "../lib/backend";
 import { selectActiveFaces, selectActiveParams, useEditorStore } from "../state/editorStore";
 import { isDesktopRuntime } from "../lib/platform";
 
@@ -36,6 +37,11 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   const maskPreview = useEditorStore((state) => state.maskPreview);
   const brushMode = useEditorStore((state) => state.brushMode);
   const brushRadius = useEditorStore((state) => state.brushRadius);
+  const warpTool = useEditorStore((state) => state.warpTool);
+  const warpRadius = useEditorStore((state) => state.warpRadius);
+  const warpStrength = useEditorStore((state) => state.warpStrength);
+  const warpFeather = useEditorStore((state) => state.warpFeather);
+  const showMesh = useEditorStore((state) => state.showMesh);
   const params = useEditorStore(selectActiveParams);
   const repairPoints = params.repairPoints;
 
@@ -43,6 +49,7 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   const [panning, setPanning] = useState(false);
   const [draft, setDraft] = useState<DraftStroke | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const [mesh, setMesh] = useState<MeshPreview | null>(null);
   const panRef = useRef<{
     pointerId: number;
     startX: number;
@@ -51,6 +58,29 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
     panY: number;
   } | null>(null);
   const splitPointer = useRef<number | null>(null);
+  const activeFaceEntry = faceResult?.faces[activeFace] ?? null;
+
+  // 网格显示：使用后端真实控制网格（原图像素坐标），不是装饰性线条。
+  useEffect(() => {
+    if (!showMesh || !photo || !activeFaceEntry || !isDesktopRuntime()) {
+      setMesh(null);
+      return;
+    }
+    let disposed = false;
+    const timer = window.setTimeout(() => {
+      reshapeMesh(photo.path, activeFaceEntry.id, params)
+        .then((preview) => {
+          if (!disposed) setMesh(preview);
+        })
+        .catch(() => {
+          if (!disposed) setMesh(null);
+        });
+    }, 160);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [showMesh, photo, activeFaceEntry, params]);
 
   // 视口尺寸与"适应窗口"比例
   useEffect(() => {
@@ -97,6 +127,17 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!photo || event.button !== 0) return;
     if ((event.target as HTMLElement).closest(".split-handle")) return;
+    if (warpTool !== "off") {
+      if (!activeFaceEntry) {
+        useEditorStore.getState().notify("info", "请先在「人脸信息」中检测并选择一张人脸");
+        return;
+      }
+      const point = toImagePoint(event.clientX, event.clientY);
+      if (!point) return;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDraft({ points: [point] });
+      return;
+    }
     if (brushMode === "repair") {
       const point = toImagePoint(event.clientX, event.clientY);
       if (!point) return;
@@ -126,6 +167,17 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (warpTool !== "off") {
+      const point = toImagePoint(event.clientX, event.clientY);
+      setCursor(point);
+      if (draft && point) {
+        const last = draft.points[draft.points.length - 1];
+        if (!last || Math.hypot(point.x - last.x, point.y - last.y) >= 1.5) {
+          setDraft({ points: [...draft.points, point] });
+        }
+      }
+      return;
+    }
     if (brushMode !== "off") {
       const point = toImagePoint(event.clientX, event.clientY);
       setCursor(point);
@@ -146,6 +198,26 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   };
 
   const endPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (warpTool !== "off" && draft && photo && activeFaceEntry) {
+      const points = draft.points.map((point) => ({
+        x: point.x / photo.width,
+        y: point.y / photo.height,
+      }));
+      if (points.length > 0) {
+        useEditorStore.getState().appendWarpStroke(activeFaceEntry.id, {
+          mode: warpTool,
+          radius: warpRadius,
+          strength: warpStrength,
+          feather: warpFeather,
+          points,
+        });
+      }
+      setDraft(null);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
     if (draft && photo) {
       const points = draft.points.map((point) => ({
         x: point.x / photo.width,
@@ -207,7 +279,11 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   return (
     <main
       className={`stage ${panning ? "is-panning" : ""} ${photo ? "has-photo" : ""} ${
-        brushMode !== "off" ? `is-brushing is-${brushMode}` : ""
+        warpTool !== "off"
+          ? "is-brushing is-warping"
+          : brushMode !== "off"
+            ? `is-brushing is-${brushMode}`
+            : ""
       }`}
       ref={containerRef}
       onPointerDown={handlePointerDown}
@@ -301,6 +377,34 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
               </svg>
             )}
 
+            {showMesh && mesh && mesh.points.length > 0 && (
+              <svg
+                className="mesh-overlay"
+                viewBox={`0 0 ${photo.width} ${photo.height}`}
+                preserveAspectRatio="none"
+                aria-label="面部控制网格"
+              >
+                {mesh.triangles.map((triangle, index) => (
+                  <polygon
+                    key={`t-${index}`}
+                    points={triangle
+                      .map((pointIndex) => mesh.points[pointIndex]!.join(","))
+                      .join(" ")}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+                {mesh.points.map(([x, y], index) => (
+                  <circle
+                    key={`p-${index}`}
+                    cx={x}
+                    cy={y}
+                    r={Math.max(2, photo.width * 0.002)}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+              </svg>
+            )}
+
             {brushMode !== "off" && (cursor || draft) && (
               <svg
                 className="brush-overlay"
@@ -333,6 +437,43 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
                     cy={cursor.y}
                     r={brushRadius * photo.width}
                     className={`brush-cursor ${brushMode === "erase" ? "is-erase" : ""}`}
+                  />
+                ) : null}
+              </svg>
+            )}
+
+            {warpTool !== "off" && (cursor || draft) && (
+              <svg
+                className="brush-overlay warp-overlay"
+                viewBox={`0 0 ${photo.width} ${photo.height}`}
+                preserveAspectRatio="none"
+                aria-label="局部变形笔刷"
+              >
+                {draft && draft.points.length > 0 ? (
+                  draft.points.length === 1 ? (
+                    <circle
+                      cx={draft.points[0]!.x}
+                      cy={draft.points[0]!.y}
+                      r={warpRadius * photo.width}
+                      className="warp-stroke"
+                    />
+                  ) : (
+                    <polyline
+                      points={draft.points.map((point) => `${point.x},${point.y}`).join(" ")}
+                      fill="none"
+                      strokeWidth={warpRadius * photo.width * 2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="warp-stroke"
+                    />
+                  )
+                ) : null}
+                {cursor && !draft ? (
+                  <circle
+                    cx={cursor.x}
+                    cy={cursor.y}
+                    r={warpRadius * photo.width}
+                    className="warp-cursor"
                   />
                 ) : null}
               </svg>

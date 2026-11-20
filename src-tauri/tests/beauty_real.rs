@@ -234,6 +234,7 @@ fn real_high_resolution_beauty_keeps_dimensions() {
     let params = EditParams {
         faces: vec![FaceBeauty {
             face_id: faces[0].id,
+            face_uuid: String::new(),
             enabled: true,
             beauty: preset("natural"),
         }],

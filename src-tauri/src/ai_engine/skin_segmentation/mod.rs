@@ -487,6 +487,7 @@ mod tests {
         };
         FaceFrame {
             id: 0,
+            uuid: String::new(),
             score: 0.95,
             x: (center_x - d * 1.6) / width as f32,
             y: (center_y - d * 1.4) / height as f32,

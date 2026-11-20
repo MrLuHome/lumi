@@ -12,6 +12,7 @@ use crate::ai_engine::face_frame::FaceFrame;
 use crate::image_engine::buffer::fit_within;
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::export::{self, ExportFormat, ExportSettings};
+use crate::face_reshape::FaceReshapeReport;
 use crate::image_engine::params::EditParams;
 use crate::image_engine::preview::{encode_canvas, DETAIL_MAX_EDGE};
 use crate::image_engine::pipeline;
@@ -114,6 +115,12 @@ pub struct RenderResult {
     pub elapsed_ms: u64,
     /// false 表示命中后端缓存，前端可跳过进度动画。
     pub computed: bool,
+    /// 塑形质量报告：是否自动降强度、参与变形的控制点/三角面数量等。
+    #[serde(default)]
+    pub reshape: Vec<FaceReshapeReport>,
+    /// 用户可见警告（低置信度、自动降强度、无脸等）。
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -187,9 +194,10 @@ pub async fn render_preview(
         };
         let working = fit_within(source, max_edge);
         emit_progress(&app, request_id, "开始", 0.02);
-        let rendered = pipeline::render_with_progress(&working, &params, &faces, &cancel, &mut |value, stage| {
+        let rendered = pipeline::render_with_report(&working, &params, &faces, &cancel, &mut |value, stage| {
             emit_progress(&app, request_id, stage, value);
         })?;
+        let (rendered, report) = rendered;
         let preview = encode_canvas(&rendered, cached.has_alpha)?;
         cancel.check()?;
 
@@ -200,6 +208,8 @@ pub async fn render_preview(
             height: preview.height,
             elapsed_ms: started.elapsed().as_millis() as u64,
             computed: true,
+            reshape: report.reshape,
+            warnings: report.warnings,
         });
         render_cache.put(key, result.clone());
         Ok((*result).clone())
@@ -307,6 +317,8 @@ mod tests {
             height: 100,
             elapsed_ms: 1,
             computed: true,
+            reshape: Vec::new(),
+            warnings: Vec::new(),
         })
     }
 

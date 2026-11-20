@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::ai_engine::face_frame::{FaceFrame, FaceTracker};
+use crate::ai_engine::face_frame::{id_from_uuid, FaceFrame, FaceTracker};
 use crate::error::{AppError, AppResult};
 use crate::image_engine::buffer::{estimated_bytes, has_alpha, Image16};
 use crate::image_engine::decoder::{self, BitDepth};
@@ -191,6 +191,32 @@ impl FaceRepository {
         self.get(path)
             .map(|entry| format!("{}:{}", entry.version, entry.faces.len()))
             .unwrap_or_else(|| "none".into())
+    }
+
+    /// 项目重开匹配成功后，把持久 UUID 写回本次检测结果。
+    /// 只按检测临时 `id` 定位，匹配不到的人脸保持原样；不会删除任何记录。
+    pub fn apply_identities(&self, path: &Path, assignments: &[(u32, String)]) -> Option<CachedFaces> {
+        if assignments.is_empty() {
+            return self.get(path);
+        }
+        let canonical = canonical_key(path);
+        let mut guard = self.inner.lock().ok()?;
+        let new_version = guard.version.saturating_add(1);
+        let cached = {
+            let entry = guard.entries.get_mut(&canonical)?;
+            for face in entry.faces.iter_mut() {
+                if let Some((_, uuid)) = assignments.iter().find(|(id, _)| *id == face.id) {
+                    face.uuid = uuid.clone();
+                    face.id = id_from_uuid(uuid);
+                }
+            }
+            entry.faces.sort_by_key(|face| face.id);
+            entry.version = new_version;
+            entry.clone()
+        };
+        guard.version = new_version;
+        guard.trackers.insert(canonical, FaceTracker);
+        Some(cached)
     }
 }
 

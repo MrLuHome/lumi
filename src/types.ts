@@ -9,6 +9,12 @@ export type {
   ExportFormat,
   ExportSettings,
   FaceBeauty,
+  FaceReshape,
+  FaceShape,
+  FaceShapeKey,
+  ManualWarp,
+  WarpMode,
+  WarpStroke,
   HslChannel,
   HslKey,
   HslParams,
@@ -46,6 +52,29 @@ export interface RenderResult {
   height: number;
   elapsedMs: number;
   computed: boolean;
+  reshape: FaceReshapeReport[];
+  warnings: string[];
+}
+
+/** 与 Rust `FaceReshapeReport` 对应：塑形质量与自动降强度结果。 */
+export interface FaceReshapeReport {
+  faceId: number;
+  source: string;
+  denseLandmarks: boolean;
+  confidence: number;
+  autoScale: number;
+  controlPoints: number;
+  triangles: number;
+  flippedTriangles: number;
+  minAreaRatio: number;
+  maxAreaRatio: number;
+  maxDisplacementRatio: number;
+  appliedScale: number;
+  degraded: boolean;
+  meshVersion: number;
+  warpedPixels: number;
+  elapsedMs: number;
+  notes: string[];
 }
 
 export interface RenderProgress {
@@ -77,6 +106,8 @@ export interface FacePoint {
 /** 与 Rust `DetectedFace` 对应，坐标为原图像素。 */
 export interface DetectedFace {
   id: number;
+  /** 稳定人脸 UUID，由跟踪器或项目恢复分配。 */
+  uuid: string;
   score: number;
   x: number;
   y: number;
@@ -165,12 +196,60 @@ export interface BeautyProgress {
   progress: number;
 }
 
+/** 与 Rust `ProjectFace` 对应：项目持久化的人脸身份记录。 */
+export interface ProjectFaceRecord {
+  uuid: string;
+  bbox: { x: number; y: number; width: number; height: number };
+  landmarks: FacePoint[];
+  score: number;
+  model: string;
+  confidence: number;
+  maskRef: string | null;
+}
+
+export interface FaceMatchEntry {
+  recordIndex: number;
+  faceId: number;
+  faceUuid: string;
+  score: number;
+  confidence: "high" | "low";
+}
+
+/** 与 Rust `FaceRestoreResult` 对应。 */
+export interface FaceRestoreResult {
+  restored: FaceMatchEntry[];
+  pending: FaceMatchEntry[];
+  missing: ProjectFaceRecord[];
+  sourceChanged: boolean;
+  faces: DetectedFace[];
+}
+
+/** 与 Rust `ReshapeCapability` 对应。 */
+export interface ReshapeCapability {
+  source: string;
+  denseLandmarks: boolean;
+  supported: string[];
+  disabled: { key: string; reason: string }[];
+  note: string;
+}
+
+/** 与 Rust `MeshPreview` 对应，点坐标为原图像素，用于画布网格显示。 */
+export interface MeshPreview {
+  points: [number, number][];
+  triangles: [number, number, number][];
+  denseLandmarks: boolean;
+  source: string;
+  version: number;
+}
+
 /** 与 Rust `ProjectDoc` / `ProjectPhoto` 对应。 */
 export interface ProjectPhoto {
   path: string;
   params: import("./state/params").EditParams;
   masks: unknown[];
   export: import("./state/params").ExportSettings | null;
+  sourceHash: string;
+  faces: ProjectFaceRecord[];
 }
 
 export interface ProjectDoc {
