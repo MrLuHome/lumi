@@ -1,21 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EditParams, PhotoAsset } from "../types";
+import type {
+  EditParams,
+  ExportResult,
+  ExportSettings,
+  FaceDetectionResult,
+  FaceModelStatus,
+  FaceProgress,
+  PhotoAsset,
+  ProjectDoc,
+  ProjectOpenResult,
+  RenderProgress,
+  RenderResult,
+} from "../types";
 import { isDesktopRuntime } from "./platform";
-
-export interface RenderResult {
-  previewUrl: string;
-  width: number;
-  height: number;
-  elapsedMs: number;
-}
-
-export interface ExportResult {
-  path: string;
-  bytes: number;
-  width: number;
-  height: number;
-  elapsedMs: number;
-}
 
 export interface DragDropHandlers {
   onEnter?: () => void;
@@ -34,26 +31,101 @@ export async function importPaths(paths: string[]): Promise<PhotoAsset[]> {
   return invoke<PhotoAsset[]>("load_images", { paths });
 }
 
-export async function renderPreview(path: string, params: EditParams): Promise<RenderResult> {
+export async function renderPreview(
+  path: string,
+  params: EditParams,
+  requestId: number,
+  maxEdge?: number,
+): Promise<RenderResult> {
   if (!isDesktopRuntime()) {
     throw new Error("浏览器预览模式不执行桌面图像管线，请使用桌面端运行");
   }
-  return invoke<RenderResult>("render_preview", { path, params });
+  return invoke<RenderResult>("render_preview", {
+    requestId,
+    path,
+    params,
+    maxEdge: maxEdge ?? null,
+  });
+}
+
+export async function cancelRender(requestId: number): Promise<void> {
+  if (!isDesktopRuntime()) return;
+  await invoke("cancel_render", { requestId }).catch(() => undefined);
 }
 
 export async function exportImage(
   path: string,
   params: EditParams,
+  settings: ExportSettings,
   destination?: string,
 ): Promise<ExportResult> {
   if (!isDesktopRuntime()) {
     throw new Error("导出需要在桌面端运行");
   }
   return invoke<ExportResult>("export_image", {
+    requestId: Date.now() % 1_000_000_000,
     path,
     params,
+    settings,
     destination: destination ?? null,
   });
+}
+
+export async function saveProject(
+  project: ProjectDoc,
+  destination?: string,
+): Promise<{ path: string; bytes: number }> {
+  if (!isDesktopRuntime()) throw new Error("保存项目需要在桌面端运行");
+  return invoke("save_project", { project, destination: destination ?? null });
+}
+
+export async function openProject(destination?: string): Promise<ProjectOpenResult> {
+  if (!isDesktopRuntime()) throw new Error("打开项目需要在桌面端运行");
+  return invoke<ProjectOpenResult>("open_project", { destination: destination ?? null });
+}
+
+export async function pickLut(): Promise<{ path: string; name: string } | null> {
+  if (!isDesktopRuntime()) return null;
+  return invoke("pick_lut");
+}
+
+export async function autoWhiteBalance(path: string): Promise<{ temperature: number; tint: number }> {
+  if (!isDesktopRuntime()) throw new Error("自动白平衡需要在桌面端运行");
+  return invoke("auto_white_balance", { path });
+}
+
+export async function faceModelStatus(): Promise<FaceModelStatus> {
+  if (!isDesktopRuntime()) {
+    throw new Error("人脸检测需要在桌面端运行");
+  }
+  return invoke<FaceModelStatus>("face_model_status");
+}
+
+export async function detectFaces(path: string): Promise<FaceDetectionResult> {
+  if (!isDesktopRuntime()) throw new Error("人脸检测需要在桌面端运行");
+  return invoke<FaceDetectionResult>("detect_faces", { path });
+}
+
+export async function subscribeRenderProgress(
+  handler: (progress: RenderProgress) => void,
+): Promise<() => void> {
+  if (!isDesktopRuntime()) return () => {};
+  const event = await import("@tauri-apps/api/event");
+  const unlisten = await event.listen<RenderProgress>("lumi://render-progress", (payload) =>
+    handler(payload.payload),
+  );
+  return unlisten;
+}
+
+export async function subscribeFaceProgress(
+  handler: (progress: FaceProgress) => void,
+): Promise<() => void> {
+  if (!isDesktopRuntime()) return () => {};
+  const event = await import("@tauri-apps/api/event");
+  const unlisten = await event.listen<FaceProgress>("lumi://face-progress", (payload) =>
+    handler(payload.payload),
+  );
+  return unlisten;
 }
 
 /** 监听 Tauri 窗口拖拽文件事件，返回取消订阅函数。 */
@@ -105,6 +177,7 @@ async function toBrowserAsset(file: File): Promise<PhotoAsset | null> {
       path: file.name,
       fileName: file.name,
       format,
+      bitDepth: 8,
       width: bitmap.width,
       height: bitmap.height,
       fileSize: file.size,

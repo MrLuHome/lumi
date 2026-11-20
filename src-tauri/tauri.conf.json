@@ -43,6 +43,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "resources/models/yunet/face_detection_yunet_2023mar.onnx",
+      "resources/models/yunet/LICENSE"
+    ],
     "macOS": {
       "minimumSystemVersion": "10.15"
     },

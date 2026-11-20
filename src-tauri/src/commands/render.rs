@@ -1,46 +1,208 @@
-use std::path::Path;
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{AppError, AppResult};
-use crate::imaging::{adjustments, encode, EditParams};
+use crate::image_engine::buffer::fit_within;
+use crate::image_engine::cancel::CancelToken;
+use crate::image_engine::export::{self, ExportFormat, ExportSettings};
+use crate::image_engine::params::EditParams;
+use crate::image_engine::preview::{encode_canvas, DETAIL_MAX_EDGE};
+use crate::image_engine::pipeline;
 use crate::state::ImageCache;
 
-#[derive(Serialize)]
+/// 渲染任务注册表：只保留最新请求，旧请求在阶段边界主动退出。
+#[derive(Default)]
+pub struct RenderRegistry {
+    sequence: AtomicU64,
+    tasks: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+}
+
+impl RenderRegistry {
+    pub fn begin(&self, request_id: u64) -> CancelToken {
+        let flag = Arc::new(AtomicBool::new(false));
+        {
+            let mut guard = self.tasks.lock().expect("渲染任务表锁失败");
+            // 旧任务一律取消，避免旧结果覆盖新结果，也避免 CPU 堆积。
+            for (id, previous) in guard.iter() {
+                if *id != request_id {
+                    previous.store(true, Ordering::Relaxed);
+                }
+            }
+            guard.insert(request_id, flag.clone());
+            if guard.len() > 16 {
+                let current = request_id;
+                guard.retain(|id, _| *id == current || *id + 8 > current);
+            }
+        }
+        self.sequence.fetch_add(1, Ordering::Relaxed);
+        CancelToken::new(flag)
+    }
+
+    pub fn cancel(&self, request_id: u64) {
+        if let Ok(guard) = self.tasks.lock() {
+            if let Some(flag) = guard.get(&request_id) {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn cancel_all(&self) {
+        if let Ok(guard) = self.tasks.lock() {
+            for flag in guard.values() {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// 相同原图 + 相同参数 + 相同尺寸直接复用结果（撤销/重做、对比切换很常见）。
+#[derive(Clone, Default)]
+pub struct RenderCache {
+    inner: Arc<Mutex<RenderCacheInner>>,
+}
+
+#[derive(Default)]
+struct RenderCacheInner {
+    entries: VecDeque<(String, Arc<RenderResult>)>,
+    bytes: usize,
+}
+
+const RENDER_CACHE_BUDGET: usize = 160 * 1024 * 1024;
+
+impl RenderCache {
+    fn get(&self, key: &str) -> Option<Arc<RenderResult>> {
+        let mut guard = self.inner.lock().ok()?;
+        let index = guard.entries.iter().position(|(stored, _)| stored == key)?;
+        let entry = guard.entries.remove(index)?;
+        let value = entry.1.clone();
+        guard.entries.push_back(entry);
+        Some(value)
+    }
+
+    fn put(&self, key: String, value: Arc<RenderResult>) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.bytes += value.preview_url.len();
+            guard.entries.push_back((key, value));
+            while guard.bytes > RENDER_CACHE_BUDGET && guard.entries.len() > 1 {
+                if let Some((_, removed)) = guard.entries.pop_front() {
+                    guard.bytes = guard.bytes.saturating_sub(removed.preview_url.len());
+                }
+            }
+            while guard.entries.len() > 12 {
+                if let Some((_, removed)) = guard.entries.pop_front() {
+                    guard.bytes = guard.bytes.saturating_sub(removed.preview_url.len());
+                }
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderResult {
+    pub request_id: u64,
     pub preview_url: String,
     pub width: u32,
     pub height: u32,
-    /// 后端耗时，用于底部状态栏显示真实处理时间。
     pub elapsed_ms: u64,
+    /// false 表示命中后端缓存，前端可跳过进度动画。
+    pub computed: bool,
 }
 
-/// 用当前参数渲染预览图。始终基于 preview（长边 ≤ 1800）计算，
-/// 保证拖动滑杆时保持交互帧率；导出时才回到原始像素。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ProgressPayload {
+    request_id: u64,
+    stage: String,
+    progress: f32,
+}
+
+fn emit_progress(app: &AppHandle, request_id: u64, stage: &'static str, progress: f32) {
+    let _ = app.emit(
+        "lumi://render-progress",
+        ProgressPayload {
+            request_id,
+            stage: stage.to_string(),
+            progress,
+        },
+    );
+}
+
+fn cache_key(path: &Path, params: &EditParams, max_edge: u32) -> String {
+    let serialized = serde_json::to_string(params).unwrap_or_default();
+    format!("{}|{}|{}", path.to_string_lossy(), max_edge, serialized)
+}
+
+/// 渲染画布预览。`maxEdge` 用于 100% / 200% 高清查看，
+/// 未传则使用缓存中的 1800px 预览，保证滑杆实时性。
 #[tauri::command]
 pub async fn render_preview(
+    app: AppHandle,
     state: State<'_, ImageCache>,
+    render_cache: State<'_, RenderCache>,
+    registry: State<'_, RenderRegistry>,
+    request_id: u64,
     path: String,
     params: EditParams,
+    max_edge: Option<u32>,
 ) -> AppResult<RenderResult> {
     let cache = state.inner().clone();
+    let render_cache = render_cache.inner().clone();
+    let cancel = registry.begin(request_id);
+    let max_edge = max_edge.unwrap_or(crate::image_engine::PREVIEW_MAX_EDGE);
+    let max_edge = max_edge.clamp(320, DETAIL_MAX_EDGE);
+    let key = cache_key(Path::new(&path), &params, max_edge);
+
+    if let Some(hit) = render_cache.get(&key) {
+        return Ok(RenderResult {
+            request_id,
+            computed: false,
+            ..(*hit).clone()
+        });
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         let started = Instant::now();
         let cached = cache.load(Path::new(&path))?;
-        let rendered = adjustments::render(&cached.preview, &params);
-        let preview_url = encode::preview_data_url(&rendered, cached.has_alpha)?;
-        Ok(RenderResult {
-            preview_url,
-            width: rendered.width(),
-            height: rendered.height(),
+        cancel.check()?;
+
+        let source = if max_edge > crate::image_engine::PREVIEW_MAX_EDGE {
+            &cached.full
+        } else {
+            &cached.preview
+        };
+        let working = fit_within(source, max_edge);
+        emit_progress(&app, request_id, "开始", 0.02);
+        let rendered = pipeline::render_with_progress(&working, &params, &cancel, &mut |value, stage| {
+            emit_progress(&app, request_id, stage, value);
+        })?;
+        let preview = encode_canvas(&rendered, cached.has_alpha)?;
+        cancel.check()?;
+
+        let result = Arc::new(RenderResult {
+            request_id,
+            preview_url: preview.url,
+            width: preview.width,
+            height: preview.height,
             elapsed_ms: started.elapsed().as_millis() as u64,
-        })
+            computed: true,
+        });
+        render_cache.put(key, result.clone());
+        Ok((*result).clone())
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?
+}
+
+#[tauri::command]
+pub fn cancel_render(registry: State<'_, RenderRegistry>, request_id: u64) {
+    registry.cancel(request_id);
 }
 
 #[derive(Serialize)]
@@ -50,37 +212,44 @@ pub struct ExportResult {
     pub bytes: u64,
     pub width: u32,
     pub height: u32,
+    pub format: String,
     pub elapsed_ms: u64,
 }
 
-/// 按原始分辨率渲染并写出文件。未指定目标路径时弹出系统保存对话框。
 #[tauri::command]
 pub async fn export_image(
+    app: AppHandle,
     state: State<'_, ImageCache>,
+    registry: State<'_, RenderRegistry>,
+    request_id: u64,
     path: String,
     params: EditParams,
+    settings: Option<ExportSettings>,
     destination: Option<String>,
 ) -> AppResult<ExportResult> {
     let cache = state.inner().clone();
+    let cancel = registry.begin(request_id);
+    let settings = settings.unwrap_or_default().clamped();
+
     tauri::async_runtime::spawn_blocking(move || {
         let started = Instant::now();
         let cached = cache.load(Path::new(&path))?;
+        cancel.check()?;
 
         let target = match destination {
-            Some(value) if !value.trim().is_empty() => std::path::PathBuf::from(value),
+            Some(value) if !value.trim().is_empty() => PathBuf::from(value),
             _ => {
-                let suggested = default_export_name(&cached.file_name);
-                match rfd::FileDialog::new()
+                let suggested = export::suggested_name(&cached.path, settings.format);
+                let dialog = rfd::FileDialog::new()
                     .set_title("导出照片")
                     .set_file_name(&suggested)
                     .add_filter("JPEG", &["jpg", "jpeg"])
                     .add_filter("PNG", &["png"])
-                    .add_filter("WebP", &["webp"])
-                    .save_file()
-                {
+                    .add_filter("WebP", &["webp"]);
+                match dialog.save_file() {
                     Some(mut path) => {
-                        if path.extension().is_none() {
-                            path.set_extension("jpg");
+                        if ExportFormat::from_extension(&path).is_none() {
+                            path.set_extension(settings.format.extension());
                         }
                         path
                     }
@@ -89,14 +258,21 @@ pub async fn export_image(
             }
         };
 
-        let rendered = adjustments::render(&cached.full, &params);
-        let bytes = encode::write_to_path(&rendered, &target)?;
+        emit_progress(&app, request_id, "全尺寸渲染", 0.05);
+        let rendered = pipeline::render_with_progress(&cached.full, &params, &cancel, &mut |value, stage| {
+            emit_progress(&app, request_id, stage, 0.05 + value * 0.85);
+        })?;
+        cancel.check()?;
+        emit_progress(&app, request_id, "写出文件", 0.96);
+        let outcome = export::write(&target, &cached.path, &rendered, settings, cached.depth)?;
+        emit_progress(&app, request_id, "完成", 1.0);
 
         Ok(ExportResult {
-            path: target.to_string_lossy().into_owned(),
-            bytes,
+            path: outcome.path.to_string_lossy().into_owned(),
+            bytes: outcome.bytes,
             width: rendered.width(),
             height: rendered.height(),
+            format: outcome.format,
             elapsed_ms: started.elapsed().as_millis() as u64,
         })
     })
@@ -104,21 +280,50 @@ pub async fn export_image(
     .map_err(|error| AppError::Task(error.to_string()))?
 }
 
-fn default_export_name(file_name: &str) -> String {
-    let stem = Path::new(file_name)
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "lumi".to_string());
-    format!("{stem}-lumi.jpg")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::default_export_name;
+    use super::*;
+
+    fn result(id: u64, url: &str) -> Arc<RenderResult> {
+        Arc::new(RenderResult {
+            request_id: id,
+            preview_url: url.to_string(),
+            width: 100,
+            height: 100,
+            elapsed_ms: 1,
+            computed: true,
+        })
+    }
 
     #[test]
-    fn export_name_keeps_stem_and_switches_extension() {
-        assert_eq!(default_export_name("portrait.CR2.png"), "portrait.CR2-lumi.jpg");
-        assert_eq!(default_export_name("无扩展名"), "无扩展名-lumi.jpg");
+    fn starting_new_request_cancels_previous() {
+        let registry = RenderRegistry::default();
+        let first = registry.begin(1);
+        let second = registry.begin(2);
+        assert!(first.is_cancelled(), "旧请求必须在阶段边界退出");
+        assert!(!second.is_cancelled());
+
+        registry.cancel(2);
+        assert!(second.is_cancelled());
+    }
+
+    #[test]
+    fn render_cache_hits_and_reuses_result() {
+        let cache = RenderCache::default();
+        assert!(cache.get("a|1").is_none());
+        cache.put("a|1".into(), result(1, "data:image/jpeg;base64,AAA"));
+        let hit = cache.get("a|1").unwrap();
+        assert_eq!(hit.preview_url, "data:image/jpeg;base64,AAA");
+        assert!(cache.get("a|2").is_none());
+    }
+
+    #[test]
+    fn render_cache_respects_entry_limit() {
+        let cache = RenderCache::default();
+        for index in 0..20 {
+            cache.put(format!("k{index}"), result(index as u64, "x"));
+        }
+        assert!(cache.get("k0").is_none(), "最旧条目应被淘汰");
+        assert!(cache.get("k19").is_some());
     }
 }

@@ -9,6 +9,7 @@ import {
   selectEffectUrl,
 } from "./editorStore";
 import { DEFAULT_PARAMS } from "./params";
+import { buildProjectDoc } from "./project";
 import type { PhotoAsset } from "../types";
 
 function makePhoto(id: string, overrides: Partial<PhotoAsset> = {}): PhotoAsset {
@@ -17,6 +18,7 @@ function makePhoto(id: string, overrides: Partial<PhotoAsset> = {}): PhotoAsset 
     path: `/photos/${id}.jpg`,
     fileName: `${id}.jpg`,
     format: "JPEG",
+    bitDepth: 8,
     width: 4000,
     height: 3000,
     fileSize: 4_200_000,
@@ -154,16 +156,80 @@ describe("编辑器状态", () => {
   it("重置单组与重置全部各生成一条历史记录", () => {
     const store = createEditorStore();
     store.getState().addPhotos([makePhoto("a")]);
-    store.getState().updateParam("exposure", 20);
+    store.getState().updateParam("highlights", 20);
 
     store.getState().resetGroup("light");
-    expect(paramsOf(store).exposure).toBe(0);
+    expect(paramsOf(store).highlights).toBe(0);
     expect(historyOf(store).past).toHaveLength(2);
 
     store.getState().updateParam("tint", 10);
     store.getState().resetAll();
     expect(paramsOf(store)).toEqual(DEFAULT_PARAMS);
     expect(historyOf(store).past).toHaveLength(4);
+  });
+
+  it("HSL 连续调整合并为一条历史，可撤销重做", () => {
+    vi.useFakeTimers();
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a")]);
+    store.getState().updateHsl("red", "hue", 10);
+    store.getState().updateHsl("red", "hue", 25);
+    expect(historyOf(store).past).toHaveLength(1);
+    expect(paramsOf(store).hsl.red.hue).toBe(25);
+    store.getState().undo();
+    expect(paramsOf(store).hsl.red.hue).toBe(0);
+    store.getState().redo();
+    expect(paramsOf(store).hsl.red.hue).toBe(25);
+    vi.useRealTimers();
+  });
+
+  it("参数可复制到剪贴板并粘贴到另一张照片", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a"), makePhoto("b")]);
+    store.getState().updateParam("exposure", 40);
+    store.getState().updateHsl("blue", "luminance", -20);
+    store.getState().copyParams();
+
+    store.getState().setActive("b");
+    store.getState().pasteParams();
+    expect(paramsOf(store, "b").exposure).toBe(40);
+    expect(paramsOf(store, "b").hsl.blue.luminance).toBe(-20);
+    expect(historyOf(store, "b").past).toHaveLength(1);
+
+    // 粘贴后的参数与原照片相互独立。
+    store.getState().updateParam("exposure", 5);
+    expect(paramsOf(store, "a").exposure).toBe(40);
+  });
+
+  it("打开项目后恢复每张照片的参数与导出设置", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a"), makePhoto("b")]);
+    store.getState().updateParam("exposure", 30);
+    store.getState().setExportSettings({ format: "png", quality: 90 });
+    const doc = buildProjectDoc(store.getState());
+    expect(doc.photos).toHaveLength(2);
+    expect(doc.photos[0]!.params.exposure).toBe(30);
+
+    const reopened = createEditorStore();
+    reopened.getState().loadProject([makePhoto("a"), makePhoto("b")], doc);
+    expect(paramsOf(reopened, "a").exposure).toBe(30);
+    expect(reopened.getState().exportSettings.format).toBe("png");
+    expect(historyOf(reopened, "a").past).toHaveLength(0);
+  });
+
+  it("曲线重置会清空通道且可撤销", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a")]);
+    store.getState().setCurve("rgb", [
+      { x: 0, y: 0 },
+      { x: 0.5, y: 0.7 },
+      { x: 1, y: 1 },
+    ]);
+    expect(paramsOf(store).curves.rgb).toHaveLength(3);
+    store.getState().resetCurve("rgb");
+    expect(paramsOf(store).curves.rgb).toHaveLength(0);
+    store.getState().undo();
+    expect(paramsOf(store).curves.rgb).toHaveLength(3);
   });
 
   it("移除照片时同步清理参数、历史与渲染缓存", () => {

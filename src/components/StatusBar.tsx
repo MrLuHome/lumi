@@ -15,7 +15,9 @@ export function StatusBar({ photo }: StatusBarProps) {
   const status = useEditorStore((state) => state.renderStatus);
   const elapsed = useEditorStore((state) => state.renderElapsedMs);
   const error = useEditorStore((state) => state.renderError);
+  const progress = useEditorStore((state) => state.renderProgress);
   const zoomStep = useEditorStore((state) => state.zoomStep);
+  const setZoom = useEditorStore((state) => state.setZoom);
   const fitToWindow = useEditorStore((state) => state.fitToWindow);
   const actualPixels = useEditorStore((state) => state.actualPixels);
 
@@ -33,6 +35,7 @@ export function StatusBar({ photo }: StatusBarProps) {
             </span>
             <span className="status-muted">{formatMegapixels(photo.width, photo.height)}</span>
             <span className="status-badge">{photo.format}</span>
+            {photo.bitDepth > 8 ? <span className="status-badge">16-bit</span> : null}
             <span className="status-muted">{formatFileSize(photo.fileSize)}</span>
           </>
         ) : (
@@ -79,6 +82,15 @@ export function StatusBar({ photo }: StatusBarProps) {
         >
           1:1
         </button>
+        <button
+          type="button"
+          className={`status-action ${Math.abs(zoom - 2) < 0.001 ? "is-active" : ""}`}
+          onClick={() => setZoom(2)}
+          disabled={!photo}
+          title="放大到 200% (2)"
+        >
+          2:1
+        </button>
         <span className="status-muted status-viewport">
           {Math.round(viewport.width)} × {Math.round(viewport.height)}
         </span>
@@ -92,7 +104,9 @@ export function StatusBar({ photo }: StatusBarProps) {
           ) : status === "rendering" ? (
             <>
               <span className="spinner" />
-              处理中
+              {progress
+                ? `${progress.stage} ${Math.round(progress.progress * 100)}%`
+                : "处理中"}
             </>
           ) : status === "ready" ? (
             <>

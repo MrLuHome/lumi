@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::imaging::decode;
+use crate::image_engine::decoder;
 use crate::state::{encode_urls, CachedImage, ImageCache};
 
 #[derive(Serialize)]
@@ -15,6 +15,7 @@ pub struct ImageItem {
     pub path: String,
     pub file_name: String,
     pub format: String,
+    pub bit_depth: u8,
     pub width: u32,
     pub height: u32,
     pub file_size: u64,
@@ -32,6 +33,7 @@ fn to_item(cached: &CachedImage) -> AppResult<ImageItem> {
         path: cached.path.to_string_lossy().into_owned(),
         file_name: cached.file_name.clone(),
         format: cached.format.clone(),
+        bit_depth: cached.depth.bits(),
         width: cached.width,
         height: cached.height,
         file_size: cached.file_size,
@@ -48,7 +50,7 @@ fn load_paths(cache: &ImageCache, paths: Vec<PathBuf>) -> AppResult<Vec<ImageIte
     let mut last_error = None;
 
     for path in paths {
-        if !decode::is_supported_extension(&path) {
+        if !decoder::is_supported_extension(&path) {
             continue;
         }
         match cache.load(&path).and_then(|cached| to_item(&cached)) {

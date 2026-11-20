@@ -17,25 +17,40 @@
 
 | 名称 | 版本或 commit | 来源链接 | 许可证 | 是否允许商用 | 分发/再分发方式 | 备注（附加条款、CLA、引用要求） |
 | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | |
+| Tauri | 2.x | https://github.com/tauri-apps/tauri | MIT OR Apache-2.0 | 是 | 随桌面应用二进制分发 | 需保留版权与许可证声明 |
+| React / React DOM | 19.x | https://github.com/facebook/react | MIT | 是 | 打包进前端资源 | 保留版权声明 |
+| zustand | 5.x | https://github.com/pmndrs/zustand | MIT | 是 | 打包进前端资源 | — |
+| lucide-react | 0.5x | https://github.com/lucide-icons/lucide | ISC | 是 | 打包进前端资源 | 保留 ISC 声明 |
+| vite | 8.x | https://github.com/vitejs/vite | MIT | 是 | 仅构建期，不分发 | — |
+| vitest | 5.x | https://github.com/vitest-dev/vitest | MIT | 是 | 仅测试期，不分发 | — |
+| TypeScript | 5.9.x | https://github.com/microsoft/TypeScript | Apache-2.0 | 是 | 仅构建期，不分发 | — |
+| image | 0.25.x | https://github.com/image-rs/image | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | 解码/编码 JPG/PNG/WebP，传递依赖保持同许可 |
+| tract-onnx | 0.23.x | https://github.com/sonos/tract | Apache-2.0 OR MIT | 是 | 随应用二进制分发 | 纯 Rust ONNX 推理；未使用 ONNX Runtime 二进制 |
+| sha2 | 0.10.x | https://github.com/RustCrypto/hashes | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | 校验模型 SHA256 |
+| serde / serde_json | 1.x | https://github.com/serde-rs/serde | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | — |
+| thiserror | 2.x | https://github.com/dtolnay/thiserror | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | — |
+| rfd | 0.15.x | https://github.com/PolyMeilex/rfd | MIT | 是 | 随应用二进制分发 | 系统原生文件对话框 |
+| tauri-plugin-opener | 2.x | https://github.com/tauri-apps/plugins-workspace | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | — |
+
+> 说明：`image` 的传递依赖（jpeg-decoder、png、image-webp 等）均为 MIT/Apache-2.0 系许可；发布前建议用 `cargo license` 做一次全量核对。
 
 ## 2. 模型代码
 
 | 名称 | 版本或 commit | 来源链接 | 许可证 | 是否允许商用 | 分发/再分发方式 | 备注（附加条款、CLA、引用要求） |
 | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | |
+| YuNet（OpenCV Zoo 模型卡与推理说明） | face_detection_yunet_2023mar | https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet | MIT（OpenCV Zoo 仓库 LICENSE） | 是 | 仅以文档与许可证形式随包说明 | 论文：Yunet: A tiny millisecond-level face detector（Shiqi Yu et al.）；库代码不随包分发，仅使用模型权重 |
 
 ## 3. 模型权重
 
 | 名称 | 版本或 commit | 来源链接 | 许可证 | 是否允许商用 | 分发/再分发方式 | 备注（附加条款、CLA、引用要求） |
 | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | |
+| YuNet face detection ONNX | 2023mar | https://huggingface.co/opencv/face_detection_yunet（镜像自 OpenCV Zoo） | MIT | 是（MIT 允许商业使用与再分发） | 打包进 Tauri `bundle.resources`，路径 `resources/models/yunet/` | 文件：`face_detection_yunet_2023mar.onnx`；SHA256 `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`；大小 232,589 字节；输入 `1×3×640×640` float32 BGR（0..255）；输出 12 个张量：`cls_8/16/32`、`obj_8/16/32`、`bbox_8/16/32`、`kps_8/16/32`；CPU 推理（tract）。必须随包保留 MIT LICENSE 原文（`resources/models/yunet/LICENSE`） |
 
 ## 4. 数据集
 
 | 名称 | 版本或 commit | 来源链接 | 许可证 | 是否允许商用 | 分发/再分发方式 | 备注（附加条款、CLA、引用要求） |
 | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | |
+| 项目测试照片集 | 第二轮 | `src-tauri/tests/fixtures/images/` | 待确认 | 仅用于自动化测试，不得进入发布产物 | 仅存在于源码测试目录，不打包进应用 | 由上一轮临时样张派生（暗光/高光/拼贴/EXIF/16-bit 等变体）；原始人像来源与肖像授权尚未确认，发布前必须替换为自有或已授权素材 |
 
 ## 需特别警惕的授权情形（核对清单）
 
@@ -45,13 +60,15 @@
 - [ ] 数据集仅限学术研究，或禁止再分发原始样本 / 衍生数据
 - [ ] GPL / AGPL / SSPL 等传染性许可，或依赖中包含此类间接依赖
 - [ ] 要求署名、引用论文、保留版权声明、标注「Powered by」等归属义务
-- [ ] 商用需单独申请商业授权（双许可模式，如部分开源模型与商业版并存）
+- [x] 商用需单独申请商业授权（双许可模式）—— YuNet 为 MIT，无此限制
 - [ ] 需签署 CLA 或额外使用协议才能使用
 - [ ] 许可证版本不明、无 LICENSE 文件，或仓库与权重协议互相冲突
-- [ ] 训练数据来源本身存在版权或肖像权争议（人像类项目尤其注意）
+- [ ] 训练数据来源本身存在版权或肖像权争议（人像类项目尤其注意）—— 测试照片集待确认
 
 清单只用于提示核对方向，具体结论以各资产许可证原文为准。
 
 ## 当前状态
 
-四类资产均为空：当前目录尚无代码、依赖、模型或数据集，待开发开始后按上述规则填充。
+- 代码依赖：已登记主要直接依赖，未发现 GPL / AGPL 传染性许可。
+- 模型代码与权重：YuNet 2023mar 已登记来源、版本、SHA256、输入输出格式与 MIT 许可证；模型仅通过官方镜像获取，未做任何微调或再量化。
+- 数据：自动化测试照片集仅用于本地测试，来源授权待确认；未引入训练数据集。

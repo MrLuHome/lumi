@@ -5,6 +5,7 @@ import {
   Redo2,
   RotateCcw,
   Ruler,
+  Save,
   Undo2,
 } from "lucide-react";
 import type { PhotoAsset } from "../types";
@@ -22,34 +23,46 @@ interface TopBarProps {
   photo: PhotoAsset | null;
   canUndo: boolean;
   canRedo: boolean;
+  canPaste: boolean;
   compareMode: CompareMode;
   importing: boolean;
   exporting: boolean;
   onImport: () => void;
   onExport: () => void;
+  onSaveProject: () => void;
+  onOpenProject: () => void;
   onUndo: () => void;
   onRedo: () => void;
+  onCopyParams: () => void;
+  onPasteParams: () => void;
   onToggleCompare: () => void;
   onResetAll: () => void;
   onFit: () => void;
   onActualPixels: () => void;
+  onZoom200: () => void;
 }
 
 export function TopBar({
   photo,
   canUndo,
   canRedo,
+  canPaste,
   compareMode,
   importing,
   exporting,
   onImport,
   onExport,
+  onSaveProject,
+  onOpenProject,
   onUndo,
   onRedo,
+  onCopyParams,
+  onPasteParams,
   onToggleCompare,
   onResetAll,
   onFit,
   onActualPixels,
+  onZoom200,
 }: TopBarProps) {
   return (
     <header className="topbar" data-tauri-drag-region>
@@ -63,6 +76,14 @@ export function TopBar({
           label="文件"
           items={[
             { label: "导入照片…", shortcut: "⌘O", onSelect: onImport },
+            { label: "打开项目…", shortcut: "⇧⌘O", onSelect: onOpenProject },
+            {
+              label: "保存项目…",
+              shortcut: "⌘S",
+              disabled: !photo,
+              onSelect: onSaveProject,
+            },
+            "separator",
             { label: "导出当前照片…", shortcut: "⌘E", disabled: !photo, onSelect: onExport },
             "separator",
             ...(isDesktopRuntime()
@@ -76,6 +97,9 @@ export function TopBar({
             { label: "撤销", shortcut: "⌘Z", disabled: !canUndo, onSelect: onUndo },
             { label: "重做", shortcut: "⇧⌘Z", disabled: !canRedo, onSelect: onRedo },
             "separator",
+            { label: "复制参数", shortcut: "⌥⌘C", disabled: !photo, onSelect: onCopyParams },
+            { label: "粘贴参数", shortcut: "⌥⌘V", disabled: !photo || !canPaste, onSelect: onPasteParams },
+            "separator",
             { label: "重置全部参数", disabled: !photo, onSelect: onResetAll },
           ]}
         />
@@ -84,6 +108,7 @@ export function TopBar({
           items={[
             { label: "适应窗口", shortcut: "F", disabled: !photo, onSelect: onFit },
             { label: "实际像素", shortcut: "1", disabled: !photo, onSelect: onActualPixels },
+            { label: "放大到 200%", shortcut: "2", disabled: !photo, onSelect: onZoom200 },
             "separator",
             {
               label: compareMode === "split" ? "关闭对比" : "分屏对比",
@@ -133,6 +158,15 @@ export function TopBar({
         <button type="button" className="btn" onClick={onExport} disabled={!photo || exporting}>
           <Download size={14} />
           {exporting ? "导出中…" : "导出"}
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="保存项目 (⌘S)"
+          onClick={onSaveProject}
+          disabled={!photo}
+        >
+          <Save size={14} />
         </button>
         <button
           type="button"

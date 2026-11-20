@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus } from "lucide-react";
+import { AlertTriangle, ImagePlus } from "lucide-react";
 import type { PhotoAsset } from "../types";
-import { useEditorStore } from "../state/editorStore";
+import { selectActiveFaces, useEditorStore } from "../state/editorStore";
 import { isDesktopRuntime } from "../lib/platform";
 
 interface CanvasStageProps {
@@ -19,6 +19,11 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
   const holdOriginal = useEditorStore((state) => state.holdOriginal);
   const dragActive = useEditorStore((state) => state.dragActive);
   const rendering = useEditorStore((state) => state.renderStatus === "rendering");
+  const renderError = useEditorStore((state) => state.renderError);
+  const renderProgress = useEditorStore((state) => state.renderProgress);
+  const faceResult = useEditorStore(selectActiveFaces);
+  const activeFace = useEditorStore((state) => state.activeFace);
+  const showFaceOverlay = useEditorStore((state) => state.showFaceOverlay);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [panning, setPanning] = useState(false);
@@ -119,6 +124,10 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
     ? viewport.width / 2 + pan.x - (photo.width * zoom) / 2 + compareSplit * photo.width * zoom
     : 0;
 
+  const progressText = renderProgress
+    ? `${renderProgress.stage} ${Math.round(renderProgress.progress * 100)}%`
+    : "渲染中";
+
   return (
     <main
       className={`stage ${panning ? "is-panning" : ""} ${photo ? "has-photo" : ""}`}
@@ -161,6 +170,40 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
                 }}
               />
             )}
+
+            {showFaceOverlay && faceResult && faceResult.faces.length > 0 && (
+              <svg
+                className="face-overlay"
+                viewBox={`0 0 ${photo.width} ${photo.height}`}
+                preserveAspectRatio="none"
+                aria-label="人脸检测结果"
+              >
+                {faceResult.faces.map((face, index) => (
+                  <g
+                    key={face.id}
+                    className={`face-group ${index === activeFace ? "is-active" : ""}`}
+                  >
+                    <rect
+                      x={face.x}
+                      y={face.y}
+                      width={face.width}
+                      height={face.height}
+                      rx={Math.max(8, face.width * 0.03)}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    {face.landmarks.map((point, pointIndex) => (
+                      <circle
+                        key={pointIndex}
+                        cx={point.x}
+                        cy={point.y}
+                        r={Math.max(4, face.width * 0.012)}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ))}
+                  </g>
+                ))}
+              </svg>
+            )}
           </div>
 
           {compareMode === "split" && !holdOriginal && (
@@ -194,7 +237,14 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
           {rendering && (
             <div className="stage-busy">
               <span className="spinner" />
-              渲染中
+              {progressText}
+            </div>
+          )}
+
+          {renderError && (
+            <div className="stage-error" role="alert">
+              <AlertTriangle size={13} />
+              <span>{renderError}</span>
             </div>
           )}
         </>

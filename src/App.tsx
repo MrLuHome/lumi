@@ -6,7 +6,15 @@ import { Inspector } from "./components/Inspector";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/ui/Toast";
 import { usePreviewRenderer } from "./hooks/usePreviewRenderer";
-import { exportImage, importPaths, pickImages, subscribeToFileDrop } from "./lib/backend";
+import {
+  exportImage,
+  importPaths,
+  openProject,
+  pickImages,
+  saveProject,
+  subscribeFaceProgress,
+  subscribeToFileDrop,
+} from "./lib/backend";
 import { formatDuration, formatFileSize } from "./lib/format";
 import { platformClass } from "./lib/platform";
 import {
@@ -17,11 +25,16 @@ import {
   selectEffectUrl,
   useEditorStore,
 } from "./state/editorStore";
+import { buildProjectDoc } from "./state/project";
 
 function toMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return "操作失败，请重试";
+}
+
+function isCancelled(message: string): boolean {
+  return message.includes("取消");
 }
 
 function baseName(path: string): string {
@@ -38,9 +51,11 @@ export default function App() {
   const effectUrl = useEditorStore(selectEffectUrl);
   const canUndo = useEditorStore(selectCanUndo);
   const canRedo = useEditorStore(selectCanRedo);
+  const canPaste = useEditorStore((state) => Boolean(state.clipboard));
   const compareMode = useEditorStore((state) => state.compareMode);
   const importing = useEditorStore((state) => state.importing);
   const exporting = useEditorStore((state) => state.exporting);
+  const projectPath = useEditorStore((state) => state.projectPath);
 
   const handleImport = useCallback(async () => {
     const state = useEditorStore.getState();
@@ -65,7 +80,7 @@ export default function App() {
     if (!active || state.exporting) return;
     state.setExporting(true);
     try {
-      const result = await exportImage(active.path, selectActiveParams(state));
+      const result = await exportImage(active.path, selectActiveParams(state), state.exportSettings);
       useEditorStore
         .getState()
         .notify(
@@ -77,9 +92,52 @@ export default function App() {
     } catch (error) {
       const message = toMessage(error);
       // 用户在保存对话框点取消，不弹错误。
-      if (!message.includes("取消")) useEditorStore.getState().notify("error", message);
+      if (!isCancelled(message)) useEditorStore.getState().notify("error", message);
     } finally {
       useEditorStore.getState().setExporting(false);
+    }
+  }, []);
+
+  const handleSaveProject = useCallback(async () => {
+    const state = useEditorStore.getState();
+    if (state.photos.length === 0) return;
+    try {
+      const doc = buildProjectDoc(state);
+      const saved = await saveProject(doc, state.projectPath ?? undefined);
+      useEditorStore.getState().setProjectPath(saved.path);
+      useEditorStore
+        .getState()
+        .notify(
+          "success",
+          `项目已保存：${baseName(saved.path)} · ${formatFileSize(saved.bytes)}`,
+        );
+    } catch (error) {
+      const message = toMessage(error);
+      if (!isCancelled(message)) useEditorStore.getState().notify("error", message);
+    }
+  }, []);
+
+  const handleOpenProject = useCallback(async () => {
+    try {
+      const opened = await openProject();
+      const items = await importPaths(opened.project.photos.map((entry) => entry.path));
+      if (items.length === 0) {
+        useEditorStore.getState().notify("error", "项目中的照片文件都不存在，无法恢复");
+        return;
+      }
+      const store = useEditorStore.getState();
+      store.loadProject(items, opened.project);
+      store.setProjectPath(opened.path);
+      const missing = opened.project.photos.length - items.length;
+      store.notify(
+        missing > 0 ? "info" : "success",
+        missing > 0
+          ? `已恢复项目（${items.length}/${opened.project.photos.length} 张照片，${missing} 张文件缺失）`
+          : `已打开项目：${baseName(opened.path)}`,
+      );
+    } catch (error) {
+      const message = toMessage(error);
+      if (!isCancelled(message)) useEditorStore.getState().notify("error", message);
     }
   }, []);
 
@@ -89,6 +147,12 @@ export default function App() {
   const handleResetAll = useCallback(() => useEditorStore.getState().resetAll(), []);
   const handleFit = useCallback(() => useEditorStore.getState().fitToWindow(), []);
   const handleActualPixels = useCallback(() => useEditorStore.getState().actualPixels(), []);
+  const handleZoom200 = useCallback(() => {
+    const state = useEditorStore.getState();
+    state.setZoom(2);
+  }, []);
+  const handleCopyParams = useCallback(() => useEditorStore.getState().copyParams(), []);
+  const handlePasteParams = useCallback(() => useEditorStore.getState().pasteParams(), []);
 
   // 桌面端文件拖拽导入
   useEffect(() => {
@@ -122,6 +186,22 @@ export default function App() {
     };
   }, []);
 
+  // 人脸推理进度（真实后端事件）。
+  useEffect(() => {
+    let alive = true;
+    let unsubscribe: (() => void) | undefined;
+    subscribeFaceProgress((progress) => {
+      useEditorStore.getState().setFaceProgress(progress);
+    }).then((cleanup) => {
+      if (alive) unsubscribe = cleanup;
+      else cleanup();
+    });
+    return () => {
+      alive = false;
+      unsubscribe?.();
+    };
+  }, []);
+
   // 全局快捷键
   useEffect(() => {
     const isTyping = (target: EventTarget | null) =>
@@ -139,9 +219,25 @@ export default function App() {
         else state.undo();
         return;
       }
+      if (mod && key === "s") {
+        event.preventDefault();
+        void handleSaveProject();
+        return;
+      }
+      if (mod && event.altKey && key === "c") {
+        event.preventDefault();
+        state.copyParams();
+        return;
+      }
+      if (mod && event.altKey && key === "v") {
+        event.preventDefault();
+        state.pasteParams();
+        return;
+      }
       if (mod && key === "o") {
         event.preventDefault();
-        void handleImport();
+        if (event.shiftKey) void handleOpenProject();
+        else void handleImport();
         return;
       }
       if (mod && key === "e") {
@@ -162,6 +258,9 @@ export default function App() {
           break;
         case "1":
           state.actualPixels();
+          break;
+        case "2":
+          state.setZoom(2);
           break;
         case "=":
         case "+":
@@ -191,7 +290,7 @@ export default function App() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [handleImport, handleExport]);
+  }, [handleImport, handleExport, handleSaveProject, handleOpenProject]);
 
   return (
     <div className={`app ${platformClass()}`}>
@@ -199,17 +298,23 @@ export default function App() {
         photo={photo}
         canUndo={canUndo}
         canRedo={canRedo}
+        canPaste={canPaste}
         compareMode={compareMode}
         importing={importing}
         exporting={exporting}
         onImport={handleImport}
         onExport={handleExport}
+        onSaveProject={handleSaveProject}
+        onOpenProject={handleOpenProject}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        onCopyParams={handleCopyParams}
+        onPasteParams={handlePasteParams}
         onToggleCompare={handleToggleCompare}
         onResetAll={handleResetAll}
         onFit={handleFit}
         onActualPixels={handleActualPixels}
+        onZoom200={handleZoom200}
       />
 
       <div className="workspace">
@@ -220,6 +325,11 @@ export default function App() {
 
       <StatusBar photo={photo} />
       <Toast />
+      {projectPath ? (
+        <span className="project-indicator" title={projectPath}>
+          项目：{baseName(projectPath)}
+        </span>
+      ) : null}
     </div>
   );
 }
