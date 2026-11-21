@@ -88,7 +88,10 @@ pub fn decode(path: &Path) -> AppResult<DecodedImage> {
     let color = image.color();
     let bit_depth = if matches!(
         color,
-        image::ColorType::Rgba16 | image::ColorType::Rgb16 | image::ColorType::La16 | image::ColorType::L16
+        image::ColorType::Rgba16
+            | image::ColorType::Rgb16
+            | image::ColorType::La16
+            | image::ColorType::L16
     ) {
         BitDepth::Sixteen
     } else {

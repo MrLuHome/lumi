@@ -117,10 +117,7 @@ pub fn render_with_report(
                 covered as f32 / combined.len() as f32
             },
             edge_ratio: global.edge_ratio(),
-            strokes: params
-                .subject_mask
-                .strokes
-                .len()
+            strokes: params.subject_mask.strokes.len()
                 + params
                     .body
                     .iter()
@@ -139,9 +136,8 @@ pub fn render_with_report(
             .filter(|entry| entry.enabled && entry.is_active())
             .cloned()
             .collect();
-        let masks = subject_masks.get_or_insert_with(|| {
-            SubjectMasks::new(output.width(), output.height())
-        });
+        let masks =
+            subject_masks.get_or_insert_with(|| SubjectMasks::new(output.width(), output.height()));
         progress(0.10, "身材调整");
         let body_reports = body::apply_body(&mut output, masks, &active, faces, cancel)?;
         for entry in &body_reports {
@@ -174,12 +170,7 @@ pub fn render_with_report(
         let has_subject = combined.iter().any(|value| *value > 0.5);
         if has_subject {
             progress(0.18, "背景处理");
-            let background = apply_background(
-                &mut output,
-                &combined,
-                &params.background,
-                cancel,
-            )?;
+            let background = apply_background(&mut output, &combined, &params.background, cancel)?;
             for note in &background.notes {
                 report.warnings.push(note.clone());
             }
@@ -194,7 +185,10 @@ pub fn render_with_report(
     }
 
     let wants_beauty = params.skin_smooth > 0.0
-        || params.faces.iter().any(|face| face.enabled && face.beauty.is_active());
+        || params
+            .faces
+            .iter()
+            .any(|face| face.enabled && face.beauty.is_active());
 
     if wants_beauty {
         if faces.is_empty() {
@@ -213,12 +207,8 @@ pub fn render_with_report(
             report.warnings.push("面部塑形需要先检测人脸".into());
         } else {
             progress(0.38, "面部塑形");
-            let reports = face_reshape::apply_face_reshape(
-                &mut output,
-                faces,
-                &params.reshape,
-                cancel,
-            )?;
+            let reports =
+                face_reshape::apply_face_reshape(&mut output, faces, &params.reshape, cancel)?;
             for entry in &reports {
                 if entry.degraded {
                     report.warnings.push(format!(
@@ -228,8 +218,13 @@ pub fn render_with_report(
                     ));
                 }
                 for note in &entry.notes {
-                    if note.contains("置信度") || note.contains("安全范围") || note.contains("未改变") {
-                        report.warnings.push(format!("人脸 #{}：{}", entry.face_id, note));
+                    if note.contains("置信度")
+                        || note.contains("安全范围")
+                        || note.contains("未改变")
+                    {
+                        report
+                            .warnings
+                            .push(format!("人脸 #{}：{}", entry.face_id, note));
                     }
                 }
             }
@@ -354,7 +349,8 @@ mod tests {
     #[test]
     fn neutral_render_is_identity() {
         let image: Image16 = Image16::from_pixel(8, 8, Rgba([1000, 20000, 60000, 65535]));
-        let rendered = render(&image, &EditParams::default(), &[], &CancelToken::default()).unwrap();
+        let rendered =
+            render(&image, &EditParams::default(), &[], &CancelToken::default()).unwrap();
         assert_eq!(rendered.into_raw(), image.into_raw());
     }
 
@@ -429,13 +425,21 @@ mod tests {
             },
             ..Default::default()
         };
-        let (rendered, report) =
-            render_with_report(&image, &params, &[], &CancelToken::default(), &mut |_, _| {})
-                .unwrap();
+        let (rendered, report) = render_with_report(
+            &image,
+            &params,
+            &[],
+            &CancelToken::default(),
+            &mut |_, _| {},
+        )
+        .unwrap();
         assert!(report.background.is_some());
         assert_eq!(rendered.get_pixel(0, 0).0[0], 0xFFFF);
         assert_eq!(rendered.get_pixel(0, 0).0[1], 0);
-        assert_eq!(rendered.get_pixel(32, 32).0, [30_000, 30_000, 30_000, 65535]);
+        assert_eq!(
+            rendered.get_pixel(32, 32).0,
+            [30_000, 30_000, 30_000, 65535]
+        );
     }
 
     #[test]
@@ -481,9 +485,14 @@ mod tests {
             }],
             ..Default::default()
         };
-        let (rendered, report) =
-            render_with_report(&image, &params, &[], &CancelToken::default(), &mut |_, _| {})
-                .unwrap();
+        let (rendered, report) = render_with_report(
+            &image,
+            &params,
+            &[],
+            &CancelToken::default(),
+            &mut |_, _| {},
+        )
+        .unwrap();
         assert_eq!(rendered.get_pixel(0, 0).0, corner_before);
         assert_eq!(report.body.len(), 1);
         assert!(report.body[0].affected_pixels > 0);
@@ -503,9 +512,14 @@ mod tests {
             },
             ..Default::default()
         };
-        let (rendered, report) =
-            render_with_report(&image, &params, &[], &CancelToken::default(), &mut |_, _| {})
-                .unwrap();
+        let (rendered, report) = render_with_report(
+            &image,
+            &params,
+            &[],
+            &CancelToken::default(),
+            &mut |_, _| {},
+        )
+        .unwrap();
         assert_eq!(rendered.into_raw(), image.into_raw());
         assert!(report
             .warnings
@@ -516,11 +530,7 @@ mod tests {
     #[test]
     fn beauty_without_faces_does_not_touch_pixels() {
         use crate::image_engine::params::{BeautyParams, FaceBeauty};
-        let image: Image16 = Image16::from_pixel(
-            48,
-            48,
-            Rgba([30_000, 24_000, 20_000, 65535]),
-        );
+        let image: Image16 = Image16::from_pixel(48, 48, Rgba([30_000, 24_000, 20_000, 65535]));
         let params = EditParams {
             faces: vec![FaceBeauty {
                 face_id: 0,

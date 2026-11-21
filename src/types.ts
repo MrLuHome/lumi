@@ -216,6 +216,47 @@ export interface DetectedFace {
   width: number;
   height: number;
   landmarks: FacePoint[];
+  /** 只有通过质量验证的 Provider 才会填充；5 点结果永远没有该字段。 */
+  dense?: DenseFace | null;
+  /** 每张脸的 LEVEL 3 门控结论与原因。 */
+  level3?: Level3Gate | null;
+}
+
+export interface DenseLandmark {
+  x: number;
+  y: number;
+  confidence: number;
+  semanticId: string;
+}
+
+export interface DenseRegion {
+  kind:
+    | "faceContour"
+    | "leftEye"
+    | "rightEye"
+    | "leftEyebrow"
+    | "rightEyebrow"
+    | "nose"
+    | "noseCrest"
+    | "medianLine"
+    | "outerLips"
+    | "innerLips"
+    | "iris"
+    | "faceMesh"
+    | "other";
+  points: DenseLandmark[];
+  closed: boolean;
+}
+
+export interface DenseFace {
+  topologyId: string;
+  providerId: string;
+  providerVersion: string;
+  imageWidth: number;
+  imageHeight: number;
+  boundingBox: { x: number; y: number; width: number; height: number };
+  confidence: number;
+  regions: DenseRegion[];
 }
 
 export interface FaceDetectionResult {
@@ -413,7 +454,16 @@ export interface ExportResult {
 
 /* ------------------------- 第六轮：智能精修 / 预设 / 批量 ------------------------- */
 
-export type Workspace = "edit" | "smart" | "presets" | "batch" | "raw" | "color" | "performance";
+export type Workspace =
+  | "edit"
+  | "smart"
+  | "presets"
+  | "batch"
+  | "raw"
+  | "color"
+  | "performance"
+  | "ai"
+  | "models";
 
 /** 第七轮：RAW 显影参数，与 Rust `RawDevelopParams` 对应。 */
 export type WbMode = "camera" | "auto" | "custom";
@@ -783,4 +833,267 @@ export interface BatchExportRequest {
   startIndex: number;
   conflict: ConflictPolicy;
   overwriteConfirmed: boolean;
+}
+
+/** 第八轮：人脸智能 Provider 统一抽象（与 Rust `face_intelligence` 对应）。 */
+export type EvidenceLevel = "verified" | "declared" | "unverified" | "unsupported";
+
+export interface ProviderCapabilities {
+  faceDetection: boolean;
+  sparseLandmarks: boolean;
+  denseLandmarks: boolean;
+  eyeLandmarks: boolean;
+  eyelidLandmarks: boolean;
+  noseLandmarks: boolean;
+  lipLandmarks: boolean;
+  faceMesh: boolean;
+  faceParsing: boolean;
+  skinSegmentation: boolean;
+  hairSegmentation: boolean;
+  faceMatting: boolean;
+  multiFace: boolean;
+  offlineInference: boolean;
+  staticImage: boolean;
+  maxInputResolution: [number, number] | null;
+}
+
+export interface CapabilityEvidence {
+  capability: string;
+  level: EvidenceLevel;
+  note: string;
+  measurement?: string | null;
+}
+
+export type LicenseState =
+  | "verifiedCommercial"
+  | "verifiedPersonal"
+  | "systemFramework"
+  | "researchOnly"
+  | "userUnverified"
+  | "prohibited"
+  | "incompatible"
+  | "removed";
+
+export interface LicenseInfo {
+  name: string;
+  url: string | null;
+  state: LicenseState;
+  note: string;
+}
+
+export type ProviderKind = "builtin" | "system" | "userModel" | "commercialPoc";
+
+export type ProviderState =
+  | "ready"
+  | "idle"
+  | "analyzing"
+  | "missing"
+  | "unsupported"
+  | "failed"
+  | "lowQuality"
+  | "licenseUnverified";
+
+export interface ProviderDescriptor {
+  id: string;
+  displayName: string;
+  version: string;
+  kind: ProviderKind;
+  state: ProviderState;
+  available: boolean;
+  enabled: boolean;
+  license: LicenseInfo;
+  capabilities: ProviderCapabilities;
+  verifiedCapabilities: ProviderCapabilities;
+  evidence: CapabilityEvidence[];
+  topologyId: string | null;
+  note: string;
+}
+
+export interface RegionQuality {
+  region: string;
+  points: number;
+  passed: boolean;
+  reason: string;
+}
+
+export interface FaceQuality {
+  passed: boolean;
+  densePoints: number;
+  confidence: number;
+  eyeDistance: number;
+  regions: RegionQuality[];
+  issues: string[];
+}
+
+export interface FeatureGate {
+  enabled: boolean;
+  reason: string;
+}
+
+export interface Level3Gate {
+  providerId: string;
+  topologyId: string;
+  faceUuid: string;
+  denseLandmarks: boolean;
+  eyes: FeatureGate;
+  nose: FeatureGate;
+  mouth: FeatureGate;
+  chin: FeatureGate;
+  summary: string;
+  issues: string[];
+}
+
+export interface AnalyzedFace {
+  faceUuid: string;
+  boundingBox: { x: number; y: number; width: number; height: number };
+  confidence: number;
+  densePoints: number;
+  denseFingerprint: string | null;
+  quality: FaceQuality;
+  gate: Level3Gate;
+}
+
+export interface StabilityReport {
+  providerId: string;
+  topologyId: string;
+  runs: number;
+  facesPerRun: number[];
+  eyeDistance: number;
+  maxDeviation: number;
+  ratio: number;
+  passed: boolean;
+  elapsedMs: number[];
+  note: string;
+}
+
+export interface FaceAnalysisRecord {
+  photoPath: string;
+  providerId: string;
+  providerName: string;
+  topologyId: string;
+  processingTimeMs: number;
+  imageWidth: number;
+  imageHeight: number;
+  faces: AnalyzedFace[];
+  stability: StabilityReport | null;
+  warnings: string[];
+  totalLandmarks: number;
+  landmarkCounts: Record<string, number>;
+  createdAtUnix: number;
+}
+
+export interface QualityThresholds {
+  minConfidence: number;
+  maxStabilityRatio: number;
+  minEyeWidth: number;
+  minMouthWidth: number;
+  minDensePoints: number;
+}
+
+export interface FaceIntelligenceStatus {
+  activeProvider: string;
+  providers: ProviderDescriptor[];
+  lastAnalysis: FaceAnalysisRecord | null;
+  quality: QualityReport[];
+  level3Summary: string;
+  modelsRoot: string;
+  thresholds: QualityThresholds;
+}
+
+export interface QualityReport {
+  providerId: string;
+  providerName: string;
+  stability: StabilityReport;
+  qualitySample: FaceQuality[];
+  verified: boolean;
+  note: string;
+  measuredAtUnix: number;
+}
+
+export interface AnalyzeFacesReport {
+  providerId: string;
+  providerName: string;
+  processingTimeMs: number;
+  faceCount: number;
+  denseFaceCount: number;
+  totalLandmarks: number;
+  gateSummary: string;
+  warnings: string[];
+  faces: DetectedFace[];
+  record: FaceAnalysisRecord;
+}
+
+export interface ProviderSwitchReport {
+  from: string;
+  to: string;
+  previousGateSummary: string | null;
+  requiresReview: boolean;
+  message: string;
+}
+
+export interface InstalledModel {
+  manifest: {
+    schemaVersion: number;
+    id: string;
+    name: string;
+    version: string;
+    author: string;
+    description: string;
+    task: string;
+    topologyId: string;
+    input: {
+      width: number;
+      height: number;
+      layout: string;
+      normalization: string;
+      cropMargin: number;
+    };
+    output: { layout: string; coordinate: string };
+    license: {
+      name: string;
+      url: string | null;
+      commercialUseClaimed: boolean;
+      redistributionClaimed: boolean;
+      note: string;
+    };
+    sha256: string;
+    fileName: string;
+    sourceUrl: string | null;
+    sourcePath: string;
+    importedAt: string;
+    validation: {
+      ok: boolean;
+      sha256: string;
+      fileSize: number;
+      inputShape: (number | null)[];
+      outputShape: (number | null)[];
+      operatorCount: number;
+      elapsedMs: number;
+      warnings: string[];
+      errors: string[];
+    } | null;
+  };
+  directory: string;
+  modelPath: string;
+  present: boolean;
+  sha256Matches: boolean;
+  validationOk: boolean;
+  error: string | null;
+}
+
+export interface ImportFaceModelInput {
+  source: string;
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  sourceUrl?: string | null;
+  licenseName: string;
+  licenseUrl?: string | null;
+  licenseCommercialClaimed: boolean;
+  licenseRedistributionClaimed: boolean;
+  licenseNote: string;
+  normalization: "zeroToOne" | "minusOneToOne" | "imagenet" | "raw255";
+  outputCoordinate: "normalizedCrop" | "pixelCrop";
+  cropMargin: number;
 }

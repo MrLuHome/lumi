@@ -43,6 +43,9 @@ mod tests {
     fn half_alpha_is_linear() {
         let original = [0, 0, 0, 0];
         let warped = [10000, 20000, 30000, 40000];
-        assert_eq!(mix_pixel(&original, &warped, 0.5), [5000, 10000, 15000, 20000]);
+        assert_eq!(
+            mix_pixel(&original, &warped, 0.5),
+            [5000, 10000, 15000, 20000]
+        );
     }
 }

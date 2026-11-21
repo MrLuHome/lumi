@@ -192,7 +192,10 @@ pub fn cmyk_to_srgb(
             ]),
         );
     }
-    Ok((out, "CMYK → sRGB（无 Profile，通用公式，基础质量）".to_string()))
+    Ok((
+        out,
+        "CMYK → sRGB（无 Profile，通用公式，基础质量）".to_string(),
+    ))
 }
 
 /// 核心 16-bit RGB 转换。
@@ -228,7 +231,9 @@ fn convert(
 
     let mut out: Image16 = ImageBuffer::new(width, image.height());
     for (index, pixel) in dst.iter().enumerate() {
-        let alpha = image.get_pixel(index as u32 % width, index as u32 / width).0[3];
+        let alpha = image
+            .get_pixel(index as u32 % width, index as u32 / width)
+            .0[3];
         out.put_pixel(
             index as u32 % width,
             index as u32 / width,
@@ -358,9 +363,7 @@ mod tests {
             max = max.max(delta);
         }
         let average = sum / PATCHES.len() as f32;
-        eprintln!(
-            "ColorChecker sRGB→AdobeRGB→sRGB：平均 ΔE00 {average:.3}，最大 ΔE00 {max:.3}"
-        );
+        eprintln!("ColorChecker sRGB→AdobeRGB→sRGB：平均 ΔE00 {average:.3}，最大 ΔE00 {max:.3}");
         assert!(average < 1.0, "平均色差过大：{average}");
         assert!(max < 2.5, "单块最大色差过大：{max}");
     }

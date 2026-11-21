@@ -5,10 +5,10 @@
 
 use crate::ai_engine::retouch::filter::{box_mean, guided_filter, RgbPlanes};
 use crate::ai_engine::skin_segmentation::SkinMask;
+use crate::error::AppResult;
 use crate::image_engine::buffer::{Image16, CHANNEL_MAX};
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::params::BeautyParams;
-use crate::error::AppResult;
 
 pub fn smooth_skin(
     image: &mut Image16,

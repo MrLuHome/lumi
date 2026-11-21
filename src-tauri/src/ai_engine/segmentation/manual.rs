@@ -18,11 +18,12 @@ pub fn build_manual_mask(image: &Image16, params: &SubjectMaskParams) -> Subject
     let (width, height) = image.dimensions();
     let mut alpha = vec![0.0f32; width as usize * height as usize];
     // 普通笔触先叠加；前景/背景标记后执行，优先级更高，用于局部修正误判。
-    for stroke in params
-        .strokes
-        .iter()
-        .filter(|stroke| matches!(stroke.kind, SubjectMaskStrokeKind::Paint | SubjectMaskStrokeKind::Erase))
-    {
+    for stroke in params.strokes.iter().filter(|stroke| {
+        matches!(
+            stroke.kind,
+            SubjectMaskStrokeKind::Paint | SubjectMaskStrokeKind::Erase
+        )
+    }) {
         rasterize_stroke(&mut alpha, width, height, stroke);
     }
     for stroke in params
@@ -101,13 +102,7 @@ fn rasterize_stroke(alpha: &mut [f32], width: u32, height: u32, stroke: &Subject
                 if x > x1 as usize || x < x0 as usize {
                     continue;
                 }
-                let distance = distance_to_polyline(
-                    x as f32,
-                    y as f32,
-                    &stroke.points,
-                    w,
-                    h,
-                );
+                let distance = distance_to_polyline(x as f32, y as f32, &stroke.points, w, h);
                 let normalized = distance / radius_px;
                 if normalized >= 1.0 {
                     continue;
@@ -128,13 +123,7 @@ fn rasterize_stroke(alpha: &mut [f32], width: u32, height: u32, stroke: &Subject
         });
 }
 
-fn distance_to_polyline(
-    px: f32,
-    py: f32,
-    points: &[MaskPoint],
-    width: f32,
-    height: f32,
-) -> f32 {
+fn distance_to_polyline(px: f32, py: f32, points: &[MaskPoint], width: f32, height: f32) -> f32 {
     if points.len() == 1 {
         let dx = px - points[0].x * width;
         let dy = py - points[0].y * height;
@@ -231,10 +220,7 @@ mod tests {
             radius: 0.05,
             hardness: 50.0,
             strength: 100.0,
-            points: vec![
-                MaskPoint { x: 0.2, y: 0.5 },
-                MaskPoint { x: 0.8, y: 0.5 },
-            ],
+            points: vec![MaskPoint { x: 0.2, y: 0.5 }, MaskPoint { x: 0.8, y: 0.5 }],
         };
         let mask = build_manual_mask(&image, &params(stroke));
         assert!(mask.alpha[50 * 100 + 50] > 0.9);

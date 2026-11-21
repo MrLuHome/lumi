@@ -83,7 +83,10 @@ pub struct RgbPlanes {
 }
 
 impl RgbPlanes {
-    pub fn from_image(image: &crate::image_engine::buffer::Image16, mask: &super::SkinMask) -> Self {
+    pub fn from_image(
+        image: &crate::image_engine::buffer::Image16,
+        mask: &super::SkinMask,
+    ) -> Self {
         let width = mask.width;
         let height = mask.height;
         let mut planes = [

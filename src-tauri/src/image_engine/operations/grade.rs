@@ -77,7 +77,13 @@ impl GradePlan {
         let lut_strength = self
             .lut
             .as_ref()
-            .map(|_| params.lut.as_ref().map(|s| s.strength / 100.0).unwrap_or(0.0))
+            .map(|_| {
+                params
+                    .lut
+                    .as_ref()
+                    .map(|s| s.strength / 100.0)
+                    .unwrap_or(0.0)
+            })
             .unwrap_or(0.0);
 
         par_pixels_mut(image, |_, _, pixel| {
@@ -211,8 +217,9 @@ fn apply_hsl(rgb: [f32; 3], plans: &[HslPlan]) -> [f32; 3] {
     let normalized = total_weight.max(1.0);
     let new_hue = (hue + hue_shift / normalized).rem_euclid(360.0);
     let new_saturation = (saturation * (1.0 + sat_shift / normalized)).clamp(0.0, 1.0);
-    let new_lightness =
-        (lightness + lum_shift / normalized * 0.22 * (1.0 - (lightness - 0.5).abs())).clamp(0.0, 1.0);
+    let new_lightness = (lightness
+        + lum_shift / normalized * 0.22 * (1.0 - (lightness - 0.5).abs()))
+    .clamp(0.0, 1.0);
     let (r, g, b) = crate::image_engine::color::hsl_to_rgb(new_hue, new_saturation, new_lightness);
     [r, g, b]
 }
@@ -281,7 +288,10 @@ mod tests {
             .apply(&mut output, &CancelToken::default())
             .unwrap();
         let result = pixel(&output);
-        assert!(result[1] > 20_000, "正方向偏移应把红色推向橙/黄色（绿通道升高）");
+        assert!(
+            result[1] > 20_000,
+            "正方向偏移应把红色推向橙/黄色（绿通道升高）"
+        );
     }
 
     #[test]

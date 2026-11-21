@@ -69,7 +69,9 @@ pub async fn preview_subject_mask(
     .map_err(|error| crate::error::AppError::Task(error.to_string()))?
 }
 
-fn fit_preview(image: &crate::image_engine::buffer::Image16) -> crate::image_engine::buffer::Image16 {
+fn fit_preview(
+    image: &crate::image_engine::buffer::Image16,
+) -> crate::image_engine::buffer::Image16 {
     // 预览已限制在 1800px；这里只做上限保护，避免异常缓存尺寸。
     crate::image_engine::buffer::fit_within(image, crate::image_engine::PREVIEW_MAX_EDGE)
 }
@@ -79,12 +81,7 @@ fn overlay_image(mask: &segmentation::SubjectMask) -> crate::image_engine::buffe
     let height = mask.height.max(1);
     crate::image_engine::buffer::Image16::from_fn(width, height, |x, y| {
         let alpha = mask.alpha[y as usize * width as usize + x as usize].clamp(0.0, 1.0);
-        image::Rgba([
-            65535,
-            12000,
-            12000,
-            (alpha * 65535.0 * 0.72).round() as u16,
-        ])
+        image::Rgba([65535, 12000, 12000, (alpha * 65535.0 * 0.72).round() as u16])
     })
 }
 

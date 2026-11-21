@@ -171,7 +171,8 @@ fn evaluate(points: &[CurvePoint], tangents: &[f32], x: f32) -> f32 {
     let h10 = t3 - 2.0 * t2 + t;
     let h01 = -2.0 * t3 + 3.0 * t2;
     let h11 = t3 - t2;
-    let value = h00 * p0.y + h10 * dx * tangents[index] + h01 * p1.y + h11 * dx * tangents[index + 1];
+    let value =
+        h00 * p0.y + h10 * dx * tangents[index] + h01 * p1.y + h11 * dx * tangents[index + 1];
     value.clamp(0.0, 1.0)
 }
 
@@ -209,7 +210,9 @@ impl Lut3D {
                 continue;
             }
             if upper.starts_with("LUT_1D_SIZE") {
-                return Err(AppError::Unsupported("暂不支持 1D LUT，请使用 .cube 3D LUT".into()));
+                return Err(AppError::Unsupported(
+                    "暂不支持 1D LUT，请使用 .cube 3D LUT".into(),
+                ));
             }
             if upper.starts_with("TITLE") || upper.starts_with("DOMAIN_") {
                 continue;
@@ -260,9 +263,7 @@ impl Lut3D {
         let fg = gf - g0 as f32;
         let fb = bf - b0 as f32;
 
-        let at = |r: usize, g: usize, b: usize| -> [f32; 3] {
-            self.data[r + g * n + b * n * n]
-        };
+        let at = |r: usize, g: usize, b: usize| -> [f32; 3] { self.data[r + g * n + b * n * n] };
         let lerp = |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] {
             [
                 a[0] + (b[0] - a[0]) * t,

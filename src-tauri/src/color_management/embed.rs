@@ -52,7 +52,9 @@ fn embed_jpeg(mut data: Vec<u8>, icc: &[u8]) -> AppResult<Vec<u8>> {
     const CHUNK: usize = 65517;
     let chunks: Vec<&[u8]> = icc.chunks(CHUNK).collect();
     if chunks.len() > 255 {
-        return Err(AppError::Unsupported("ICC 过大，超过 JPEG APP2 上限".into()));
+        return Err(AppError::Unsupported(
+            "ICC 过大，超过 JPEG APP2 上限".into(),
+        ));
     }
     let mut payload = Vec::with_capacity(icc.len() + chunks.len() * 16);
     for (index, chunk) in chunks.iter().enumerate() {
@@ -135,9 +137,12 @@ fn embed_png(mut data: Vec<u8>, icc: &[u8]) -> AppResult<Vec<u8>> {
 fn extract_png(data: &[u8]) -> AppResult<Option<Vec<u8>>> {
     let mut index = 8usize;
     while index + 12 <= data.len() {
-        let length =
-            u32::from_be_bytes([data[index], data[index + 1], data[index + 2], data[index + 3]])
-                as usize;
+        let length = u32::from_be_bytes([
+            data[index],
+            data[index + 1],
+            data[index + 2],
+            data[index + 3],
+        ]) as usize;
         if index + 12 + length > data.len() {
             break;
         }
@@ -230,9 +235,7 @@ mod tests {
 
     fn fake_png() -> Vec<u8> {
         let mut data = PNG_SIGNATURE.to_vec();
-        let ihdr = [
-            0u8, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0, 0, 0, 0, 0,
-        ];
+        let ihdr = [0u8, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0, 0, 0, 0, 0];
         data.extend_from_slice(&(13u32).to_be_bytes());
         data.extend_from_slice(b"IHDR");
         data.extend_from_slice(&ihdr[..13]);

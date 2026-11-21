@@ -16,10 +16,19 @@ pub enum ControlTag {
     /// 背景外圈或五官锚点，永远不移动。
     Fixed,
     /// 脸型轮廓环，`ring` 为 0..=3（内到外）。
-    Face { ring: usize },
-    Eye { side: u8, ring: usize },
-    Nose { ring: usize },
-    Mouth { ring: usize },
+    Face {
+        ring: usize,
+    },
+    Eye {
+        side: u8,
+        ring: usize,
+    },
+    Nose {
+        ring: usize,
+    },
+    Mouth {
+        ring: usize,
+    },
 }
 
 #[derive(Debug, Clone)]

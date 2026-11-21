@@ -349,6 +349,12 @@ export interface EditorState {
   setWarpFeather: (value: number) => void;
   setShowMesh: (value: boolean) => void;
   updateFaceShape: (faceId: number, key: FaceShapeKey, value: number) => void;
+  /** LEVEL 3 精确五官参数；只有该人脸门控解锁后才应调用。 */
+  updateFaceFeature: (
+    faceId: number,
+    group: "eyes" | "nose" | "mouth" | "chin",
+    patch: Partial<Record<string, number>>,
+  ) => void;
   appendWarpStroke: (faceId: number, stroke: WarpStroke) => void;
   undoWarpStroke: (faceId: number) => void;
   clearWarpStrokes: (faceId: number) => void;
@@ -1172,6 +1178,21 @@ export function createEditorStore() {
             })),
           `面部塑形 · ${key}`,
           `reshape:${faceId}:${key}`,
+        );
+      },
+
+      updateFaceFeature: (faceId, group, patch) => {
+        const state = get();
+        const face = selectActiveFace(state);
+        const uuid = face?.uuid ?? "";
+        apply(
+          (current) =>
+            withFaceReshape(current, faceId, uuid, (entry) => ({
+              ...entry,
+              [group]: { ...entry[group], ...patch },
+            })),
+          `精确五官 · ${group}`,
+          `reshape:${faceId}:${group}`,
         );
       },
 

@@ -132,10 +132,19 @@ fn raw_preview_and_export_share_develop() {
 }
 
 fn probe(path: &Path) {
-    let info = raw::raw_info(path).unwrap_or_else(|err| panic!("{} 元数据读取失败：{err}", path.display()));
+    let info = raw::raw_info(path)
+        .unwrap_or_else(|err| panic!("{} 元数据读取失败：{err}", path.display()));
 
-    assert!(info.width > 0 && info.height > 0, "{} 有效宽高为 0", path.display());
-    assert!(info.raw_width > 0 && info.raw_height > 0, "{} 原始宽高为 0", path.display());
+    assert!(
+        info.width > 0 && info.height > 0,
+        "{} 有效宽高为 0",
+        path.display()
+    );
+    assert!(
+        info.raw_width > 0 && info.raw_height > 0,
+        "{} 原始宽高为 0",
+        path.display()
+    );
     assert!(
         !info.cfa.pattern.is_empty(),
         "{} 没有从文件得到 CFA 排列",
@@ -171,7 +180,10 @@ fn probe(path: &Path) {
         "{} 有效像素总数为 0",
         path.display()
     );
-    assert_eq!(linear.pixel_count(), (linear.width * linear.height) as usize);
+    assert_eq!(
+        linear.pixel_count(),
+        (linear.width * linear.height) as usize
+    );
     assert_eq!(linear.cfa, info.cfa.pattern);
 
     let preview = raw::embedded_preview(path)
@@ -185,11 +197,21 @@ fn probe(path: &Path) {
         info.white_level,
         info.camera_matrix,
         info.exif.timestamp,
-        if info.has_embedded_preview { "有" } else { "无" },
+        if info.has_embedded_preview {
+            "有"
+        } else {
+            "无"
+        },
         info.preview,
         preview
             .as_ref()
-            .map(|p| format!("{} {}×{} {} 字节", p.format, p.width, p.height, p.data.len()))
+            .map(|p| format!(
+                "{} {}×{} {} 字节",
+                p.format,
+                p.width,
+                p.height,
+                p.data.len()
+            ))
             .unwrap_or_else(|| "不可用".to_string()),
     );
     eprintln!(
@@ -201,10 +223,13 @@ fn probe(path: &Path) {
         linear.white_balance
     );
 
-    assert_eq!(linear.white_balance, [
-        info.white_balance.cam_mul[0],
-        info.white_balance.cam_mul[1],
-        info.white_balance.cam_mul[2],
-        info.white_balance.cam_mul[3],
-    ]);
+    assert_eq!(
+        linear.white_balance,
+        [
+            info.white_balance.cam_mul[0],
+            info.white_balance.cam_mul[1],
+            info.white_balance.cam_mul[2],
+            info.white_balance.cam_mul[3],
+        ]
+    );
 }

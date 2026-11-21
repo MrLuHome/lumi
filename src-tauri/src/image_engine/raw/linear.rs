@@ -81,8 +81,11 @@ pub(crate) fn from_raw(file: &RawFile) -> RawResult<LinearImage> {
             Some((rows, cols, offsets)) => {
                 for col in 0..width {
                     let value = pixels[src_row + col] as i32;
-                    let color = cfa_color(file.filters, top as u32 + row as u32, left as u32 + col as u32)
-                        as usize;
+                    let color = cfa_color(
+                        file.filters,
+                        top as u32 + row as u32,
+                        left as u32 + col as u32,
+                    ) as usize;
                     let offset = offsets[(row % rows) * cols + (col % cols)] as i32;
                     let black = base[color] as i32 + offset;
                     data[dst_row + col] = (value - black).clamp(0, u16::MAX as i32) as u16;
@@ -91,8 +94,11 @@ pub(crate) fn from_raw(file: &RawFile) -> RawResult<LinearImage> {
             None => {
                 for col in 0..width {
                     let value = pixels[src_row + col] as i32;
-                    let color = cfa_color(file.filters, top as u32 + row as u32, left as u32 + col as u32)
-                        as usize;
+                    let color = cfa_color(
+                        file.filters,
+                        top as u32 + row as u32,
+                        left as u32 + col as u32,
+                    ) as usize;
                     let black = base[color] as i32;
                     data[dst_row + col] = (value - black).clamp(0, u16::MAX as i32) as u16;
                 }

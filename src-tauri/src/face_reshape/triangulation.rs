@@ -178,13 +178,15 @@ mod tests {
         let triangles = delaunay(&points);
         assert!(triangles.len() >= 4);
         for triangle in &triangles {
-            assert!(triangle_area(
-                points[triangle[0]],
-                points[triangle[1]],
-                points[triangle[2]]
-            )
-            .abs()
-                > 0.01);
+            assert!(
+                triangle_area(
+                    points[triangle[0]],
+                    points[triangle[1]],
+                    points[triangle[2]]
+                )
+                .abs()
+                    > 0.01
+            );
         }
     }
 

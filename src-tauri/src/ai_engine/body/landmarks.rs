@@ -43,7 +43,8 @@ impl BodyMetrics {
 
     pub fn sampled(&self, fraction: f32) -> Option<SilhouetteRow> {
         let y = self.top + self.height() * fraction.clamp(0.0, 1.0);
-        self.row_at(y).map(|(left, right)| SilhouetteRow { y, left, right })
+        self.row_at(y)
+            .map(|(left, right)| SilhouetteRow { y, left, right })
     }
 }
 

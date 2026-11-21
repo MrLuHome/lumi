@@ -94,45 +94,47 @@ pub fn demosaic(image: &LinearImage, mode: DemosaicMode) -> RawResult<RgbLinear>
     let color_at = |x: usize, y: usize| -> u8 { map[y & 1][x & 1] };
 
     let mut data = vec![0u16; width * height * 3];
-    data.par_chunks_mut(3).enumerate().for_each(|(index, pixel)| {
-        let x = index % width;
-        let y = index / width;
-        let (xi, yi) = (x as isize, y as isize);
-        let center = sample(xi, yi);
-        let center_color = color_at(x, y);
+    data.par_chunks_mut(3)
+        .enumerate()
+        .for_each(|(index, pixel)| {
+            let x = index % width;
+            let y = index / width;
+            let (xi, yi) = (x as isize, y as isize);
+            let center = sample(xi, yi);
+            let center_color = color_at(x, y);
 
-        let rgb = match mode {
-            DemosaicMode::Bilinear => {
-                let mut sums = [0.0f32; 3];
-                let mut counts = [0u32; 3];
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        let color = color_at(
-                            (xi + dx).clamp(0, width as isize - 1) as usize,
-                            (yi + dy).clamp(0, height as isize - 1) as usize,
-                        );
-                        sums[color as usize] += sample(xi + dx, yi + dy);
-                        counts[color as usize] += 1;
+            let rgb = match mode {
+                DemosaicMode::Bilinear => {
+                    let mut sums = [0.0f32; 3];
+                    let mut counts = [0u32; 3];
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            let color = color_at(
+                                (xi + dx).clamp(0, width as isize - 1) as usize,
+                                (yi + dy).clamp(0, height as isize - 1) as usize,
+                            );
+                            sums[color as usize] += sample(xi + dx, yi + dy);
+                            counts[color as usize] += 1;
+                        }
                     }
+                    let mut out = [0.0f32; 3];
+                    for channel in 0..3 {
+                        out[channel] = if counts[channel] == 0 {
+                            0.0
+                        } else {
+                            sums[channel] / counts[channel] as f32
+                        };
+                    }
+                    out[center_color as usize] = center;
+                    out
                 }
-                let mut out = [0.0f32; 3];
-                for channel in 0..3 {
-                    out[channel] = if counts[channel] == 0 {
-                        0.0
-                    } else {
-                        sums[channel] / counts[channel] as f32
-                    };
-                }
-                out[center_color as usize] = center;
-                out
-            }
-            DemosaicMode::Mhc => mhc_pixel(&sample, &color_at, x, y, center, center_color),
-        };
+                DemosaicMode::Mhc => mhc_pixel(&sample, &color_at, x, y, center, center_color),
+            };
 
-        pixel[0] = rgb[0].clamp(0.0, 1.0).mul_add(65535.0, 0.5) as u16;
-        pixel[1] = rgb[1].clamp(0.0, 1.0).mul_add(65535.0, 0.5) as u16;
-        pixel[2] = rgb[2].clamp(0.0, 1.0).mul_add(65535.0, 0.5) as u16;
-    });
+            pixel[0] = rgb[0].clamp(0.0, 1.0).mul_add(65535.0, 0.5) as u16;
+            pixel[1] = rgb[1].clamp(0.0, 1.0).mul_add(65535.0, 0.5) as u16;
+            pixel[2] = rgb[2].clamp(0.0, 1.0).mul_add(65535.0, 0.5) as u16;
+        });
 
     Ok(RgbLinear {
         width: image.width,
@@ -178,10 +180,36 @@ fn mhc_pixel(
         let horizontal = color_at(x.saturating_add(1), y);
         let r_horizontal = horizontal == 0;
         rgb[0] = channel_at_green(
-            center, e, w, n, s, ee, ww, nn, ss, ne, nw, se, sw, r_horizontal,
+            center,
+            e,
+            w,
+            n,
+            s,
+            ee,
+            ww,
+            nn,
+            ss,
+            ne,
+            nw,
+            se,
+            sw,
+            r_horizontal,
         );
         rgb[2] = channel_at_green(
-            center, e, w, n, s, ee, ww, nn, ss, ne, nw, se, sw, !r_horizontal,
+            center,
+            e,
+            w,
+            n,
+            s,
+            ee,
+            ww,
+            nn,
+            ss,
+            ne,
+            nw,
+            se,
+            sw,
+            !r_horizontal,
         );
     } else {
         // R/B 点：G = 4 邻域平均 + α·Δ(R/B)，α = 1/2；另一色 = 对角平均 + γ·Δ，γ = 3/4。

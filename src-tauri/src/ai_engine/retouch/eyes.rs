@@ -10,10 +10,10 @@ use crate::ai_engine::retouch::filter::luma;
 use crate::ai_engine::retouch::lab::{chroma, lab_to_srgb, srgb_to_lab};
 use crate::ai_engine::retouch::smoothing::line_smoothing;
 use crate::ai_engine::skin_segmentation::SkinMask;
+use crate::error::AppResult;
 use crate::image_engine::buffer::{Image16, CHANNEL_MAX};
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::params::BeautyParams;
-use crate::error::AppResult;
 
 pub fn treat_eye_area(
     image: &mut Image16,
@@ -49,13 +49,10 @@ pub fn treat_eye_area(
                 if mask.alpha[index] <= 0.02 {
                     continue;
                 }
-                let (u, v) = geometry.to_local(
-                    (mask.x0 + x as i32) as f32,
-                    (mask.y0 + y as i32) as f32,
-                );
-                let weight = under_eye_weight(u, v, eye_right)
-                    .max(under_eye_weight(u, v, eye_left))
-                    * 0.85;
+                let (u, v) =
+                    geometry.to_local((mask.x0 + x as i32) as f32, (mask.y0 + y as i32) as f32);
+                let weight =
+                    under_eye_weight(u, v, eye_right).max(under_eye_weight(u, v, eye_left)) * 0.85;
                 if weight <= 0.02 {
                     continue;
                 }
@@ -113,8 +110,7 @@ pub fn treat_eye_area(
                     continue;
                 }
                 let (u, v) = geometry.to_local(image_x as f32, image_y as f32);
-                let eye = eye_ring_weight(u, v, eye_right)
-                    .max(eye_ring_weight(u, v, eye_left))
+                let eye = eye_ring_weight(u, v, eye_right).max(eye_ring_weight(u, v, eye_left))
                     * (beauty.eye_lines / 100.0);
                 let forehead = forehead_weight(u, v) * (beauty.forehead_lines / 100.0);
                 let naso = nasolabial_weight(u, v) * (beauty.nasolabial / 100.0);
@@ -147,9 +143,11 @@ pub(crate) fn under_eye_weight(u: f32, v: f32, eye: (f32, f32)) -> f32 {
     let distance = (((u - eye.0) / 0.34).powi(2) + ((v - eye.1 - 0.30) / 0.20).powi(2)).sqrt();
     let ellipse = 1.0 - smoothstep(0.65, 1.0, distance);
     // 避开眼球与眉毛。
-    let eye_guard = smoothstep(0.85, 1.05, (((u - eye.0) / 0.32).powi(2)
-        + ((v - eye.1) / 0.22).powi(2))
-    .sqrt());
+    let eye_guard = smoothstep(
+        0.85,
+        1.05,
+        (((u - eye.0) / 0.32).powi(2) + ((v - eye.1) / 0.22).powi(2)).sqrt(),
+    );
     let brow_guard = smoothstep(-0.10, -0.02, v - eye.1);
     ellipse * eye_guard * brow_guard
 }

@@ -432,8 +432,15 @@ pub fn analyze(
         "明暗对比",
         Some(stats.std),
         "",
-        if stats.std < 0.06 { MetricStatus::LowConfidence } else { MetricStatus::Ok },
-        format!("标准差 {:.3}，P5 {:.2} / P95 {:.2}", stats.std, stats.p05, stats.p95),
+        if stats.std < 0.06 {
+            MetricStatus::LowConfidence
+        } else {
+            MetricStatus::Ok
+        },
+        format!(
+            "标准差 {:.3}，P5 {:.2} / P95 {:.2}",
+            stats.std, stats.p05, stats.p95
+        ),
     ));
     metrics.push(metric(
         "exposure.clipHighlights",
@@ -457,7 +464,10 @@ pub fn analyze(
         Some(stats.r_mean - stats.b_mean),
         "",
         MetricStatus::Ok,
-        format!("R {:.3} / G {:.3} / B {:.3}", stats.r_mean, stats.g_mean, stats.b_mean),
+        format!(
+            "R {:.3} / G {:.3} / B {:.3}",
+            stats.r_mean, stats.g_mean, stats.b_mean
+        ),
     ));
     metrics.push(metric(
         "color.saturation",
@@ -519,7 +529,10 @@ pub fn analyze(
             "highlights",
             params.highlights,
             -(stats.highlight_clip * 100.0 * 9.0),
-            format!("高光裁切 {:.1}%，建议压回高光细节", stats.highlight_clip * 100.0),
+            format!(
+                "高光裁切 {:.1}%，建议压回高光细节",
+                stats.highlight_clip * 100.0
+            ),
             0.78,
             -38.0,
             -4.0,
@@ -536,7 +549,10 @@ pub fn analyze(
             "shadows",
             params.shadows,
             stats.shadow_clip * 100.0 * 7.0,
-            format!("暗部压死 {:.1}%，建议恢复暗部层次", stats.shadow_clip * 100.0),
+            format!(
+                "暗部压死 {:.1}%，建议恢复暗部层次",
+                stats.shadow_clip * 100.0
+            ),
             0.75,
             4.0,
             36.0,
@@ -720,7 +736,11 @@ pub fn analyze(
         "人脸数量",
         Some(faces.len() as f32),
         "张",
-        if faces.is_empty() { MetricStatus::NoData } else { MetricStatus::Ok },
+        if faces.is_empty() {
+            MetricStatus::NoData
+        } else {
+            MetricStatus::Ok
+        },
         if faces.is_empty() {
             "未检测到人脸；不生成人像参数建议".to_string()
         } else {
@@ -734,12 +754,23 @@ pub fn analyze(
         Some(if mask_ready { 1.0 } else { 0.0 }),
         "",
         MetricStatus::Ok,
-        if mask_ready { "已绘制手动蒙版" } else { "未绘制手动蒙版" }.to_string(),
+        if mask_ready {
+            "已绘制手动蒙版"
+        } else {
+            "未绘制手动蒙版"
+        }
+        .to_string(),
     ));
     metrics.push(metric(
         "portrait.beautyParams",
         "已有美肤参数",
-        Some(params.faces.iter().filter(|face| face.beauty.is_active()).count() as f32),
+        Some(
+            params
+                .faces
+                .iter()
+                .filter(|face| face.beauty.is_active())
+                .count() as f32,
+        ),
         "张人脸",
         MetricStatus::Ok,
         "来自当前编辑参数，不重新运行皮肤模型".to_string(),
@@ -747,7 +778,11 @@ pub fn analyze(
     metrics.push(metric(
         "portrait.background",
         "背景分离",
-        Some(if params.background.is_active() { 1.0 } else { 0.0 }),
+        Some(if params.background.is_active() {
+            1.0
+        } else {
+            0.0
+        }),
         "",
         MetricStatus::Ok,
         if params.background.is_active() {
@@ -937,8 +972,14 @@ mod tests {
     fn no_face_produces_no_beauty_suggestions() {
         let image = uniform(40000, 32, 32);
         let report = analyze(&image, &[], &params(), RetouchMode::Standard);
-        assert!(report.suggestions.iter().all(|item| item.target != "faceBeauty"));
-        assert!(report.warnings.iter().any(|text| text.contains("未检测到人脸")));
+        assert!(report
+            .suggestions
+            .iter()
+            .all(|item| item.target != "faceBeauty"));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|text| text.contains("未检测到人脸")));
     }
 
     #[test]
@@ -978,6 +1019,8 @@ mod tests {
             width: 0.2,
             height: 0.2,
             landmarks: Vec::new(),
+            dense: None,
+            level3: None,
         }
     }
 
@@ -1020,8 +1063,18 @@ mod tests {
 
     #[test]
     fn warm_and_cool_images_get_opposite_temperature_suggestions() {
-        let warm = analyze(&colored(52000, 40000, 28000), &[], &params(), RetouchMode::Standard);
-        let cool = analyze(&colored(28000, 40000, 52000), &[], &params(), RetouchMode::Standard);
+        let warm = analyze(
+            &colored(52000, 40000, 28000),
+            &[],
+            &params(),
+            RetouchMode::Standard,
+        );
+        let cool = analyze(
+            &colored(28000, 40000, 52000),
+            &[],
+            &params(),
+            RetouchMode::Standard,
+        );
         let warm_temperature = warm
             .suggestions
             .iter()
@@ -1040,7 +1093,12 @@ mod tests {
 
     #[test]
     fn saturation_extremes_are_handled_in_both_directions() {
-        let gray = analyze(&uniform(30000, 48, 48), &[], &params(), RetouchMode::Standard);
+        let gray = analyze(
+            &uniform(30000, 48, 48),
+            &[],
+            &params(),
+            RetouchMode::Standard,
+        );
         assert!(
             gray.suggestions
                 .iter()
@@ -1060,7 +1118,12 @@ mod tests {
     #[test]
     fn multi_face_uses_real_count_and_conservative_beauty_template() {
         let faces = [face(1, "face-a"), face(2, "face-b")];
-        let report = analyze(&uniform(32000, 48, 48), &faces, &params(), RetouchMode::Standard);
+        let report = analyze(
+            &uniform(32000, 48, 48),
+            &faces,
+            &params(),
+            RetouchMode::Standard,
+        );
         assert_eq!(report.faces, 2);
         let count = report
             .metrics
@@ -1116,9 +1179,8 @@ mod tests {
             ] {
                 let report = analyze(&image, &[], &params(), mode);
                 for item in &report.suggestions {
-                    if let Some((_, min, max)) = limits
-                        .iter()
-                        .find(|(field, _, _)| *field == item.field)
+                    if let Some((_, min, max)) =
+                        limits.iter().find(|(field, _, _)| *field == item.field)
                     {
                         assert!(
                             item.suggested >= *min && item.suggested <= *max,
@@ -1138,7 +1200,12 @@ mod tests {
 
     #[test]
     fn every_no_data_metric_has_an_explicit_status_not_fake_ok() {
-        let report = analyze(&uniform(40000, 32, 32), &[], &params(), RetouchMode::Standard);
+        let report = analyze(
+            &uniform(40000, 32, 32),
+            &[],
+            &params(),
+            RetouchMode::Standard,
+        );
         let faces = report
             .metrics
             .iter()

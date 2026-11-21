@@ -10,10 +10,10 @@ use std::collections::VecDeque;
 
 use crate::ai_engine::retouch::filter::{box_mean, luma};
 use crate::ai_engine::skin_segmentation::SkinMask;
+use crate::error::AppResult;
 use crate::image_engine::buffer::{Image16, CHANNEL_MAX};
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::params::RepairPoint;
-use crate::error::AppResult;
 
 #[derive(Debug, Default, Clone)]
 pub struct BlemishReport {
@@ -247,8 +247,8 @@ fn repair_pass(
             .partial_cmp(&b.mean_residual)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let repair_count = ((components.len() as f32 * amount / 100.0).ceil() as usize)
-        .clamp(1, components.len());
+    let repair_count =
+        ((components.len() as f32 * amount / 100.0).ceil() as usize).clamp(1, components.len());
 
     let mut member = vec![false; luma_plane.len()];
     let mut repaired = 0usize;
@@ -291,11 +291,7 @@ fn repair_pass(
             }
             continue;
         }
-        let fill = [
-            sum[0] / count,
-            sum[1] / count,
-            sum[2] / count,
-        ];
+        let fill = [sum[0] / count, sum[1] / count, sum[2] / count];
         let base_strength = 0.85 * (amount / 100.0).clamp(0.35, 1.0);
 
         for pixel in component.pixels.iter() {

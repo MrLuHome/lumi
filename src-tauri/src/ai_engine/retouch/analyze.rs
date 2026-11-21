@@ -10,10 +10,10 @@ use crate::ai_engine::retouch::eyes::{forehead_weight, nasolabial_weight, under_
 use crate::ai_engine::retouch::filter::{box_mean, luma};
 use crate::ai_engine::retouch::lab::{chroma, srgb_to_lab};
 use crate::ai_engine::skin_segmentation::SkinMask;
+use crate::error::AppResult;
 use crate::image_engine::buffer::{Image16, CHANNEL_MAX};
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::params::BeautyParams;
-use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,7 +161,8 @@ pub fn analyze_face(
             let image_x = mask.x0 as u32 + x;
             let image_y = mask.y0 as u32 + y;
             let (u, v) = geometry.to_local(image_x as f32, image_y as f32);
-            let eye_weight = under_eye_weight(u, v, eye_right).max(under_eye_weight(u, v, eye_left));
+            let eye_weight =
+                under_eye_weight(u, v, eye_right).max(under_eye_weight(u, v, eye_left));
             if eye_weight > 0.4 {
                 eye_texture += detail;
                 eye_count += 1.0;
@@ -184,8 +185,10 @@ pub fn analyze_face(
     let mean_a = sum_a / skin_pixels;
     let mean_b = sum_b / skin_pixels;
     let mean_chroma_sq = sum_chroma_sq / skin_pixels;
-    let chroma_variation =
-        (mean_chroma_sq - (mean_a * mean_a + mean_b * mean_b)).max(0.0).sqrt() / 10.0;
+    let chroma_variation = (mean_chroma_sq - (mean_a * mean_a + mean_b * mean_b))
+        .max(0.0)
+        .sqrt()
+        / 10.0;
     let dark_ratio = dark / skin_pixels;
     let highlight_ratio = highlight / skin_pixels;
     let skin_ratio = skin_pixels / total;
@@ -194,7 +197,11 @@ pub fn analyze_face(
     } else {
         0.0
     };
-    let eye_texture = if eye_count > 0.0 { eye_texture / eye_count } else { 0.0 };
+    let eye_texture = if eye_count > 0.0 {
+        eye_texture / eye_count
+    } else {
+        0.0
+    };
     let forehead_texture = if forehead_count > 0.0 {
         forehead_texture / forehead_count
     } else {

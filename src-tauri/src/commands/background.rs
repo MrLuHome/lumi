@@ -19,7 +19,10 @@ pub struct BackgroundImageInfo {
 pub fn pick_background_image() -> AppResult<Option<BackgroundImageInfo>> {
     let Some(path) = rfd::FileDialog::new()
         .set_title("选择背景图片")
-        .add_filter("图片", &["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp"])
+        .add_filter(
+            "图片",
+            &["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp"],
+        )
         .pick_file()
     else {
         return Ok(None);

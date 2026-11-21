@@ -23,6 +23,8 @@ fn face() -> FaceFrame {
             NormPoint { x: 0.45, y: 0.54 },
             NormPoint { x: 0.55, y: 0.54 },
         ],
+        dense: None,
+        level3: None,
     }
 }
 
@@ -122,7 +124,11 @@ fn level3_parameters_are_not_applied_in_production() {
     )
     .unwrap();
 
-    assert_eq!(rendered.into_raw(), image.into_raw(), "LEVEL 3 参数必须被忽略");
+    assert_eq!(
+        rendered.into_raw(),
+        image.into_raw(),
+        "LEVEL 3 参数必须被忽略"
+    );
     if let Some(entry) = report.reshape.first() {
         assert_eq!(entry.warped_pixels, 0);
     }

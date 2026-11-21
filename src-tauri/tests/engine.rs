@@ -34,7 +34,11 @@ fn temp_dir(name: &str) -> PathBuf {
 fn decodes_all_supported_formats() {
     for name in ["portrait.jpg", "portrait.webp"] {
         let decoded = decoder::decode(&fixture(name)).unwrap();
-        assert_eq!((decoded.image.width(), decoded.image.height()), (1680, 2240), "{name}");
+        assert_eq!(
+            (decoded.image.width(), decoded.image.height()),
+            (1680, 2240),
+            "{name}"
+        );
         assert_eq!(decoded.bit_depth, BitDepth::Eight, "{name}");
     }
     let webp = decoder::decode(&fixture("portrait.webp")).unwrap();
@@ -48,10 +52,17 @@ fn decodes_all_supported_formats() {
 #[test]
 fn preserves_transparency_and_16bit() {
     let png = decoder::decode(&fixture("transparent.png")).unwrap();
-    assert!(png.image.pixels().any(|pixel| pixel.0[3] < 65535), "透明 PNG 的 alpha 应保留");
+    assert!(
+        png.image.pixels().any(|pixel| pixel.0[3] < 65535),
+        "透明 PNG 的 alpha 应保留"
+    );
 
     let wide = decoder::decode(&fixture("sixteen_bit.png")).unwrap();
-    assert_eq!(wide.bit_depth, BitDepth::Sixteen, "16-bit PNG 不应被降成 8-bit");
+    assert_eq!(
+        wide.bit_depth,
+        BitDepth::Sixteen,
+        "16-bit PNG 不应被降成 8-bit"
+    );
 }
 
 #[test]
@@ -63,7 +74,10 @@ fn applies_exif_orientation() {
 #[test]
 fn corrupt_file_returns_explicit_error() {
     let error = decoder::decode(&fixture("corrupt.jpg")).unwrap_err();
-    assert!(matches!(error, AppError::Decode(_)), "损坏图片必须返回解码错误");
+    assert!(
+        matches!(error, AppError::Decode(_)),
+        "损坏图片必须返回解码错误"
+    );
 }
 
 #[test]
@@ -73,7 +87,11 @@ fn render_changes_pixels_and_reuses_neutral_input() {
     let cancel = CancelToken::default();
 
     let neutral = pipeline::render(&working, &EditParams::default(), &[], &cancel).unwrap();
-    assert_eq!(neutral.into_raw(), working.clone().into_raw(), "中性参数应原样复用");
+    assert_eq!(
+        neutral.into_raw(),
+        working.clone().into_raw(),
+        "中性参数应原样复用"
+    );
 
     let params = EditParams {
         exposure: 35.0,
@@ -88,7 +106,11 @@ fn render_changes_pixels_and_reuses_neutral_input() {
         working.clone().into_raw(),
         "调色应真正改变像素"
     );
-    assert_eq!(first.into_raw(), second.into_raw(), "相同参数必须得到确定性结果");
+    assert_eq!(
+        first.into_raw(),
+        second.into_raw(),
+        "相同参数必须得到确定性结果"
+    );
 }
 
 #[test]
@@ -122,9 +144,7 @@ fn preview_and_export_use_same_pipeline() {
     let started = std::time::Instant::now();
     let rendered_full = pipeline::render(&decoded.image, &params, &[], &cancel).unwrap();
     let full_ms = started.elapsed().as_millis();
-    eprintln!(
-        "[perf] render preview 1350x1800: {preview_ms} ms · full 1680x2240: {full_ms} ms"
-    );
+    eprintln!("[perf] render preview 1350x1800: {preview_ms} ms · full 1680x2240: {full_ms} ms");
     assert_eq!(
         (rendered_preview.width(), rendered_preview.height()),
         (1350, 1800)
@@ -215,7 +235,10 @@ fn project_roundtrip_keeps_params_and_masks() {
 #[test]
 fn high_resolution_image_is_handled_under_memory_limits() {
     let decoded = decoder::decode(&fixture("portrait_hires.jpg")).unwrap();
-    assert_eq!((decoded.image.width(), decoded.image.height()), (3360, 4480));
+    assert_eq!(
+        (decoded.image.width(), decoded.image.height()),
+        (3360, 4480)
+    );
     let preview = build_preview(&decoded.image, 1800);
     assert_eq!((preview.width(), preview.height()), (1350, 1800));
 }

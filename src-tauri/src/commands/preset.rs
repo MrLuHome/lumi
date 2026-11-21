@@ -79,11 +79,9 @@ impl PresetStore {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let temp = self
-            .path
-            .with_extension(format!("json.tmp-{}", now_ms()));
-        let data = serde_json::to_vec_pretty(&file)
-            .map_err(|error| AppError::Task(error.to_string()))?;
+        let temp = self.path.with_extension(format!("json.tmp-{}", now_ms()));
+        let data =
+            serde_json::to_vec_pretty(&file).map_err(|error| AppError::Task(error.to_string()))?;
         std::fs::write(&temp, data)?;
         if let Err(error) = std::fs::rename(&temp, &self.path) {
             std::fs::remove_file(&temp).ok();
@@ -92,7 +90,10 @@ impl PresetStore {
         Ok(())
     }
 
-    fn with_custom(&self, apply: impl FnOnce(&mut Vec<RetouchPreset>) -> AppResult<()>) -> AppResult<Vec<RetouchPreset>> {
+    fn with_custom(
+        &self,
+        apply: impl FnOnce(&mut Vec<RetouchPreset>) -> AppResult<()>,
+    ) -> AppResult<Vec<RetouchPreset>> {
         let mut guard = self
             .inner
             .lock()
@@ -168,7 +169,10 @@ impl PresetStore {
     }
 
     fn delete_custom(&self, preset_id: &str) -> AppResult<()> {
-        if builtin_presets().iter().any(|preset| preset.id == preset_id) {
+        if builtin_presets()
+            .iter()
+            .any(|preset| preset.id == preset_id)
+        {
             return Err(AppError::InvalidInput("内置预设不能删除".into()));
         }
         self.with_custom(|list| {
@@ -615,7 +619,10 @@ mod tests {
         assert_eq!(custom[0].params.exposure, Some(18.0));
         // 内置预设由代码提供，不从用户文件加载，也不会被重复保存。
         assert!(reopened.find("builtin-cinematic-teal").is_some());
-        assert_eq!(reopened.find("builtin-cinematic-teal").unwrap().source, PresetSource::Builtin);
+        assert_eq!(
+            reopened.find("builtin-cinematic-teal").unwrap().source,
+            PresetSource::Builtin
+        );
         let raw = std::fs::read(dir.join("presets.json")).unwrap();
         let text = String::from_utf8(raw).unwrap();
         assert!(!text.contains("builtin-"), "用户文件不得写入内置预设");
@@ -632,7 +639,12 @@ mod tests {
             .save_custom(None, "空参数", "没有参数", PresetParams::default())
             .is_err());
         assert!(store
-            .save_custom(Some("builtin-cinematic-teal"), "改名", "", sample_params(10.0))
+            .save_custom(
+                Some("builtin-cinematic-teal"),
+                "改名",
+                "",
+                sample_params(10.0)
+            )
             .is_err());
         assert_eq!(store.custom().len(), 0);
         std::fs::remove_dir_all(&dir).ok();
@@ -726,9 +738,10 @@ mod tests {
         )
         .unwrap();
         let reopened = PresetStore::with_path(dir.join("presets.json"));
-        assert!(reopened.custom().is_empty(), "内置来源的记录不得被当成用户预设");
+        assert!(
+            reopened.custom().is_empty(),
+            "内置来源的记录不得被当成用户预设"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
-
-

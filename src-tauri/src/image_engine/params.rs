@@ -979,7 +979,8 @@ impl EditParams {
         ] {
             *value = value.clamp(0.0, 100.0);
         }
-        self.faces.retain(|face| face.beauty.is_active() || face.enabled);
+        self.faces
+            .retain(|face| face.beauty.is_active() || face.enabled);
         for face in self.faces.iter_mut() {
             for value in [
                 &mut face.beauty.skin_smooth,
@@ -1009,14 +1010,19 @@ impl EditParams {
         self.manual_mask.strength = self.manual_mask.strength.clamp(0.0, 100.0);
         for stroke in self.manual_mask.strokes.iter_mut() {
             stroke.radius = stroke.radius.clamp(0.002, 0.25);
-            stroke.points.retain(|point| point.x.is_finite() && point.y.is_finite());
+            stroke
+                .points
+                .retain(|point| point.x.is_finite() && point.y.is_finite());
             for point in stroke.points.iter_mut() {
                 point.x = point.x.clamp(0.0, 1.0);
                 point.y = point.y.clamp(0.0, 1.0);
             }
         }
-        self.manual_mask.strokes.retain(|stroke| !stroke.points.is_empty());
-        self.repair_points.retain(|point| point.x.is_finite() && point.y.is_finite());
+        self.manual_mask
+            .strokes
+            .retain(|stroke| !stroke.points.is_empty());
+        self.repair_points
+            .retain(|point| point.x.is_finite() && point.y.is_finite());
         self.repair_points.truncate(200);
         for point in self.repair_points.iter_mut() {
             point.x = point.x.clamp(0.0, 1.0);
@@ -1076,12 +1082,18 @@ impl EditParams {
             && clamped.grain == 0.0
             && clamped.vignette == 0.0
             && clamped.skin_smooth == 0.0
-            && clamped.faces.iter().all(|face| !face.enabled || face.beauty.is_neutral())
+            && clamped
+                .faces
+                .iter()
+                .all(|face| !face.enabled || face.beauty.is_neutral())
             && clamped
                 .reshape
                 .iter()
                 .all(|face| !face.enabled || !face.is_active())
-            && clamped.body.iter().all(|entry| !entry.enabled || !entry.is_active())
+            && clamped
+                .body
+                .iter()
+                .all(|entry| !entry.enabled || !entry.is_active())
             && !clamped.background.is_active()
             && clamped.hsl.is_neutral()
             && clamped.curves.is_neutral()
@@ -1118,17 +1130,24 @@ impl EditParams {
 
     /// 是否存在任何启用的塑形参数。
     pub fn has_reshape(&self) -> bool {
-        self.reshape.iter().any(|face| face.enabled && face.is_active())
+        self.reshape
+            .iter()
+            .any(|face| face.enabled && face.is_active())
     }
 
     /// 是否存在需要人物蒙版的工作（蒙版笔触 / 身材 / 背景）。
     pub fn has_subject_mask(&self) -> bool {
         self.subject_mask.has_content()
-            || self.body.iter().any(|entry| entry.enabled && entry.has_own_mask())
+            || self
+                .body
+                .iter()
+                .any(|entry| entry.enabled && entry.has_own_mask())
     }
 
     pub fn has_body(&self) -> bool {
-        self.body.iter().any(|entry| entry.enabled && entry.is_active())
+        self.body
+            .iter()
+            .any(|entry| entry.enabled && entry.is_active())
     }
 
     pub fn has_background(&self) -> bool {
@@ -1136,7 +1155,9 @@ impl EditParams {
     }
 
     pub fn body_match(&self, subject_id: &str) -> Option<&BodyAdjust> {
-        self.body.iter().find(|entry| entry.subject_id == subject_id)
+        self.body
+            .iter()
+            .find(|entry| entry.subject_id == subject_id)
     }
 
     /// 所有会参与渲染的身材对象（稳定 UUID 顺序）。
@@ -1231,11 +1252,7 @@ fn clamp_body(entries: &mut Vec<BodyAdjust>) {
 fn clamp_background(bg: &mut BackgroundParams) {
     bg.blur = bg.blur.clamp(0.0, 100.0);
     bg.depth = bg.depth.clamp(0.0, 100.0);
-    clamp_signed(&mut [
-        &mut bg.brightness,
-        &mut bg.temperature,
-        &mut bg.saturation,
-    ]);
+    clamp_signed(&mut [&mut bg.brightness, &mut bg.temperature, &mut bg.saturation]);
     bg.image_scale = bg.image_scale.clamp(50.0, 200.0);
     bg.image_offset_x = bg.image_offset_x.clamp(-100.0, 100.0);
     bg.image_offset_y = bg.image_offset_y.clamp(-100.0, 100.0);
@@ -1248,9 +1265,11 @@ fn clamp_background(bg: &mut BackgroundParams) {
         stop.position = stop.position.clamp(0.0, 100.0);
         stop.color = sanitize_hex_color(&stop.color, "#000000");
     }
-    bg.gradient
-        .stops
-        .sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
+    bg.gradient.stops.sort_by(|a, b| {
+        a.position
+            .partial_cmp(&b.position)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     if bg.gradient.stops.is_empty() {
         bg.gradient = BackgroundGradient::default();
     }
@@ -1330,7 +1349,9 @@ fn clamp_reshape(entries: &mut Vec<FaceReshape>) {
             &mut face.chin.jawline,
         ]);
 
-        face.manual.strokes.retain(|stroke| !stroke.points.is_empty());
+        face.manual
+            .strokes
+            .retain(|stroke| !stroke.points.is_empty());
         face.manual.strokes.truncate(400);
         for stroke in face.manual.strokes.iter_mut() {
             stroke.radius = stroke.radius.clamp(0.004, 0.25);
@@ -1345,7 +1366,9 @@ fn clamp_reshape(entries: &mut Vec<FaceReshape>) {
                 point.y = point.y.clamp(0.0, 1.0);
             }
         }
-        face.manual.strokes.retain(|stroke| !stroke.points.is_empty());
+        face.manual
+            .strokes
+            .retain(|stroke| !stroke.points.is_empty());
     }
     entries.retain(|face| face.enabled || face.is_active());
     entries.sort_by_key(|face| face.face_id);

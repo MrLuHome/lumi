@@ -23,10 +23,7 @@ pub fn apply(points: &mut [ControlPoint], params: &EyeShape, eyes: &[[f32; 2]; 2
             continue;
         }
         let center = eyes[side];
-        let rel = [
-            point.local_to[0] - center[0],
-            point.local_to[1] - center[1],
-        ];
+        let rel = [point.local_to[0] - center[0], point.local_to[1] - center[1]];
 
         let side_size = if side == 0 { params.left } else { params.right } / 100.0;
         let size = (params.size / 100.0 + side_size).clamp(-1.5, 1.5);
@@ -48,8 +45,14 @@ pub fn apply(points: &mut [ControlPoint], params: &EyeShape, eyes: &[[f32; 2]; 2
             // 眼角：以外眼角方向做很小的垂直剪切，默认 0，不改变正常眼型。
             let rx = if ring >= 2 { 0.14 } else { 0.30 };
             let corner_weight = smoothstep(0.45, 1.0, (rel[0] / rx).abs());
-            dv += (params.corner / 100.0) * 0.018 * corner_weight
-                * if rel[0] * center[0].signum() > 0.0 { 1.0 } else { -1.0 };
+            dv += (params.corner / 100.0)
+                * 0.018
+                * corner_weight
+                * if rel[0] * center[0].signum() > 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
         }
 
         shift(point, du, dv);

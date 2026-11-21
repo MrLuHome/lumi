@@ -80,7 +80,9 @@ impl ImageCache {
         }
 
         let decoded = decoder::decode(&canonical)?;
-        let file_size = std::fs::metadata(&canonical).map(|meta| meta.len()).unwrap_or(0);
+        let file_size = std::fs::metadata(&canonical)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
         let (width, height) = decoded.image.dimensions();
         let alpha = has_alpha(&decoded.image);
         let preview = Arc::new(crate::image_engine::preview::build_preview(
@@ -205,7 +207,11 @@ impl FaceRepository {
 
     /// 项目重开匹配成功后，把持久 UUID 写回本次检测结果。
     /// 只按检测临时 `id` 定位，匹配不到的人脸保持原样；不会删除任何记录。
-    pub fn apply_identities(&self, path: &Path, assignments: &[(u32, String)]) -> Option<CachedFaces> {
+    pub fn apply_identities(
+        &self,
+        path: &Path,
+        assignments: &[(u32, String)],
+    ) -> Option<CachedFaces> {
         if assignments.is_empty() {
             return self.get(path);
         }
@@ -228,6 +234,41 @@ impl FaceRepository {
         guard.trackers.insert(canonical, FaceTracker);
         Some(cached)
     }
+    /// 项目重开后恢复稠密关键点与 LEVEL 3 门控。
+    ///
+    /// 只在 UUID 精确匹配时写入；没有稠密记录的旧项目保持 5 点，
+    /// 渲染层会按门控锁定 LEVEL 3，不会把旧参数当作已解锁。
+    pub fn attach_analyses(
+        &self,
+        path: &Path,
+        items: &[(
+            String,
+            Option<crate::face_intelligence::types::DenseFace>,
+            Option<crate::face_intelligence::quality::Level3Gate>,
+        )],
+    ) -> Option<CachedFaces> {
+        if items.is_empty() {
+            return self.get(path);
+        }
+        let canonical = canonical_key(path);
+        let mut guard = self.inner.lock().ok()?;
+        let new_version = guard.version.saturating_add(1);
+        let cached = {
+            let entry = guard.entries.get_mut(&canonical)?;
+            for face in entry.faces.iter_mut() {
+                if let Some((_, dense, level3)) =
+                    items.iter().find(|(uuid, _, _)| *uuid == face.uuid)
+                {
+                    face.dense = dense.clone();
+                    face.level3 = level3.clone();
+                }
+            }
+            entry.version = new_version;
+            entry.clone()
+        };
+        guard.version = new_version;
+        Some(cached)
+    }
 }
 
 fn canonical_key(path: &Path) -> PathBuf {
@@ -237,7 +278,8 @@ fn canonical_key(path: &Path) -> PathBuf {
 /// 缓存条目 -> 前端需要的缩略图 / 预览图 data URL。
 pub fn encode_urls(cached: &CachedImage) -> AppResult<(String, String)> {
     let thumb = encode_thumb(&cached.thumb, cached.has_alpha)?;
-    let preview = crate::image_engine::encoder::preview_data_url(&cached.preview, cached.has_alpha)?;
+    let preview =
+        crate::image_engine::encoder::preview_data_url(&cached.preview, cached.has_alpha)?;
     Ok((thumb, preview))
 }
 

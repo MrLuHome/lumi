@@ -80,7 +80,9 @@ pub async fn save_project(
             }
         };
         project::save(&target, &project)?;
-        let bytes = std::fs::metadata(&target).map(|meta| meta.len()).unwrap_or(0);
+        let bytes = std::fs::metadata(&target)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
         Ok(ProjectSaved {
             path: target.to_string_lossy().into_owned(),
             bytes,
@@ -165,10 +167,7 @@ pub async fn auto_white_balance(
     tauri::async_runtime::spawn_blocking(move || {
         let cached = cache.load(Path::new(&path))?;
         let (temperature, tint) = estimate_white_balance(&cached.preview);
-        Ok(WhiteBalanceEstimate {
-            temperature,
-            tint,
-        })
+        Ok(WhiteBalanceEstimate { temperature, tint })
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?

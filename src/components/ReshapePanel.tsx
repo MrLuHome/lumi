@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -48,14 +48,6 @@ const WARP_TOOLS: { mode: WarpMode; label: string }[] = [
   { mode: "restore", label: "恢复" },
 ];
 
-const LEVEL3_LABELS: Record<string, string> = {
-  "eyes.*": "眼部（眼形 / 眼角 / 眼距）",
-  "nose.*": "鼻部（鼻梁 / 鼻翼 / 鼻头）",
-  "mouth.*": "唇部（唇宽 / 上下唇 / 嘴角）",
-  "chin.*": "下巴（长度 / 宽度 / 尖度）",
-  lands: "精确面部关键点",
-};
-
 // Zustand 快照必须保持引用稳定：选择器里每次返回新的 `[]` 会让 React 判定快照持续变化，
 // 触发 “getSnapshot should be cached” 并最终抛 maximum update depth（窗口空白）。
 const EMPTY_MATCHES: FaceMatchEntry[] = [];
@@ -86,6 +78,7 @@ export function ReshapePanel({ photo }: ReshapePanelProps) {
   const setWarpFeather = useEditorStore((state) => state.setWarpFeather);
   const setShowMesh = useEditorStore((state) => state.setShowMesh);
   const updateFaceShape = useEditorStore((state) => state.updateFaceShape);
+  const updateFaceFeature = useEditorStore((state) => state.updateFaceFeature);
   const undoWarpStroke = useEditorStore((state) => state.undoWarpStroke);
   const clearWarpStrokes = useEditorStore((state) => state.clearWarpStrokes);
   const resetFaceReshape = useEditorStore((state) => state.resetFaceReshape);
@@ -112,12 +105,56 @@ export function ReshapePanel({ photo }: ReshapePanelProps) {
 
   const entry = face ? findFaceReshape(params, face.id) ?? defaultFaceReshape(face.id, face.uuid) : null;
   const strokeCount = entry?.manual.strokes.length ?? 0;
-  const disabledReasons = useMemo(() => {
-    if (!capability) return [];
-    return capability.disabled
-      .filter((item) => LEVEL3_LABELS[item.key])
-      .map((item) => ({ label: LEVEL3_LABELS[item.key]!, reason: item.reason }));
-  }, [capability]);
+  const level3 = faces.find((item) => item.id === face?.id)?.level3 ?? null;
+  const level3Unlocked =
+    !!level3 && (level3.eyes.enabled || level3.nose.enabled || level3.mouth.enabled || level3.chin.enabled);
+  const level3Groups = [
+    {
+      key: "eyes" as const,
+      label: "眼部",
+      gate: level3?.eyes,
+      fields: [
+        ["size", "整体大小"],
+        ["width", "眼形宽度"],
+        ["height", "眼形高度"],
+        ["distance", "眼距"],
+        ["corner", "眼角"],
+      ] as const,
+    },
+    {
+      key: "nose" as const,
+      label: "鼻部",
+      gate: level3?.nose,
+      fields: [
+        ["bridge", "鼻梁宽度"],
+        ["alar", "鼻翼宽度"],
+        ["tip", "鼻头大小"],
+        ["balance", "鼻部平衡"],
+      ] as const,
+    },
+    {
+      key: "mouth" as const,
+      label: "唇部",
+      gate: level3?.mouth,
+      fields: [
+        ["width", "唇宽"],
+        ["upper", "上唇厚度"],
+        ["lower", "下唇厚度"],
+        ["corner", "嘴角"],
+        ["size", "唇部大小"],
+      ] as const,
+    },
+    {
+      key: "chin" as const,
+      label: "下巴",
+      gate: level3?.chin,
+      fields: [
+        ["length", "下巴长度"],
+        ["width", "下巴宽度"],
+        ["jawline", "下颌线"],
+      ] as const,
+    },
+  ];
 
   if (!photo) return null;
 
@@ -333,24 +370,67 @@ export function ReshapePanel({ photo }: ReshapePanelProps) {
         </p>
       ) : null}
 
-      <div className="reshape-section-title is-disabled">
-        精确五官（LEVEL 3 · 未启用）
+      <div className={`reshape-section-title ${level3Unlocked ? "" : "is-disabled"}`}>
+        精确五官（LEVEL 3 · {level3Unlocked ? "已解锁" : "未解锁"})
       </div>
-      <div className="reshape-disabled">
-        <p>
-          {capability?.note ??
-            "精确眼睑、鼻翼、唇线、眼角需要稠密关键点模型；当前授权未核实，保持禁用。"}
-        </p>
-        {disabledReasons.slice(0, 5).map((item) => (
-          <div className="reshape-disabled-row" key={item.label}>
-            <span>{item.label}</span>
-            <span className="reshape-disabled-reason">{item.reason}</span>
-          </div>
-        ))}
-        {disabledReasons.length > 5 ? (
-          <p className="param-hint">其余 {disabledReasons.length - 5} 项同样依赖稠密关键点，未启用。</p>
-        ) : null}
-      </div>
+      {level3Unlocked ? (
+        <>
+          <p className="param-hint">
+            当前人脸使用 {level3?.providerId ?? "AI Provider"} 的稠密轮廓（{level3?.topologyId ?? "—"}）。
+            参数只作用于实测通过的部位。
+          </p>
+          {level3Groups.map((group) =>
+            group.gate?.enabled ? (
+              <div key={group.key}>
+                <div className="reshape-section-title is-sub">{group.label}</div>
+                {group.fields.map(([field, label]) => (
+                  <Slider
+                    key={field}
+                    label={label}
+                    value={
+                      entry
+                        ? ((entry[group.key] as unknown as Record<string, number>)[field] ?? 0)
+                        : 0
+                    }
+                    min={-100}
+                    max={100}
+                    defaultValue={0}
+                    onChange={(value) => updateFaceFeature(face.id, group.key, { [field]: value })}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="reshape-disabled-row" key={group.key}>
+                <span>{group.label}</span>
+                <span className="reshape-disabled-reason">
+                  {group.gate?.reason ?? "该部位未通过质量验证"}
+                </span>
+              </div>
+            ),
+          )}
+        </>
+      ) : (
+        <div className="reshape-disabled">
+          <p>
+            {level3?.summary ??
+              capability?.note ??
+              "精确眼睑、鼻翼、唇线、眼角需要先通过质量验证的稠密关键点。当前人脸保持锁定，不会产生任何 LEVEL 3 变形。"}
+          </p>
+          {level3Groups.map((group) => (
+            <div className="reshape-disabled-row" key={group.key}>
+              <span>{group.label}</span>
+              <span className="reshape-disabled-reason">
+                {group.gate?.reason ?? "缺少稠密关键点"}
+              </span>
+            </div>
+          ))}
+          {!level3 ? (
+            <p className="param-hint">
+              在「AI 人像」工作区选择 Provider 并点击「分析当前照片」，或先运行「质量验证」。
+            </p>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

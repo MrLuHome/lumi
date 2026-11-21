@@ -80,8 +80,7 @@ pub async fn raw_preview(path: String, max_edge: Option<u32>) -> AppResult<RawPr
 pub async fn raw_develop(path: String, params: RawDevelopParams) -> AppResult<RawDevelopResult> {
     tauri::async_runtime::spawn_blocking(move || {
         let params = validate_params(&params)?;
-        let DevelopedImage { image, report } =
-            raw::develop_from_path(Path::new(&path), &params)?;
+        let DevelopedImage { image, report } = raw::develop_from_path(Path::new(&path), &params)?;
         let canvas = crate::image_engine::preview::encode_canvas(&image, false)?;
         Ok(RawDevelopResult {
             url: canvas.url,

@@ -12,10 +12,10 @@ pub mod tone;
 use crate::ai_engine::face_frame::FaceGeometry;
 use crate::ai_engine::retouch::blemish::BlemishReport;
 use crate::ai_engine::skin_segmentation::SkinMask;
+use crate::error::AppResult;
 use crate::image_engine::buffer::Image16;
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::params::{BeautyParams, RepairPoint};
-use crate::error::AppResult;
 
 #[derive(Debug, Clone, Default)]
 pub struct FaceRetouchReport {

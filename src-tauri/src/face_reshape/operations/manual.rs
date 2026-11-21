@@ -37,10 +37,7 @@ impl ManualEffect {
         {
             return None;
         }
-        Some(
-            (y - self.rect.y0) as usize * self.rect.width as usize
-                + (x - self.rect.x0) as usize,
-        )
+        Some((y - self.rect.y0) as usize * self.rect.width as usize + (x - self.rect.x0) as usize)
     }
 
     fn displacement(&self, x: f32, y: f32) -> (f32, f32) {
@@ -60,10 +57,8 @@ impl ManualEffect {
         let (dx01, dy01) = sample(fx as i32, fy as i32 + 1);
         let (dx11, dy11) = sample(fx as i32 + 1, fy as i32 + 1);
         (
-            (dx00 * (1.0 - tx) + dx10 * tx) * (1.0 - ty)
-                + (dx01 * (1.0 - tx) + dx11 * tx) * ty,
-            (dy00 * (1.0 - tx) + dy10 * tx) * (1.0 - ty)
-                + (dy01 * (1.0 - tx) + dy11 * tx) * ty,
+            (dx00 * (1.0 - tx) + dx10 * tx) * (1.0 - ty) + (dx01 * (1.0 - tx) + dx11 * tx) * ty,
+            (dy00 * (1.0 - tx) + dy10 * tx) * (1.0 - ty) + (dy01 * (1.0 - tx) + dy11 * tx) * ty,
         )
     }
 
@@ -144,14 +139,7 @@ pub fn build(
                     &mut restore
                 };
                 for index in 0..points.len() {
-                    stamp(
-                        target,
-                        &rect,
-                        points[index],
-                        radius,
-                        feather,
-                        1.0,
-                    );
+                    stamp(target, &rect, points[index], radius, feather, 1.0);
                 }
             }
             WarpMode::ZoomIn | WarpMode::ZoomOut => {
@@ -232,9 +220,8 @@ pub fn build(
             dx[index] *= max_total / magnitude;
             dy[index] *= max_total / magnitude;
         }
-        max_displacement = max_displacement.max(
-            (dx[index] * dx[index] + dy[index] * dy[index]).sqrt(),
-        );
+        max_displacement =
+            max_displacement.max((dx[index] * dx[index] + dy[index] * dy[index]).sqrt());
     }
 
     Some(ManualEffect {
@@ -391,9 +378,7 @@ fn bilinear(image: &Image16, x: f32, y: f32) -> [u16; 4] {
     for channel in 0..4 {
         let top = p00[channel] as f32 * (1.0 - tx) + p10[channel] as f32 * tx;
         let bottom = p01[channel] as f32 * (1.0 - tx) + p11[channel] as f32 * tx;
-        output[channel] = (top * (1.0 - ty) + bottom * ty)
-            .round()
-            .clamp(0.0, 65535.0) as u16;
+        output[channel] = (top * (1.0 - ty) + bottom * ty).round().clamp(0.0, 65535.0) as u16;
     }
     output
 }
@@ -406,12 +391,7 @@ mod tests {
 
     fn image() -> Image16 {
         Image16::from_fn(64, 64, |x, y| {
-            Rgba([
-                (x * 900) as u16,
-                (y * 900) as u16,
-                20_000,
-                65535,
-            ])
+            Rgba([(x * 900) as u16, (y * 900) as u16, 20_000, 65535])
         })
     }
 

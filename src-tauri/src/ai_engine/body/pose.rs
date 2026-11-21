@@ -52,8 +52,7 @@ pub fn capability() -> PoseCapability {
         provider: provider.id().into(),
         license,
         reason: provider.reason().into(),
-        note: "身材参数只改变人物蒙版内的轮廓，不移动背景，也不修改人脸。"
-            .into(),
+        note: "身材参数只改变人物蒙版内的轮廓，不移动背景，也不修改人脸。".into(),
     }
 }
 

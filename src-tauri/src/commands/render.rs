@@ -7,15 +7,15 @@ use std::time::Instant;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::error::{AppError, AppResult};
 use crate::ai_engine::face_frame::FaceFrame;
+use crate::error::{AppError, AppResult};
+use crate::face_reshape::FaceReshapeReport;
 use crate::image_engine::buffer::fit_within;
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::export::{self, ExportFormat, ExportSettings};
-use crate::face_reshape::FaceReshapeReport;
 use crate::image_engine::params::EditParams;
-use crate::image_engine::preview::{encode_canvas, DETAIL_MAX_EDGE};
 use crate::image_engine::pipeline;
+use crate::image_engine::preview::{encode_canvas, DETAIL_MAX_EDGE};
 use crate::state::{FaceRepository, ImageCache};
 
 /// 渲染任务注册表：只保留最新请求，旧请求在阶段边界主动退出。
@@ -145,7 +145,13 @@ fn emit_progress(app: &AppHandle, request_id: u64, stage: &'static str, progress
 
 fn cache_key(path: &Path, params: &EditParams, max_edge: u32, faces: &str) -> String {
     let serialized = serde_json::to_string(params).unwrap_or_default();
-    format!("{}|{}|{}|{}", path.to_string_lossy(), max_edge, faces, serialized)
+    format!(
+        "{}|{}|{}|{}",
+        path.to_string_lossy(),
+        max_edge,
+        faces,
+        serialized
+    )
 }
 
 /// 渲染画布预览。`maxEdge` 用于 100% / 200% 高清查看，
@@ -212,9 +218,15 @@ pub async fn render_preview(
             .unwrap_or_default();
 
         emit_progress(&app, request_id, "开始", 0.02);
-        let rendered = pipeline::render_with_report(&working, &params, &faces, &cancel, &mut |value, stage| {
-            emit_progress(&app, request_id, stage, value);
-        })?;
+        let rendered = pipeline::render_with_report(
+            &working,
+            &params,
+            &faces,
+            &cancel,
+            &mut |value, stage| {
+                emit_progress(&app, request_id, stage, value);
+            },
+        )?;
         let (rendered, report) = rendered;
         let preview = encode_canvas(&rendered, has_alpha)?;
         cancel.check()?;
@@ -285,7 +297,10 @@ pub async fn export_image(
             let mut develop = raw_params.unwrap_or_default().sanitized();
             develop.max_edge = None;
             let developed = crate::image_engine::raw::develop_from_path(source, &develop)?;
-            (Arc::new(developed.image), crate::image_engine::decoder::BitDepth::Sixteen)
+            (
+                Arc::new(developed.image),
+                crate::image_engine::decoder::BitDepth::Sixteen,
+            )
         } else {
             let cached = cache.load(source)?;
             (cached.full.clone(), cached.depth)
@@ -321,19 +336,18 @@ pub async fn export_image(
         };
 
         emit_progress(&app, request_id, "全尺寸渲染", 0.05);
-        let rendered = pipeline::render_with_progress(&working, &params, &faces, &cancel, &mut |value, stage| {
-            emit_progress(&app, request_id, stage, 0.05 + value * 0.85);
-        })?;
+        let rendered = pipeline::render_with_progress(
+            &working,
+            &params,
+            &faces,
+            &cancel,
+            &mut |value, stage| {
+                emit_progress(&app, request_id, stage, 0.05 + value * 0.85);
+            },
+        )?;
         cancel.check()?;
         emit_progress(&app, request_id, "写出文件", 0.96);
-        let outcome = export::write(
-            &target,
-            &original,
-            &rendered,
-            settings,
-            depth,
-            Some(&color),
-        )?;
+        let outcome = export::write(&target, &original, &rendered, settings, depth, Some(&color))?;
         emit_progress(&app, request_id, "完成", 1.0);
 
         Ok(ExportResult {

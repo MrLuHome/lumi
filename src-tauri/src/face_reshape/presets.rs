@@ -72,9 +72,7 @@ mod tests {
             assert!(params.is_active());
             assert!(!preset.label().is_empty());
         }
-        assert!(
-            params(1, Preset::Defined).face.slim > params(1, Preset::Natural).face.slim
-        );
+        assert!(params(1, Preset::Defined).face.slim > params(1, Preset::Natural).face.slim);
     }
 
     #[test]

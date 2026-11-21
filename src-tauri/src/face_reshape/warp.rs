@@ -48,12 +48,18 @@ pub fn warp_mesh(
         if area.abs() < 0.5 {
             continue;
         }
-        let min_x = target.iter().map(|point| point[0]).fold(f32::INFINITY, f32::min);
+        let min_x = target
+            .iter()
+            .map(|point| point[0])
+            .fold(f32::INFINITY, f32::min);
         let max_x = target
             .iter()
             .map(|point| point[0])
             .fold(f32::NEG_INFINITY, f32::max);
-        let min_y = target.iter().map(|point| point[1]).fold(f32::INFINITY, f32::min);
+        let min_y = target
+            .iter()
+            .map(|point| point[1])
+            .fold(f32::INFINITY, f32::min);
         let max_y = target
             .iter()
             .map(|point| point[1])
@@ -130,9 +136,7 @@ pub fn sample_bilinear(image: &Image16, x: f32, y: f32) -> [u16; 4] {
     for channel in 0..4 {
         let top = p00[channel] as f32 * (1.0 - tx) + p10[channel] as f32 * tx;
         let bottom = p01[channel] as f32 * (1.0 - tx) + p11[channel] as f32 * tx;
-        output[channel] = (top * (1.0 - ty) + bottom * ty)
-            .round()
-            .clamp(0.0, 65535.0) as u16;
+        output[channel] = (top * (1.0 - ty) + bottom * ty).round().clamp(0.0, 65535.0) as u16;
     }
     output
 }
@@ -153,12 +157,7 @@ mod tests {
 
     fn gradient(width: u32, height: u32) -> Image16 {
         Image16::from_fn(width, height, |x, y| {
-            Rgba([
-                (x * 1200) as u16,
-                (y * 1200) as u16,
-                10_000,
-                65535,
-            ])
+            Rgba([(x * 1200) as u16, (y * 1200) as u16, 10_000, 65535])
         })
     }
 
@@ -250,6 +249,8 @@ mod tests {
                 NormPoint { x: 0.44, y: 0.58 },
                 NormPoint { x: 0.56, y: 0.58 },
             ],
+            dense: None,
+            level3: None,
         };
         let geometry =
             crate::ai_engine::face_frame::FaceGeometry::from_face(&face, 200, 200).unwrap();

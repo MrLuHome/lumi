@@ -79,8 +79,8 @@ impl AlphaRegion {
         if !self.rect.contains(x, y) {
             return 0.0;
         }
-        let index = (y - self.rect.y0) as usize * self.rect.width as usize
-            + (x - self.rect.x0) as usize;
+        let index =
+            (y - self.rect.y0) as usize * self.rect.width as usize + (x - self.rect.x0) as usize;
         self.alpha.get(index).copied().unwrap_or(0.0)
     }
 
@@ -196,6 +196,8 @@ mod tests {
                 NormPoint { x: 0.44, y: 0.58 },
                 NormPoint { x: 0.56, y: 0.58 },
             ],
+            dense: None,
+            level3: None,
         }
     }
 

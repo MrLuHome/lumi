@@ -57,8 +57,7 @@ pub fn blend(near: &Image16, far: &Image16, weight: &[f32]) -> Image16 {
         let b = far.get_pixel(x, y).0;
         let mut out = [0u16; 4];
         for channel in 0..4 {
-            out[channel] =
-                (a[channel] as f32 * (1.0 - t) + b[channel] as f32 * t).round() as u16;
+            out[channel] = (a[channel] as f32 * (1.0 - t) + b[channel] as f32 * t).round() as u16;
         }
         image::Rgba(out)
     })

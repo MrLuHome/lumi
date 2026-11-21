@@ -8,9 +8,7 @@ use lumi_retouch_lib::face_reshape::identity::{
     match_faces, source_hash, MatchConfidence, ProjectFace,
 };
 use lumi_retouch_lib::image_engine::export::ExportSettings;
-use lumi_retouch_lib::image_engine::params::{
-    EditParams, FaceBeauty, FaceReshape,
-};
+use lumi_retouch_lib::image_engine::params::{EditParams, FaceBeauty, FaceReshape};
 use lumi_retouch_lib::image_engine::project::{self, ProjectDoc, ProjectPhoto};
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -29,12 +27,29 @@ fn frame(id: u32, x: f32, y: f32) -> FaceFrame {
         width: 0.2,
         height: 0.24,
         landmarks: vec![
-            NormPoint { x: x + 0.04, y: y + 0.06 },
-            NormPoint { x: x + 0.16, y: y + 0.06 },
-            NormPoint { x: x + 0.10, y: y + 0.12 },
-            NormPoint { x: x + 0.07, y: y + 0.16 },
-            NormPoint { x: x + 0.13, y: y + 0.16 },
+            NormPoint {
+                x: x + 0.04,
+                y: y + 0.06,
+            },
+            NormPoint {
+                x: x + 0.16,
+                y: y + 0.06,
+            },
+            NormPoint {
+                x: x + 0.10,
+                y: y + 0.12,
+            },
+            NormPoint {
+                x: x + 0.07,
+                y: y + 0.16,
+            },
+            NormPoint {
+                x: x + 0.13,
+                y: y + 0.16,
+            },
         ],
+        dense: None,
+        level3: None,
     }
 }
 

@@ -133,6 +133,8 @@ export function TopBar({
             ["raw", "RAW"],
             ["color", "色彩"],
             ["performance", "性能"],
+            ["ai", "AI 人像"],
+            ["models", "模型库"],
             ["batch", "批量处理"],
           ] as [Workspace, string][]
         ).map(([value, label]) => (

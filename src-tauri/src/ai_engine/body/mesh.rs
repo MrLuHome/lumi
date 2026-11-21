@@ -144,7 +144,13 @@ pub fn warp_image(image: &Image16, field: &GridField, guard: &FaceGuard) -> Imag
 }
 
 /// 用同一个位移场采样 Alpha，保证像素与蒙版始终同步。
-pub fn warp_alpha(alpha: &[f32], width: u32, height: u32, field: &GridField, guard: &FaceGuard) -> Vec<f32> {
+pub fn warp_alpha(
+    alpha: &[f32],
+    width: u32,
+    height: u32,
+    field: &GridField,
+    guard: &FaceGuard,
+) -> Vec<f32> {
     if width == 0 || height == 0 || alpha.len() != width as usize * height as usize {
         return alpha.to_vec();
     }
@@ -210,8 +216,8 @@ fn sample_plane(values: &[f32], width: u32, height: u32, x: f32, y: f32) -> f32 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::constraints::FaceGuard;
+    use super::*;
     use image::Rgba;
 
     #[test]
@@ -219,7 +225,10 @@ mod tests {
         let image: Image16 = Image16::from_pixel(16, 16, Rgba([100, 200, 300, 65535]));
         let field = GridField::new(16, 16);
         let guard = FaceGuard::empty();
-        assert_eq!(warp_image(&image, &field, &guard).into_raw(), image.into_raw());
+        assert_eq!(
+            warp_image(&image, &field, &guard).into_raw(),
+            image.into_raw()
+        );
         let alpha = vec![0.5f32; 256];
         assert_eq!(warp_alpha(&alpha, 16, 16, &field, &guard), alpha);
     }

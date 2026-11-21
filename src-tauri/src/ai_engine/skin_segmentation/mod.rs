@@ -12,10 +12,10 @@ pub mod model;
 use image::Rgba;
 
 use crate::ai_engine::face_frame::{FaceFrame, FaceGeometry};
+use crate::error::AppResult;
 use crate::image_engine::buffer::{Image16, CHANNEL_MAX};
 use crate::image_engine::color::smoothstep;
 use crate::image_engine::params::{ManualMask, MaskStroke};
-use crate::error::AppResult;
 
 /// 局部蒙版，只保存人脸包围盒范围内的 alpha（0..1）。
 #[derive(Debug, Clone)]
@@ -32,7 +32,10 @@ impl SkinMask {
     pub fn at(&self, x: u32, y: u32) -> f32 {
         let local_x = x as i32 - self.x0;
         let local_y = y as i32 - self.y0;
-        if local_x < 0 || local_y < 0 || local_x >= self.width as i32 || local_y >= self.height as i32
+        if local_x < 0
+            || local_y < 0
+            || local_x >= self.width as i32
+            || local_y >= self.height as i32
         {
             return 0.0;
         }
@@ -40,14 +43,11 @@ impl SkinMask {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (u32, u32, f32)> + '_ {
-        self.alpha
-            .iter()
-            .enumerate()
-            .map(move |(index, value)| {
-                let local_x = index as u32 % self.width.max(1);
-                let local_y = index as u32 / self.width.max(1);
-                (self.x0 as u32 + local_x, self.y0 as u32 + local_y, *value)
-            })
+        self.alpha.iter().enumerate().map(move |(index, value)| {
+            let local_x = index as u32 % self.width.max(1);
+            let local_y = index as u32 / self.width.max(1);
+            (self.x0 as u32 + local_x, self.y0 as u32 + local_y, *value)
+        })
     }
 
     pub fn active_pixels(&self) -> usize {
@@ -130,8 +130,7 @@ fn build_mask_from_geometry(
 
             // 颈部候选区：权重更低，靠肤色似然把关，避免误伤衣服。
             let neck = if v > 1.28 && v < 2.35 {
-                let horizontal =
-                    1.0 - smoothstep(0.42, 0.72, u.abs() / 0.72);
+                let horizontal = 1.0 - smoothstep(0.42, 0.72, u.abs() / 0.72);
                 let vertical = smoothstep(1.28, 1.58, v) * (1.0 - smoothstep(2.02, 2.35, v));
                 horizontal * vertical * 0.55
             } else {
@@ -143,10 +142,17 @@ fn build_mask_from_geometry(
             }
 
             // 五官保护：眼睛、眉毛、鼻孔、嘴唇必须接近 0。
-            let eye_protect = ellipse(u, v, eye_right_local.0, eye_right_local.1, 0.30, 0.20)
-                .max(ellipse(u, v, eye_left_local.0, eye_left_local.1, 0.30, 0.20));
-            let brow_protect = ellipse(u, v, eye_right_local.0, -0.30, 0.36, 0.14)
-                .max(ellipse(u, v, eye_left_local.0, -0.30, 0.36, 0.14));
+            let eye_protect = ellipse(u, v, eye_right_local.0, eye_right_local.1, 0.30, 0.20).max(
+                ellipse(u, v, eye_left_local.0, eye_left_local.1, 0.30, 0.20),
+            );
+            let brow_protect = ellipse(u, v, eye_right_local.0, -0.30, 0.36, 0.14).max(ellipse(
+                u,
+                v,
+                eye_left_local.0,
+                -0.30,
+                0.36,
+                0.14,
+            ));
             let mouth_protect = ellipse(u, v, mouth_local.0, mouth_local.1, 0.44, 0.24);
             let nostril_protect = ellipse(u, v, nose_local.0, nose_local.1, 0.17, 0.12);
             let protect = 1.0
@@ -258,10 +264,22 @@ fn feature_protection(
             let x = x0 as u32 + local_x;
             let y = y0 as u32 + local_y;
             let (u, v) = geometry.to_local(x as f32, y as f32);
-            let eye = ellipse(u, v, eye_right_local.0, eye_right_local.1, 0.30, 0.20)
-                .max(ellipse(u, v, eye_left_local.0, eye_left_local.1, 0.30, 0.20));
-            let brow = ellipse(u, v, eye_right_local.0, -0.30, 0.36, 0.14)
-                .max(ellipse(u, v, eye_left_local.0, -0.30, 0.36, 0.14));
+            let eye = ellipse(u, v, eye_right_local.0, eye_right_local.1, 0.30, 0.20).max(ellipse(
+                u,
+                v,
+                eye_left_local.0,
+                eye_left_local.1,
+                0.30,
+                0.20,
+            ));
+            let brow = ellipse(u, v, eye_right_local.0, -0.30, 0.36, 0.14).max(ellipse(
+                u,
+                v,
+                eye_left_local.0,
+                -0.30,
+                0.36,
+                0.14,
+            ));
             let mouth = ellipse(u, v, mouth_local.0, mouth_local.1, 0.44, 0.24);
             let nose = ellipse(u, v, nose_local.0, nose_local.1, 0.17, 0.12);
             protect[(local_y * width + local_x) as usize] =
@@ -272,8 +290,8 @@ fn feature_protection(
 }
 
 fn ellipse(u: f32, v: f32, center_u: f32, center_v: f32, radius_u: f32, radius_v: f32) -> f32 {
-    let distance = (((u - center_u) / radius_u).powi(2) + ((v - center_v) / radius_v).powi(2))
-        .sqrt();
+    let distance =
+        (((u - center_u) / radius_u).powi(2) + ((v - center_v) / radius_v).powi(2)).sqrt();
     1.0 - smoothstep(0.72, 1.0, distance)
 }
 
@@ -332,8 +350,8 @@ fn stamp_stroke(
             for local_x in low_x..=high_x {
                 let px = x0 + local_x;
                 let py = y0 + local_y;
-                let distance = ((px as f32 - center_x).powi(2) + (py as f32 - center_y).powi(2))
-                    .sqrt();
+                let distance =
+                    ((px as f32 - center_x).powi(2) + (py as f32 - center_y).powi(2)).sqrt();
                 let falloff = 1.0 - smoothstep(0.55, 1.0, distance / radius);
                 if falloff <= 0.0 {
                     continue;
@@ -474,7 +492,11 @@ mod tests {
     use image::Rgba;
 
     fn skin_image(width: u32, height: u32) -> Image16 {
-        Image16::from_pixel(width, height, Rgba([214 * 257, 170 * 257, 140 * 257, 65535]))
+        Image16::from_pixel(
+            width,
+            height,
+            Rgba([214 * 257, 170 * 257, 140 * 257, 65535]),
+        )
     }
 
     fn frame(width: u32, height: u32) -> FaceFrame {
@@ -500,6 +522,8 @@ mod tests {
                 to_norm(center_x - d * 0.35, center_y + d * 0.95),
                 to_norm(center_x + d * 0.35, center_y + d * 0.95),
             ],
+            dense: None,
+            level3: None,
         }
     }
 

@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use crate::ai_engine::face_frame::{FaceFrame, FaceGeometry};
+use crate::face_intelligence::types::{DenseFace, RegionKind};
 use crate::face_reshape::mesh::{
     cached, ControlMesh, ControlPoint, ControlTag, MeshPreview, MESH_VERSION,
 };
@@ -98,12 +99,7 @@ fn to_pair(point: (f32, f32)) -> [f32; 2] {
     [point.0, point.1]
 }
 
-fn push_point(
-    points: &mut Vec<ControlPoint>,
-    local: [f32; 2],
-    tag: ControlTag,
-    weight: f32,
-) {
+fn push_point(points: &mut Vec<ControlPoint>, local: [f32; 2], tag: ControlTag, weight: f32) {
     points.push(ControlPoint {
         local,
         local_to: local,
@@ -134,8 +130,49 @@ fn push_ring(
     }
 }
 
+/// 把 Provider 输出的真实稠密轮廓加入控制网格。
+///
+/// 只有已通过质量门控的稠密数据才会出现在 `FaceFrame.dense` 中；
+/// 这里按区域语义（而不是某个模型的点序号）选择控制标签：
+/// - 脸缘 → 脸型外环；眼睑 → 对应眼的内环；鼻部 → 鼻内环；外唇 → 唇内环；
+/// - 内唇/鼻梁/眉毛 → 固定点，保护牙齿、鼻梁与眉毛不被拖动。
+fn push_dense_points(points: &mut Vec<ControlPoint>, geometry: &FaceGeometry, dense: &DenseFace) {
+    for region in &dense.regions {
+        let (tag, weight) = match region.kind {
+            RegionKind::FaceContour => (ControlTag::Face { ring: 3 }, 1.0),
+            RegionKind::RightEye => (ControlTag::Eye { side: 0, ring: 2 }, 1.0),
+            RegionKind::LeftEye => (ControlTag::Eye { side: 1, ring: 2 }, 1.0),
+            RegionKind::Nose => (ControlTag::Nose { ring: 2 }, 1.0),
+            RegionKind::OuterLips => (ControlTag::Mouth { ring: 2 }, 1.0),
+            RegionKind::InnerLips
+            | RegionKind::NoseCrest
+            | RegionKind::MedianLine
+            | RegionKind::LeftEyebrow
+            | RegionKind::RightEyebrow => (ControlTag::Fixed, 0.0),
+            _ => continue,
+        };
+        if region.points.len() < 3 {
+            continue;
+        }
+        let width = geometry.width as f32;
+        let height = geometry.height as f32;
+        for point in &region.points {
+            let (u, v) = geometry.to_local(point.x * width, point.y * height);
+            // 侧脸或异常输出可能落到很远的位置，越界点不进网格，避免拉坏背景。
+            if !u.is_finite() || !v.is_finite() || u.abs() > 3.0 || v.abs() > 3.0 {
+                continue;
+            }
+            push_point(points, [u, v], tag, weight);
+        }
+    }
+}
+
 /// 构建单张脸的控制网格（未做质量降强度，质量检查在 `quality` 中完成）。
-pub fn build(geometry: &FaceGeometry, params: &FaceReshape) -> ControlMesh {
+pub fn build(
+    geometry: &FaceGeometry,
+    params: &FaceReshape,
+    dense: Option<&DenseFace>,
+) -> ControlMesh {
     let mut points: Vec<ControlPoint> = Vec::with_capacity(180);
 
     // 脸型环与背景外圈。
@@ -220,6 +257,10 @@ pub fn build(geometry: &FaceGeometry, params: &FaceReshape) -> ControlMesh {
     }
     push_point(&mut points, mouth_center, ControlTag::Fixed, 0.0);
 
+    if let Some(dense) = dense {
+        push_dense_points(&mut points, geometry, dense);
+    }
+
     // 参数 → 局部位移。
     operations::face::apply(&mut points, &params.face);
     operations::eyes::apply(&mut points, &params.eyes, &eyes);
@@ -256,25 +297,42 @@ pub fn build(geometry: &FaceGeometry, params: &FaceReshape) -> ControlMesh {
     mesh
 }
 
-/// 带缓存的构建：网格只依赖人脸几何与塑形参数，滑杆重复计算会命中缓存。
-pub fn build_cached(geometry: &FaceGeometry, params: &FaceReshape) -> Arc<ControlMesh> {
+/// 带缓存的构建：网格只依赖人脸几何、稠密轮廓与塑形参数，滑杆重复计算会命中缓存。
+pub fn build_cached(
+    geometry: &FaceGeometry,
+    params: &FaceReshape,
+    dense: Option<&DenseFace>,
+) -> Arc<ControlMesh> {
     let key = format!(
-        "{}|{:.4};{:.4};{:.4};{:.4};{:.3};{}",
+        "{}|{:.4};{:.4};{:.4};{:.4};{:.3};{}|{}",
         MESH_VERSION,
         geometry.origin.0,
         geometry.origin.1,
         geometry.axis_x.0,
         geometry.axis_x.1,
         geometry.eye_distance,
-        serde_json::to_string(params).unwrap_or_default()
+        serde_json::to_string(params).unwrap_or_default(),
+        dense.map(DenseFace::fingerprint).unwrap_or_default()
     );
-    cached(key, || build(geometry, params))
+    cached(key, || build(geometry, params, dense))
 }
 
 /// 网格预览：真实控制点与三角形，用于前端“网格显示”。
-pub fn preview(face: &FaceFrame, width: u32, height: u32, params: &FaceReshape) -> Option<MeshPreview> {
+pub fn preview(
+    face: &FaceFrame,
+    width: u32,
+    height: u32,
+    params: &FaceReshape,
+) -> Option<MeshPreview> {
     let geometry = FaceGeometry::from_face(face, width, height).ok()?;
-    let mesh = build_cached(&geometry, params);
+    let dense = face.dense.as_ref();
+    let mesh = build_cached(&geometry, params, dense);
+    let dense_unlocked = dense.is_some()
+        && face
+            .level3
+            .as_ref()
+            .map(|gate| gate.any_enabled())
+            .unwrap_or(false);
     Some(MeshPreview {
         points: mesh.points.iter().map(|point| point.to).collect(),
         triangles: mesh
@@ -282,8 +340,14 @@ pub fn preview(face: &FaceFrame, width: u32, height: u32, params: &FaceReshape) 
             .iter()
             .map(|triangle| [triangle[0] as u32, triangle[1] as u32, triangle[2] as u32])
             .collect(),
-        dense_landmarks: false,
-        source: "yunet-5".to_string(),
+        dense_landmarks: dense_unlocked,
+        source: if dense_unlocked {
+            dense
+                .map(|value| value.provider_id.clone())
+                .unwrap_or_else(|| "yunet-5".into())
+        } else {
+            "yunet-5".to_string()
+        },
         version: mesh.version,
     })
 }
@@ -310,13 +374,15 @@ mod tests {
                 NormPoint { x: 0.44, y: 0.58 },
                 NormPoint { x: 0.56, y: 0.58 },
             ],
+            dense: None,
+            level3: None,
         }
     }
 
     #[test]
     fn build_creates_closed_mesh_and_fixed_background() {
         let geometry = FaceGeometry::from_face(&face(), 1000, 1000).unwrap();
-        let mesh = build(&geometry, &FaceReshape::new(1));
+        let mesh = build(&geometry, &FaceReshape::new(1), None);
         assert!(mesh.points.len() > 90);
         assert!(mesh.triangles.len() > 100);
         assert_eq!(mesh.flipped_triangles(), 0);
@@ -339,7 +405,7 @@ mod tests {
             },
             ..FaceReshape::new(1)
         };
-        let mesh = build(&geometry, &params);
+        let mesh = build(&geometry, &params, None);
         assert!(mesh.max_displacement() > 1.0);
         assert_eq!(mesh.flipped_triangles(), 0);
         for point in &mesh.points {
@@ -356,7 +422,7 @@ mod tests {
     #[test]
     fn signature_changes_with_parameters() {
         let geometry = FaceGeometry::from_face(&face(), 1000, 1000).unwrap();
-        let base = build(&geometry, &FaceReshape::new(1));
+        let base = build(&geometry, &FaceReshape::new(1), None);
         let changed = build(
             &geometry,
             &FaceReshape {
@@ -366,6 +432,7 @@ mod tests {
                 },
                 ..FaceReshape::new(1)
             },
+            None,
         );
         assert_ne!(base.signature, changed.signature);
     }

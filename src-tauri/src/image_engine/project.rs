@@ -435,6 +435,8 @@ mod tests {
             model: "yunet-5".into(),
             confidence: 0.94,
             mask_ref: None,
+            dense: None,
+            level3: None,
         };
         let project = ProjectDoc::new(
             vec![ProjectPhoto {
@@ -463,8 +465,8 @@ mod tests {
     #[test]
     fn v3_roundtrip_keeps_subject_body_and_mask_meta() {
         use crate::image_engine::params::{
-            BackgroundMode, BackgroundParams, BodyAdjust, BodyShape, MaskPoint,
-            SubjectMaskParams, SubjectMaskStroke, SubjectMaskStrokeKind,
+            BackgroundMode, BackgroundParams, BodyAdjust, BodyShape, MaskPoint, SubjectMaskParams,
+            SubjectMaskStroke, SubjectMaskStrokeKind,
         };
         let dir = std::env::temp_dir().join("lumi-project-v3");
         std::fs::create_dir_all(&dir).unwrap();

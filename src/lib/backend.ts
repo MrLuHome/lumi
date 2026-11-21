@@ -616,3 +616,58 @@ async function toBrowserAsset(file: File): Promise<PhotoAsset | null> {
     return null;
   }
 }
+
+/** 第八轮：人脸智能 Provider 与 Model Hub。 */
+export async function listFaceProviders(): Promise<import("../types").ProviderDescriptor[]> {
+  if (!isDesktopRuntime()) return [];
+  return invoke("list_face_providers");
+}
+
+export async function faceIntelligenceStatus(): Promise<import("../types").FaceIntelligenceStatus> {
+  return invoke("face_intelligence_status");
+}
+
+export async function selectFaceProvider(
+  providerId: string,
+): Promise<import("../types").ProviderSwitchReport> {
+  return invoke("select_face_provider", { providerId });
+}
+
+export async function analyzePhotoFaces(path: string): Promise<import("../types").AnalyzeFacesReport> {
+  return invoke("analyze_photo_faces", { path });
+}
+
+export async function probeFaceQuality(
+  path: string,
+  runs = 2,
+): Promise<import("../types").QualityReport> {
+  return invoke("probe_face_quality", { path, runs });
+}
+
+export async function faceQualityThresholds(): Promise<import("../types").QualityThresholds> {
+  return invoke("face_quality_thresholds");
+}
+
+export async function listFaceModels(): Promise<import("../types").InstalledModel[]> {
+  if (!isDesktopRuntime()) return [];
+  return invoke("list_face_models");
+}
+
+export async function pickFaceModelFile(): Promise<string | null> {
+  if (!isDesktopRuntime()) return null;
+  return invoke("pick_face_model_file");
+}
+
+export async function importFaceModel(
+  request: import("../types").ImportFaceModelInput,
+): Promise<import("../types").InstalledModel> {
+  return invoke("import_face_model", { request });
+}
+
+export async function revalidateFaceModel(modelId: string): Promise<import("../types").InstalledModel> {
+  return invoke("revalidate_face_model", { modelId });
+}
+
+export async function removeFaceModel(modelId: string): Promise<void> {
+  return invoke("remove_face_model", { modelId });
+}

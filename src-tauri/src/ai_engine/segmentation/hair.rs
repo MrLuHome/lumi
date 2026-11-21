@@ -50,14 +50,18 @@ mod tests {
 
     #[test]
     fn hair_detail_reacts_to_luma_difference() {
-        let mut image: Image16 = Image16::from_pixel(32, 1, image::Rgba([10000, 10000, 10000, 65535]));
+        let mut image: Image16 =
+            Image16::from_pixel(32, 1, image::Rgba([10000, 10000, 10000, 65535]));
         for x in 10..16 {
             image.put_pixel(x, 0, image::Rgba([50000, 50000, 50000, 65535]));
         }
         let mut alpha = vec![0.5f32; 32];
         let before = alpha.clone();
         apply_hair_detail(&mut alpha, &image, 100.0);
-        assert!(alpha.iter().zip(before.iter()).any(|(a, b)| (a - b).abs() > 0.01));
+        assert!(alpha
+            .iter()
+            .zip(before.iter())
+            .any(|(a, b)| (a - b).abs() > 0.01));
         assert!(alpha[13] > before[13]);
     }
 }

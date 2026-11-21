@@ -216,9 +216,16 @@ fn snapshot_of(state: &BatchState, paused: bool, now: u64) -> BatchSnapshot {
     for (index, task) in state.tasks.iter().enumerate() {
         let done = matches!(
             task.status,
-            BatchStatus::Completed | BatchStatus::Failed | BatchStatus::Cancelled | BatchStatus::Skipped
+            BatchStatus::Completed
+                | BatchStatus::Failed
+                | BatchStatus::Cancelled
+                | BatchStatus::Skipped
         );
-        progress_sum += if done { 1.0 } else { task.progress.clamp(0.0, 1.0) };
+        progress_sum += if done {
+            1.0
+        } else {
+            task.progress.clamp(0.0, 1.0)
+        };
         match task.status {
             BatchStatus::Completed => {
                 completed += 1;
@@ -263,7 +270,11 @@ fn snapshot_of(state: &BatchState, paused: bool, now: u64) -> BatchSnapshot {
         pending,
         exported,
         current,
-        overall: if total == 0 { 0.0 } else { progress_sum / total as f32 },
+        overall: if total == 0 {
+            0.0
+        } else {
+            progress_sum / total as f32
+        },
         elapsed_ms: if state.started_at_ms == 0 {
             0
         } else if state.running {
@@ -440,14 +451,7 @@ impl BatchEngine {
                 .map(|entry| entry.faces)
                 .unwrap_or_default();
 
-            let result = self.process_task(
-                app,
-                cache,
-                &task,
-                &known_faces,
-                &token,
-                &mut last_emit,
-            );
+            let result = self.process_task(app, cache, &task, &known_faces, &token, &mut last_emit);
 
             match result {
                 Ok(TaskOutcome::Exported(outcome)) => {
@@ -531,11 +535,7 @@ impl BatchEngine {
         let source = Path::new(&task.path);
         let (working, original, depth) = if crate::image_engine::raw::is_raw_path(source) {
             // RAW 批量：全尺寸显影，与单张导出共用同一函数。
-            let params = task
-                .raw_params
-                .clone()
-                .unwrap_or_default()
-                .sanitized();
+            let params = task.raw_params.clone().unwrap_or_default().sanitized();
             let developed = crate::image_engine::raw::develop_from_path(source, &params)?;
             (
                 std::sync::Arc::new(developed.image),
@@ -824,7 +824,10 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(path.file_name().unwrap().to_string_lossy(), "人像 A-007.webp");
+        assert_eq!(
+            path.file_name().unwrap().to_string_lossy(),
+            "人像 A-007.webp"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -863,7 +866,10 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(path.file_name().unwrap().to_string_lossy(), "photo-lumi-2.jpg");
+        assert_eq!(
+            path.file_name().unwrap().to_string_lossy(),
+            "photo-lumi-2.jpg"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -904,7 +910,9 @@ mod tests {
         let image = image::RgbaImage::from_fn(96, 64, |x, y| {
             image::Rgba([(x * 2) as u8, (y * 3) as u8, 90, 255])
         });
-        image::DynamicImage::ImageRgba8(image).save(&source).unwrap();
+        image::DynamicImage::ImageRgba8(image)
+            .save(&source)
+            .unwrap();
         let source_bytes = std::fs::read(&source).unwrap();
 
         let cache = ImageCache::with_budget(1, 64 * 1024 * 1024);
@@ -935,7 +943,11 @@ mod tests {
         .unwrap();
         assert!(first.bytes > 0);
         assert!(destination.exists());
-        assert_eq!(std::fs::read(&source).unwrap(), source_bytes, "源图必须保持不变");
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            source_bytes,
+            "源图必须保持不变"
+        );
 
         // 覆盖写同样走临时文件 + 重命名，不留下半成品。
         export::write_atomic(
@@ -953,7 +965,12 @@ mod tests {
         let leftovers: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".lumi-tmp-"))
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".lumi-tmp-")
+            })
             .collect();
         assert!(leftovers.is_empty(), "不应残留临时文件");
         std::fs::remove_dir_all(&dir).ok();
@@ -999,7 +1016,12 @@ mod tests {
         let mut names: Vec<String> = std::fs::read_dir(dir)
             .unwrap()
             .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.file_type().map(|kind| kind.is_file()).unwrap_or(false))
+            .filter(|entry| {
+                entry
+                    .file_type()
+                    .map(|kind| kind.is_file())
+                    .unwrap_or(false)
+            })
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
         names.sort();
@@ -1039,11 +1061,20 @@ mod tests {
             task.name == "broken.png" && task.status == BatchStatus::Failed && task.error.is_some()
         }));
         assert_eq!(output_files(&out).len(), 2);
-        assert_eq!(std::fs::read(&first).unwrap(), source_bytes, "源图必须保持不变");
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            source_bytes,
+            "源图必须保持不变"
+        );
         let leftovers = std::fs::read_dir(&out)
             .unwrap()
             .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".lumi-tmp-"))
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".lumi-tmp-")
+            })
             .count();
         assert_eq!(leftovers, 0, "失败任务不得留下临时文件");
         std::fs::remove_dir_all(&dir).ok();
@@ -1144,7 +1175,11 @@ mod tests {
         let cache = ImageCache::with_budget(1, 64 * 1024 * 1024);
         engine.run(None, &cache, &FaceRepository::default());
         let first = engine.snapshot();
-        assert_eq!((first.completed, first.failed), (1, 1), "部分成功必须可识别");
+        assert_eq!(
+            (first.completed, first.failed),
+            (1, 1),
+            "部分成功必须可识别"
+        );
         assert_eq!(output_files(&out).len(), 1);
 
         // 用户修复坏图后单独重试失败项，已完成文件不重复写。
@@ -1182,7 +1217,11 @@ mod tests {
         let snapshot = engine.snapshot();
         assert_eq!(snapshot.skipped, 1);
         assert_eq!(snapshot.completed, 0);
-        assert_eq!(std::fs::read(&existing).unwrap(), b"keep-me", "默认策略不得覆盖已有文件");
+        assert_eq!(
+            std::fs::read(&existing).unwrap(),
+            b"keep-me",
+            "默认策略不得覆盖已有文件"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1198,12 +1237,8 @@ mod tests {
             .into_iter()
             .find(|item| item.id == "builtin-warm-skin")
             .unwrap();
-        let (params, _) = crate::image_engine::preset::apply_preset(
-            &EditParams::default(),
-            &preset,
-            65.0,
-            &[],
-        );
+        let (params, _) =
+            crate::image_engine::preset::apply_preset(&EditParams::default(), &preset, 65.0, &[]);
 
         let engine = BatchEngine::default();
         let mut request = make_request(vec![source.clone()], &out);
@@ -1217,13 +1252,8 @@ mod tests {
 
         // 单张导出：同一份参数、同一渲染管线、同一编码设置。
         let loaded = cache.load(&source).unwrap();
-        let rendered = pipeline::render(
-            &loaded.full,
-            &params,
-            &[],
-            &CancelToken::default(),
-        )
-        .unwrap();
+        let rendered =
+            pipeline::render(&loaded.full, &params, &[], &CancelToken::default()).unwrap();
         let single = dir.join("single.jpg");
         let color = crate::color_management::ColorOutputSettings::default();
         export::write_atomic(
@@ -1378,7 +1408,9 @@ mod tests {
         let image = image::RgbaImage::from_fn(64, 48, |x, y| {
             image::Rgba([(x * 3) as u8, 140, (y * 4) as u8, 255])
         });
-        image::DynamicImage::ImageRgba8(image).save(&source).unwrap();
+        image::DynamicImage::ImageRgba8(image)
+            .save(&source)
+            .unwrap();
         let cache = ImageCache::with_budget(1, 32 * 1024 * 1024);
         let loaded = cache.load(&source).unwrap();
         let token = CancelToken::default();
@@ -1388,14 +1420,12 @@ mod tests {
             .find(|item| item.id == "builtin-cinematic-teal")
             .unwrap();
 
-        let (zero, _) =
-            crate::image_engine::preset::apply_preset(&base, &preset, 0.0, &[]);
+        let (zero, _) = crate::image_engine::preset::apply_preset(&base, &preset, 0.0, &[]);
         let plain = pipeline::render(&loaded.full, &base, &[], &token).unwrap();
         let zero_rendered = pipeline::render(&loaded.full, &zero, &[], &token).unwrap();
         assert_eq!(plain, zero_rendered, "0% 强度必须等同于不应用预设");
 
-        let (full, _) =
-            crate::image_engine::preset::apply_preset(&base, &preset, 100.0, &[]);
+        let (full, _) = crate::image_engine::preset::apply_preset(&base, &preset, 100.0, &[]);
         let full_rendered = pipeline::render(&loaded.full, &full, &[], &token).unwrap();
         assert_ne!(plain, full_rendered, "100% 强度必须真实改变像素");
         std::fs::remove_dir_all(&dir).ok();
@@ -1443,11 +1473,7 @@ mod tests {
             snapshot.completed,
             snapshot.failed,
             started.elapsed().as_millis(),
-            snapshot
-                .tasks
-                .iter()
-                .map(|task| task.bytes)
-                .sum::<u64>()
+            snapshot.tasks.iter().map(|task| task.bytes).sum::<u64>()
         );
         assert_eq!(snapshot.completed, count);
         std::fs::remove_dir_all(&dir).ok();

@@ -13,8 +13,7 @@ pub fn unsharp_mask(image: &Image16, radius: u32, amount: f32) -> Image16 {
         for channel in 0..3 {
             let original = pixel[channel] as f32;
             let detail = original - low[channel] as f32;
-            pixel[channel] =
-                (original + detail * amount).clamp(0.0, CHANNEL_MAX).round() as u16;
+            pixel[channel] = (original + detail * amount).clamp(0.0, CHANNEL_MAX).round() as u16;
         }
     });
     output
@@ -37,8 +36,9 @@ pub fn add_grain(image: &mut Image16, strength: f32) {
     par_pixels_mut(image, |x, y, pixel| {
         let noise = hash_noise(x, y) * amplitude;
         for channel in 0..3 {
-            pixel[channel] =
-                (pixel[channel] as f32 + noise).clamp(0.0, CHANNEL_MAX).round() as u16;
+            pixel[channel] = (pixel[channel] as f32 + noise)
+                .clamp(0.0, CHANNEL_MAX)
+                .round() as u16;
         }
     });
 }
@@ -115,7 +115,8 @@ mod tests {
     #[test]
     fn sharpening_increases_edge_contrast() {
         let size = 32u32;
-        let mut image: Image16 = Image16::from_pixel(size, size, Rgba([20_000, 20_000, 20_000, 65535]));
+        let mut image: Image16 =
+            Image16::from_pixel(size, size, Rgba([20_000, 20_000, 20_000, 65535]));
         for y in 0..size {
             for x in size / 2..size {
                 image.put_pixel(x, y, Rgba([40_000, 40_000, 40_000, 65535]));

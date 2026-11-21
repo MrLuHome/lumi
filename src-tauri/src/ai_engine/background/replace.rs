@@ -94,14 +94,18 @@ fn sample_stops(stops: &[([f32; 3], f32)], t: f32) -> [f32; 3] {
     stops[stops.len() - 1].0
 }
 
-pub fn load_background(path: &str, params: &BackgroundParams, width: u32, height: u32) -> AppResult<Image16> {
+pub fn load_background(
+    path: &str,
+    params: &BackgroundParams,
+    width: u32,
+    height: u32,
+) -> AppResult<Image16> {
     let path = path.trim();
     if path.is_empty() {
         return Err(AppError::Unsupported("未选择背景图片".into()));
     }
-    let decoded = image::open(path).map_err(|error| {
-        AppError::Decode(format!("无法读取背景图片 {path}：{error}"))
-    })?;
+    let decoded = image::open(path)
+        .map_err(|error| AppError::Decode(format!("无法读取背景图片 {path}：{error}")))?;
     let source = buffer::from_dynamic(&decoded);
     let (sw, sh) = source.dimensions();
     if sw == 0 || sh == 0 {
@@ -116,7 +120,11 @@ pub fn load_background(path: &str, params: &BackgroundParams, width: u32, height
     let target_w = ((sw as f32 * fit_scale).round() as u32).max(1);
     let target_h = ((sh as f32 * fit_scale).round() as u32).max(1);
     let fitted = if params.image_fit == BackgroundFit::Stretch {
-        buffer::resize(&source, (width as f32 * scale).round() as u32, (height as f32 * scale).round() as u32)
+        buffer::resize(
+            &source,
+            (width as f32 * scale).round() as u32,
+            (height as f32 * scale).round() as u32,
+        )
     } else {
         buffer::resize(&source, target_w, target_h)
     };
@@ -124,7 +132,8 @@ pub fn load_background(path: &str, params: &BackgroundParams, width: u32, height
     let [r, g, b] = rgb16(&params.color);
     let mut canvas = Image16::from_pixel(width.max(1), height.max(1), Rgba([r, g, b, 65535]));
     let offset_x = (width as f32 - fw as f32) * 0.5 + params.image_offset_x / 100.0 * width as f32;
-    let offset_y = (height as f32 - fh as f32) * 0.5 + params.image_offset_y / 100.0 * height as f32;
+    let offset_y =
+        (height as f32 - fh as f32) * 0.5 + params.image_offset_y / 100.0 * height as f32;
     image::imageops::overlay(
         &mut canvas,
         &fitted,

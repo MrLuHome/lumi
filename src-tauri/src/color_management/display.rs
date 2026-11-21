@@ -66,11 +66,7 @@ pub fn to_display(image: &Image16) -> AppResult<(Image16, DisplayStatus)> {
     Ok((converted, status))
 }
 
-fn convert_to_profile(
-    image: &Image16,
-    input: &Profile,
-    output: &Profile,
-) -> AppResult<Image16> {
+fn convert_to_profile(image: &Image16, input: &Profile, output: &Profile) -> AppResult<Image16> {
     use image::{ImageBuffer, Rgba};
     use lcms2::{PixelFormat, Transform};
 
@@ -91,7 +87,9 @@ fn convert_to_profile(
     transform.transform_pixels(&src, &mut dst);
     let mut out: Image16 = ImageBuffer::new(width, image.height());
     for (index, pixel) in dst.iter().enumerate() {
-        let alpha = image.get_pixel(index as u32 % width, index as u32 / width).0[3];
+        let alpha = image
+            .get_pixel(index as u32 % width, index as u32 / width)
+            .0[3];
         out.put_pixel(
             index as u32 % width,
             index as u32 / width,

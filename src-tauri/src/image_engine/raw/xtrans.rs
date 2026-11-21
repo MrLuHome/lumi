@@ -42,25 +42,32 @@ pub fn interpolate(image: &LinearImage, matrix: &[[u8; SIDE]; SIDE], scale: f32)
     };
 
     let mut data = vec![0u16; width * height * 3];
-    data.par_chunks_mut(3).enumerate().for_each(|(index, pixel)| {
-        let x = index % width;
-        let y = index / width;
-        let phase = matrix[y % SIDE][x % SIDE] as usize;
-        let own = matrix[y % SIDE][x % SIDE];
-        let center = at(x as isize, y as isize);
-        for channel in 0..3usize {
-            let value = if own as usize == channel {
-                center
-            } else if channel == 1 {
-                // 绿色样本更密，用 3×3 内所有绿色样本平均。
-                average_at(&at, x as isize, y as isize, &offsets[y % SIDE][x % SIDE][1])
-            } else {
-                average_at(&at, x as isize, y as isize, &offsets[y % SIDE][x % SIDE][channel])
-            };
-            pixel[channel] = value.clamp(0.0, 1.0).mul_add(65535.0, 0.5) as u16;
-        }
-        let _ = phase;
-    });
+    data.par_chunks_mut(3)
+        .enumerate()
+        .for_each(|(index, pixel)| {
+            let x = index % width;
+            let y = index / width;
+            let phase = matrix[y % SIDE][x % SIDE] as usize;
+            let own = matrix[y % SIDE][x % SIDE];
+            let center = at(x as isize, y as isize);
+            for channel in 0..3usize {
+                let value = if own as usize == channel {
+                    center
+                } else if channel == 1 {
+                    // 绿色样本更密，用 3×3 内所有绿色样本平均。
+                    average_at(&at, x as isize, y as isize, &offsets[y % SIDE][x % SIDE][1])
+                } else {
+                    average_at(
+                        &at,
+                        x as isize,
+                        y as isize,
+                        &offsets[y % SIDE][x % SIDE][channel],
+                    )
+                };
+                pixel[channel] = value.clamp(0.0, 1.0).mul_add(65535.0, 0.5) as u16;
+            }
+            let _ = phase;
+        });
 
     RgbLinear {
         width: image.width,

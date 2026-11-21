@@ -112,7 +112,11 @@ pub async fn analyze_beauty(
                     continue;
                 }
             };
-            let geometry = match FaceGeometry::from_face(face, cached.preview.width(), cached.preview.height()) {
+            let geometry = match FaceGeometry::from_face(
+                face,
+                cached.preview.width(),
+                cached.preview.height(),
+            ) {
                 Ok(geometry) => geometry,
                 Err(error) => {
                     warnings.push(format!("人脸 {}：{error}", face.id));

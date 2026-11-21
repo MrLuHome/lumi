@@ -213,7 +213,11 @@ fn white_balance(
                     },
                 );
             }
-            let mean = [sum[0] / count as f64, sum[1] / count as f64, sum[2] / count as f64];
+            let mean = [
+                sum[0] / count as f64,
+                sum[1] / count as f64,
+                sum[2] / count as f64,
+            ];
             let gains = [
                 (mean[1] / mean[0]).clamp(0.05, 20.0) as f32,
                 1.0,
@@ -261,12 +265,11 @@ fn camera_to_srgb(camera: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
             };
         }
     }
-    if normalized.iter().all(|row| row.iter().all(|value| *value == 0.0)) {
-        return [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ];
+    if normalized
+        .iter()
+        .all(|row| row.iter().all(|value| *value == 0.0))
+    {
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     }
     let mut out = [[0.0f32; 3]; 3];
     for row in 0..3 {

@@ -115,7 +115,8 @@ pub trait MaskProvider: Send + Sync {
 }
 
 pub fn capability() -> SegmentationCapability {
-    let providers: Vec<Box<dyn MaskProvider>> = vec![Box::new(inference::AiMaskProvider::default())];
+    let providers: Vec<Box<dyn MaskProvider>> =
+        vec![Box::new(inference::AiMaskProvider::default())];
     SegmentationCapability {
         ai_available: providers.iter().any(|provider| provider.available()),
         manual_available: true,

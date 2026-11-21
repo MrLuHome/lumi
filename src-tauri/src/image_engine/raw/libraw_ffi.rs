@@ -239,7 +239,9 @@ unsafe fn copy_raw_pixels(data: *mut lr::libraw_data_t) -> RawResult<Vec<u16>> {
     let width = sizes.raw_width as usize;
     let height = sizes.raw_height as usize;
     if width == 0 || height == 0 {
-        return Err(RawError::Unsupported("LibRaw 未提供有效的原始宽高".to_string()));
+        return Err(RawError::Unsupported(
+            "LibRaw 未提供有效的原始宽高".to_string(),
+        ));
     }
     let pitch = if rawdata.sizes.raw_pitch > 0 {
         rawdata.sizes.raw_pitch as usize / std::mem::size_of::<u16>()

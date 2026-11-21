@@ -203,10 +203,7 @@ mod tests {
         let background_before = image.get_pixel(5, 5).0;
         let mut masks = SubjectMasks {
             global: Vec::new(),
-            subjects: vec![(
-                "a".into(),
-                mask_with_rect(width, height),
-            )],
+            subjects: vec![("a".into(), mask_with_rect(width, height))],
         };
         let subject = BodyAdjust {
             subject_id: "a".into(),
@@ -253,7 +250,10 @@ mod tests {
         .unwrap();
         // 没有可动的内容，字段为零，直接跳过且给出说明。
         assert_eq!(reports.len(), 1);
-        assert!(reports[0].notes.iter().any(|note| note.contains("跳过")) || reports[0].affected_pixels == 0);
+        assert!(
+            reports[0].notes.iter().any(|note| note.contains("跳过"))
+                || reports[0].affected_pixels == 0
+        );
     }
 
     #[test]
@@ -294,7 +294,14 @@ mod tests {
             strokes: Vec::new(),
             mask_strokes: Vec::new(),
         };
-        apply_body(&mut image, &mut masks, &[subject], &[], &CancelToken::default()).unwrap();
+        apply_body(
+            &mut image,
+            &mut masks,
+            &[subject],
+            &[],
+            &CancelToken::default(),
+        )
+        .unwrap();
         // B 的蒙版逐像素不变。
         assert_eq!(masks.subjects[1].1, right);
     }

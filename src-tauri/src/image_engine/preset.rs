@@ -425,12 +425,7 @@ pub fn builtin_presets() -> Vec<RetouchPreset> {
                     ("blue", -6.0, 10.0, -6.0),
                     ("orange", 4.0, 10.0, 2.0),
                 ]),
-                curves: curve(&[
-                    (0.0, 0.03),
-                    (0.28, 0.25),
-                    (0.72, 0.76),
-                    (1.0, 0.98),
-                ]),
+                curves: curve(&[(0.0, 0.03), (0.28, 0.25), (0.72, 0.76), (1.0, 0.98)]),
                 vignette: Some(16.0),
                 ..Default::default()
             },
@@ -824,6 +819,8 @@ mod tests {
             width: 0.2,
             height: 0.2,
             landmarks: Vec::new(),
+            dense: None,
+            level3: None,
         }]
     }
 

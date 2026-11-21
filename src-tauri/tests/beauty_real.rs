@@ -9,9 +9,7 @@ use lumi_retouch_lib::ai::FaceEngine;
 use lumi_retouch_lib::ai_engine::face_frame::{FaceFrame, FaceGeometry};
 use lumi_retouch_lib::ai_engine::retouch::analyze::{analyze_face, preset};
 use lumi_retouch_lib::ai_engine::retouch::apply_face_retouch;
-use lumi_retouch_lib::ai_engine::skin_segmentation::{
-    apply_ownership, build_skin_mask, SkinMask,
-};
+use lumi_retouch_lib::ai_engine::skin_segmentation::{apply_ownership, build_skin_mask, SkinMask};
 use lumi_retouch_lib::image_engine::buffer::{fit_within, CHANNEL_MAX};
 use lumi_retouch_lib::image_engine::cancel::CancelToken;
 use lumi_retouch_lib::image_engine::decoder;
@@ -87,8 +85,8 @@ fn real_portraits_have_sane_skin_masks_and_protected_features() {
             continue;
         };
         let mask = build_skin_mask(&decoded.image, &face, &ManualMask::default()).unwrap();
-        let geometry = FaceGeometry::from_face(&face, decoded.image.width(), decoded.image.height())
-            .unwrap();
+        let geometry =
+            FaceGeometry::from_face(&face, decoded.image.width(), decoded.image.height()).unwrap();
 
         let total = (decoded.image.width() * decoded.image.height()) as f32;
         assert!(
@@ -117,7 +115,10 @@ fn real_portraits_have_sane_skin_masks_and_protected_features() {
             .unwrap()
             .suggested;
         for value in metrics.fields() {
-            assert!((0.0..=100.0).contains(&value), "{name}: 分析参数越界 {value}");
+            assert!(
+                (0.0..=100.0).contains(&value),
+                "{name}: 分析参数越界 {value}"
+            );
         }
         eprintln!(
             "[beauty-real] {name}: 蒙版 {} px · 平均 alpha {:.2} · 建议磨皮 {:.0}",
@@ -133,8 +134,8 @@ fn real_portrait_retouch_changes_skin_but_not_eyes() {
     let (decoded, result) = decode_and_detect("portrait.jpg");
     let face = frames(&result).into_iter().next().expect("portrait 应有脸");
     let mask = build_skin_mask(&decoded.image, &face, &ManualMask::default()).unwrap();
-    let geometry = FaceGeometry::from_face(&face, decoded.image.width(), decoded.image.height())
-        .unwrap();
+    let geometry =
+        FaceGeometry::from_face(&face, decoded.image.width(), decoded.image.height()).unwrap();
     let mut image = decoded.image.clone();
     let report = apply_face_retouch(
         &mut image,
@@ -163,7 +164,10 @@ fn real_portrait_retouch_changes_skin_but_not_eyes() {
             changed += 1;
         }
     }
-    assert!(changed > 200, "真实人像应有可见但受控的皮肤变化：{changed} px");
+    assert!(
+        changed > 200,
+        "真实人像应有可见但受控的皮肤变化：{changed} px"
+    );
 
     for (eye_x, eye_y) in geometry.eyes {
         let x = eye_x.clamp(0.0, decoded.image.width() as f32 - 1.0) as u32;
@@ -177,10 +181,7 @@ fn real_portrait_retouch_changes_skin_but_not_eyes() {
     }
     eprintln!(
         "[beauty-real] portrait 美肤：{} px 变化 · 瑕疵 {}/{} · 皮肤像素 {}",
-        changed,
-        report.blemish_repaired,
-        report.blemish_detected,
-        report.skin_pixels
+        changed, report.blemish_repaired, report.blemish_detected, report.skin_pixels
     );
 }
 
@@ -215,7 +216,9 @@ fn real_group_faces_get_disjoint_owned_masks() {
                     shared += 1;
                 }
             }
-            let smaller = masks[first].active_pixels().min(masks[second].active_pixels());
+            let smaller = masks[first]
+                .active_pixels()
+                .min(masks[second].active_pixels());
             assert!(
                 shared < (smaller / 50).max(10),
                 "人脸 {first}/{second} 蒙版重叠过多：{shared}"
@@ -241,15 +244,19 @@ fn real_high_resolution_beauty_keeps_dimensions() {
     let original = decoded.image.clone().into_raw();
     let before_mb = resident_mb();
     let started = std::time::Instant::now();
-    let rendered = pipeline::render(&decoded.image, &params, &faces, &CancelToken::default())
-        .unwrap();
+    let rendered =
+        pipeline::render(&decoded.image, &params, &faces, &CancelToken::default()).unwrap();
     let elapsed = started.elapsed();
     let after_mb = resident_mb();
     assert_eq!(
         (rendered.width(), rendered.height()),
         (decoded.image.width(), decoded.image.height())
     );
-    assert_eq!(decoded.image.clone().into_raw(), original, "原始图不得被修改");
+    assert_eq!(
+        decoded.image.clone().into_raw(),
+        original,
+        "原始图不得被修改"
+    );
     eprintln!(
         "[beauty-real] portrait_hires {}x{} 全分辨率美肤：{elapsed:?} · RSS {before_mb:.0}→{after_mb:.0} MB",
         rendered.width(),

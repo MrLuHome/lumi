@@ -180,7 +180,11 @@ mod tests {
         let digest = sha256_hex(b"dummy");
         let error = verify(&path, &spec(true, "MIT", "deadbeef")).unwrap_err();
         assert!(error.to_string().contains("SHA256"));
-        verify(&path, &spec(true, "MIT", Box::leak(digest.into_boxed_str()))).unwrap();
+        verify(
+            &path,
+            &spec(true, "MIT", Box::leak(digest.into_boxed_str())),
+        )
+        .unwrap();
     }
 
     #[test]

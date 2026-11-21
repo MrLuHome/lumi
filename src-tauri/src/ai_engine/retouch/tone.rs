@@ -6,10 +6,10 @@
 use crate::ai_engine::retouch::filter::box_mean;
 use crate::ai_engine::retouch::lab::{chroma, lab_to_srgb, srgb_to_lab};
 use crate::ai_engine::skin_segmentation::SkinMask;
+use crate::error::AppResult;
 use crate::image_engine::buffer::{Image16, CHANNEL_MAX};
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::params::BeautyParams;
-use crate::error::AppResult;
 
 pub fn even_skin_tone(
     image: &mut Image16,

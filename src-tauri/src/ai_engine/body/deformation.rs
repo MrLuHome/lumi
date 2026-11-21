@@ -166,8 +166,16 @@ fn apply_strokes(field: &mut GridField, width: u32, adjust: &BodyAdjust) {
         let radius = (stroke.radius * width as f32).max(1.0);
         let strength = (stroke.strength / 100.0).clamp(0.0, 1.0);
         let (first, last) = (
-            stroke.points.first().copied().unwrap_or(MaskPoint { x: 0.0, y: 0.0 }),
-            stroke.points.last().copied().unwrap_or(MaskPoint { x: 0.0, y: 0.0 }),
+            stroke
+                .points
+                .first()
+                .copied()
+                .unwrap_or(MaskPoint { x: 0.0, y: 0.0 }),
+            stroke
+                .points
+                .last()
+                .copied()
+                .unwrap_or(MaskPoint { x: 0.0, y: 0.0 }),
         );
         let direction_x = (last.x - first.x) * width as f32;
         let direction_y = (last.y - first.y) * height as f32;
@@ -200,7 +208,11 @@ fn apply_strokes(field: &mut GridField, width: u32, adjust: &BodyAdjust) {
                         field.dy[index] -= unit_y * travel * weight * protect[index];
                     }
                     WarpMode::ZoomIn | WarpMode::ZoomOut => {
-                        let sign = if stroke.mode == WarpMode::ZoomIn { 1.0 } else { -1.0 };
+                        let sign = if stroke.mode == WarpMode::ZoomIn {
+                            1.0
+                        } else {
+                            -1.0
+                        };
                         let vx = x - center_x;
                         let vy = y - center_y;
                         let factor = sign * 0.22 * weight;
@@ -297,8 +309,8 @@ fn gate_by_alpha(field: &mut GridField, alpha: &[f32], width: u32, height: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image_engine::params::{BodyAnchor, BodyShape, WarpStroke};
     use crate::image_engine::params::MaskPoint;
+    use crate::image_engine::params::{BodyAnchor, BodyShape, WarpStroke};
 
     fn body_alpha(width: u32, height: u32) -> Vec<f32> {
         let mut alpha = vec![0.0f32; (width * height) as usize];

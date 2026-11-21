@@ -16,6 +16,8 @@ use sha2::{Digest, Sha256};
 
 use crate::ai_engine::face_frame::{new_face_uuid, FaceFrame, NormPoint};
 use crate::error::AppResult;
+use crate::face_intelligence::quality::Level3Gate;
+use crate::face_intelligence::types::DenseFace;
 
 /// 保存记录时使用的关键点能力版本，便于将来升级后判断兼容性。
 pub const MATCH_MODEL_VERSION: &str = "yunet-5";
@@ -54,6 +56,12 @@ pub struct ProjectFace {
     /// 人脸蒙版引用；当前按几何实时重建，保留字段以便后续蒙版缓存。
     #[serde(default)]
     pub mask_ref: Option<String>,
+    /// 稠密关键点与门控结论：随项目保存，重开时恢复，避免“重新检测后 LEVEL 3 悄悄失效”。
+    /// 5 点结果不会写入这两个字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dense: Option<DenseFace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level3: Option<Level3Gate>,
 }
 
 impl ProjectFace {
@@ -75,6 +83,8 @@ impl ProjectFace {
             },
             confidence: frame.score,
             mask_ref: None,
+            dense: frame.dense.clone(),
+            level3: frame.level3.clone(),
         }
     }
 
@@ -282,6 +292,8 @@ mod tests {
                     y: point[1],
                 })
                 .collect(),
+            dense: None,
+            level3: None,
         }
     }
 
@@ -378,7 +390,10 @@ mod tests {
             .chain(outcome.pending.iter())
             .map(|entry| entry.face_id)
             .collect();
-        assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len());
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<std::collections::HashSet<_>>().len()
+        );
     }
 
     #[test]

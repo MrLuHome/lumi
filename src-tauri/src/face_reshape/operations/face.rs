@@ -34,7 +34,11 @@ pub fn apply(points: &mut [ControlPoint], params: &FaceShape) {
         if slim != 0.0 {
             du -= side * 0.085 * slim * (0.30 + 0.70 * lower) * lateral;
         }
-        let side_param = if side < 0.0 { params.left } else { params.right } / 100.0;
+        let side_param = if side < 0.0 {
+            params.left
+        } else {
+            params.right
+        } / 100.0;
         if side_param != 0.0 {
             du -= side * 0.055 * side_param * (0.35 + 0.65 * lower) * lateral;
         }
@@ -92,10 +96,7 @@ mod tests {
 
     #[test]
     fn inner_rings_and_top_are_protected() {
-        let mut points = vec![
-            ring_point(-0.9, 0.5, 0.0),
-            ring_point(-0.9, -0.9, 1.0),
-        ];
+        let mut points = vec![ring_point(-0.9, 0.5, 0.0), ring_point(-0.9, -0.9, 1.0)];
         apply(
             &mut points,
             &FaceShape {

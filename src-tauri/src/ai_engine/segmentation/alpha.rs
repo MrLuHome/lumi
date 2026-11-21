@@ -36,13 +36,7 @@ pub fn box_blur(values: &[f32], width: u32, height: u32, radius: u32, passes: u3
     current
 }
 
-fn blur_axis(
-    values: &[f32],
-    width: u32,
-    height: u32,
-    radius: u32,
-    horizontal: bool,
-) -> Vec<f32> {
+fn blur_axis(values: &[f32], width: u32, height: u32, radius: u32, horizontal: bool) -> Vec<f32> {
     let w = width as usize;
     let h = height as usize;
     let r = radius as isize;

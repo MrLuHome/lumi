@@ -87,7 +87,11 @@ pub fn decode_stride(
 
 /// 贪心 NMS，按分数从高到低保留互不重叠的人脸。
 pub fn nms(mut candidates: Vec<Candidate>, threshold: f32) -> Vec<Candidate> {
-    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut kept: Vec<Candidate> = Vec::new();
     for candidate in candidates {
         if kept.iter().all(|other| candidate.iou(other) <= threshold) {
@@ -114,11 +118,7 @@ pub fn scale_to_original(candidate: &Candidate, scale_x: f32, scale_y: f32) -> C
     }
 }
 
-pub fn decode_all(
-    outputs: &[Vec<f32>],
-    threshold: f32,
-    iou_threshold: f32,
-) -> Vec<Candidate> {
+pub fn decode_all(outputs: &[Vec<f32>], threshold: f32, iou_threshold: f32) -> Vec<Candidate> {
     if outputs.len() < 12 {
         return Vec::new();
     }

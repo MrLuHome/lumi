@@ -57,11 +57,7 @@ pub trait LandmarkerProvider: Send + Sync {
     fn initialize(&mut self) -> AppResult<()>;
 
     /// 对单张已检测人脸输出关键点；实现方自行决定裁剪与坐标转换。
-    fn detect(
-        &self,
-        image: &Image16,
-        face: &FaceFrame,
-    ) -> AppResult<LandmarkDetection>;
+    fn detect(&self, image: &Image16, face: &FaceFrame) -> AppResult<LandmarkDetection>;
 
     /// 归一化坐标 → 原图像素坐标。禁止返回屏幕坐标。
     fn to_image(&self, point: NormPoint, width: u32, height: u32) -> (f32, f32) {
@@ -161,11 +157,7 @@ impl LandmarkerProvider for DisabledDenseProvider {
         Err(AppError::Unsupported(self.reason.clone()))
     }
 
-    fn detect(
-        &self,
-        _image: &Image16,
-        _face: &FaceFrame,
-    ) -> AppResult<LandmarkDetection> {
+    fn detect(&self, _image: &Image16, _face: &FaceFrame) -> AppResult<LandmarkDetection> {
         Err(AppError::Unsupported(self.reason.clone()))
     }
 
@@ -192,6 +184,8 @@ mod tests {
                 NormPoint { x: 0.27, y: 0.4 },
                 NormPoint { x: 0.33, y: 0.4 },
             ],
+            dense: None,
+            level3: None,
         }
     }
 

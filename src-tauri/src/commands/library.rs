@@ -86,7 +86,10 @@ pub async fn pick_images(state: State<'_, ImageCache>) -> AppResult<Vec<ImageIte
 
 /// 通过拖拽或外部调用按路径导入照片。
 #[tauri::command]
-pub async fn load_images(state: State<'_, ImageCache>, paths: Vec<String>) -> AppResult<Vec<ImageItem>> {
+pub async fn load_images(
+    state: State<'_, ImageCache>,
+    paths: Vec<String>,
+) -> AppResult<Vec<ImageItem>> {
     let cache = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();

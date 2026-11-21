@@ -22,6 +22,7 @@ export function StatusBar({ photo }: StatusBarProps) {
   const actualPixels = useEditorStore((state) => state.actualPixels);
   const colorStatus = useEditorStore((state) => state.colorStatus);
   const gpuStatus = useEditorStore((state) => state.gpuStatus);
+  const faceResult = useEditorStore((state) => (photo ? state.faces[photo.id] : undefined));
 
   return (
     <footer className="statusbar">
@@ -105,6 +106,11 @@ export function StatusBar({ photo }: StatusBarProps) {
         {gpuStatus ? (
           <span className="status-muted" title={gpuStatus.reason}>
             {gpuStatus.enabled ? `GPU · ${gpuStatus.device || "Metal"}` : "CPU 计算"}
+          </span>
+        ) : null}
+        {faceResult ? (
+          <span className="status-muted" title="当前照片使用的人脸 Provider">
+            人脸 · {faceResult.model}
           </span>
         ) : null}
         <span className={`proc proc-${error ? "error" : status}`} title={error ?? undefined}>

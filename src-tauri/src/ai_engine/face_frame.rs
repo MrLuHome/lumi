@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::face::DetectedFace;
 use crate::error::{AppError, AppResult};
+use crate::face_intelligence::quality::Level3Gate;
+use crate::face_intelligence::types::DenseFace;
 
 /// 归一化图像坐标（0..1）。人脸结果按此格式缓存，
 /// 预览、高清预览、全尺寸导出都能复用到同一组检测结果。
@@ -28,6 +30,13 @@ pub struct FaceFrame {
     pub height: f32,
     /// YuNet 5 点：右眼、左眼、鼻尖、右嘴角、左嘴角（图像上的左右）。
     pub landmarks: Vec<NormPoint>,
+    /// 稠密关键点。只有 Provider 通过本机质量验证后才写入；
+    /// 5 点结果永远保持 `None`，不会被包装成稠密数据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dense: Option<DenseFace>,
+    /// LEVEL 3 门控结论（含未解锁原因）。渲染只依据这里，不猜测能力。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level3: Option<Level3Gate>,
 }
 
 impl FaceFrame {
@@ -50,6 +59,8 @@ impl FaceFrame {
                     y: clamp_unit(point.y / h),
                 })
                 .collect(),
+            dense: None,
+            level3: None,
         }
     }
 
@@ -140,7 +151,11 @@ pub fn id_from_uuid(uuid: &str) -> u32 {
 pub struct FaceTracker;
 
 impl FaceTracker {
-    pub fn assign(&mut self, previous: &[FaceFrame], mut current: Vec<FaceFrame>) -> Vec<FaceFrame> {
+    pub fn assign(
+        &mut self,
+        previous: &[FaceFrame],
+        mut current: Vec<FaceFrame>,
+    ) -> Vec<FaceFrame> {
         let mut used = vec![false; previous.len()];
         let mut assigned: Vec<Option<usize>> = vec![None; current.len()];
 
@@ -184,7 +199,6 @@ impl FaceTracker {
         current.sort_by_key(|face| face.id);
         current
     }
-
 }
 
 /// 单张人脸的像素几何，皮肤蒙版与局部操作都基于这个坐标系。
@@ -235,7 +249,10 @@ impl FaceGeometry {
             id: face.id,
             width: image_width.max(1),
             height: image_height.max(1),
-            origin: ((eye_right.0 + eye_left.0) * 0.5, (eye_right.1 + eye_left.1) * 0.5),
+            origin: (
+                (eye_right.0 + eye_left.0) * 0.5,
+                (eye_right.1 + eye_left.1) * 0.5,
+            ),
             axis_x: (ux, uy),
             axis_y: (vx, vy),
             eye_distance: distance,
@@ -292,10 +309,13 @@ mod tests {
     #[test]
     fn tracker_keeps_ids_when_order_changes() {
         let mut tracker = FaceTracker::default();
-        let first = tracker.assign(&[], vec![
-            FaceFrame::from_detected(&face(0, 400.0), 1000, 1000),
-            FaceFrame::from_detected(&face(1, 100.0), 1000, 1000),
-        ]);
+        let first = tracker.assign(
+            &[],
+            vec![
+                FaceFrame::from_detected(&face(0, 400.0), 1000, 1000),
+                FaceFrame::from_detected(&face(1, 100.0), 1000, 1000),
+            ],
+        );
         assert_eq!(first.len(), 2);
         let id_at = |faces: &[FaceFrame], x: f32| {
             faces

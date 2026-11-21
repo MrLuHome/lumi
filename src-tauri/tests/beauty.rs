@@ -9,8 +9,8 @@ use image::Rgba;
 
 use lumi_retouch_lib::ai_engine::face_frame::{FaceFrame, FaceGeometry, NormPoint};
 use lumi_retouch_lib::ai_engine::retouch::analyze::{analyze_face, preset};
-use lumi_retouch_lib::ai_engine::retouch::lab::{chroma, srgb_to_lab};
 use lumi_retouch_lib::ai_engine::retouch::apply_face_retouch;
+use lumi_retouch_lib::ai_engine::retouch::lab::{chroma, srgb_to_lab};
 use lumi_retouch_lib::ai_engine::skin_segmentation::{build_skin_mask, SkinMask};
 use lumi_retouch_lib::error::AppError;
 use lumi_retouch_lib::image_engine::buffer::{Image16, CHANNEL_MAX};
@@ -23,21 +23,14 @@ use lumi_retouch_lib::image_engine::pipeline;
 const SKIN: [u16; 3] = [214 * 257, 170 * 257, 140 * 257];
 
 fn skin_image(width: u32, height: u32) -> Image16 {
-    Image16::from_pixel(
-        width,
-        height,
-        Rgba([SKIN[0], SKIN[1], SKIN[2], 65535]),
-    )
+    Image16::from_pixel(width, height, Rgba([SKIN[0], SKIN[1], SKIN[2], 65535]))
 }
 
 /// 合成人脸：双眼间距 d，中心 (cx, cy)，关键点沿用 YuNet 五点顺序。
 fn face_frame(id: u32, cx: f32, cy: f32, d: f32, width: u32, height: u32) -> FaceFrame {
     let w = width as f32;
     let h = height as f32;
-    let point = |x: f32, y: f32| NormPoint {
-        x: x / w,
-        y: y / h,
-    };
+    let point = |x: f32, y: f32| NormPoint { x: x / w, y: y / h };
     FaceFrame {
         id,
         uuid: String::new(),
@@ -53,6 +46,8 @@ fn face_frame(id: u32, cx: f32, cy: f32, d: f32, width: u32, height: u32) -> Fac
             point(cx - 0.35 * d, cy + 0.95 * d),
             point(cx + 0.35 * d, cy + 0.95 * d),
         ],
+        dense: None,
+        level3: None,
     }
 }
 
@@ -109,8 +104,7 @@ fn add_texture(image: &mut Image16, amount: i32) {
             let noise = (((x * 13 + y * 7) % 9) as i32 - 4) * amount;
             let pixel = image.get_pixel_mut(x, y);
             for channel in 0..3 {
-                pixel.0[channel] =
-                    (pixel.0[channel] as i32 + noise).clamp(0, 65535) as u16;
+                pixel.0[channel] = (pixel.0[channel] as i32 + noise).clamp(0, 65535) as u16;
             }
         }
     }
@@ -134,7 +128,10 @@ fn apply_single_face(
     beauty: BeautyParams,
     manual: ManualMask,
     repair_points: &[RepairPoint],
-) -> (SkinMask, lumi_retouch_lib::ai_engine::retouch::FaceRetouchReport) {
+) -> (
+    SkinMask,
+    lumi_retouch_lib::ai_engine::retouch::FaceRetouchReport,
+) {
     let mask = build_skin_mask(image, face, &manual).unwrap();
     let geometry = FaceGeometry::from_face(face, image.width(), image.height()).unwrap();
     let report = apply_face_retouch(
@@ -180,10 +177,7 @@ fn skin_mask_covers_face_and_excludes_hair_eyes_mouth_and_clothes() {
     );
 
     for (eye_x, eye_y) in geometry.eyes {
-        assert!(
-            mask.at(eye_x as u32, eye_y as u32) < 0.05,
-            "眼睛必须被保护"
-        );
+        assert!(mask.at(eye_x as u32, eye_y as u32) < 0.05, "眼睛必须被保护");
     }
     let mouth = geometry.from_local(0.0, 0.95);
     assert!(
@@ -221,7 +215,10 @@ fn smoothing_reduces_texture_but_retains_grain() {
     );
     let after = texture_energy(&image, cheek.0, cheek.1, 12);
 
-    assert!(after < before * 0.95, "磨皮应降低高频能量：{before} → {after}");
+    assert!(
+        after < before * 0.95,
+        "磨皮应降低高频能量：{before} → {after}"
+    );
     assert!(
         after > before * 0.15,
         "纹理保护必须保留可见细节，不能磨成塑料：{before} → {after}"
@@ -409,9 +406,17 @@ fn skin_tone_keeps_natural_chroma_and_avoids_flat_white() {
     );
 
     let after = lab(image.get_pixel(sample.0, sample.1).0);
-    assert!(after[1] < before[1], "泛红应被压低：{} → {}", before[1], after[1]);
+    assert!(
+        after[1] < before[1],
+        "泛红应被压低：{} → {}",
+        before[1],
+        after[1]
+    );
     assert!(after[0] >= before[0] - 0.5, "美白不应让皮肤变暗");
-    assert!(after[0] <= before[0] + 8.0, "美白必须温和，不能整体拉亮死白");
+    assert!(
+        after[0] <= before[0] + 8.0,
+        "美白必须温和，不能整体拉亮死白"
+    );
     let after_chroma = chroma(after[1], after[2]);
     assert!(
         after_chroma >= before_chroma * 0.34,
@@ -475,13 +480,8 @@ fn multi_face_parameters_do_not_leak_across_faces() {
     // 单独关闭人脸 B 后，两张脸都不应改变。
     let mut disabled = params.clone();
     disabled.faces[1].enabled = false;
-    let untouched = pipeline::render(
-        &image,
-        &disabled,
-        &[left, right],
-        &CancelToken::default(),
-    )
-    .unwrap();
+    let untouched =
+        pipeline::render(&image, &disabled, &[left, right], &CancelToken::default()).unwrap();
     assert_eq!(untouched.into_raw(), image.into_raw());
 }
 

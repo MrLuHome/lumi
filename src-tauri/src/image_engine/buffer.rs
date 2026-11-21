@@ -60,9 +60,11 @@ where
         return;
     }
     let raw: &mut [u16] = image.as_mut();
-    raw.par_chunks_mut(4).enumerate().for_each(|(index, pixel)| {
-        apply(index as u32 % width, index as u32 / width, pixel);
-    });
+    raw.par_chunks_mut(4)
+        .enumerate()
+        .for_each(|(index, pixel)| {
+            apply(index as u32 % width, index as u32 / width, pixel);
+        });
 }
 
 pub fn estimated_bytes(width: u32, height: u32) -> usize {

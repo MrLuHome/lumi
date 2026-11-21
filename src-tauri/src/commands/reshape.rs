@@ -33,7 +33,10 @@ pub async fn reshape_mesh(
     let repo = repo.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let cached = cache.load(Path::new(&path))?;
-        let faces = repo.get(Path::new(&path)).map(|entry| entry.faces).unwrap_or_default();
+        let faces = repo
+            .get(Path::new(&path))
+            .map(|entry| entry.faces)
+            .unwrap_or_default();
         let Some(face) = faces.iter().find(|face| face.id == face_id) else {
             return Ok(None);
         };
@@ -41,7 +44,12 @@ pub async fn reshape_mesh(
             .face_reshape_match(&face.uuid, face.id)
             .cloned()
             .unwrap_or_else(|| crate::image_engine::params::FaceReshape::new(face.id));
-        Ok(face_mesh::preview(face, cached.width, cached.height, &reshape))
+        Ok(face_mesh::preview(
+            face,
+            cached.width,
+            cached.height,
+            &reshape,
+        ))
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?
@@ -100,7 +108,10 @@ pub async fn restore_faces(
 ) -> AppResult<FaceRestoreResult> {
     let repo = repo.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let frames = repo.get(Path::new(&path)).map(|entry| entry.faces).unwrap_or_default();
+        let frames = repo
+            .get(Path::new(&path))
+            .map(|entry| entry.faces)
+            .unwrap_or_default();
         let current = identity::source_hash(Path::new(&path)).ok();
         let source_changed = match (current, source_hash) {
             (Some(current), Some(saved)) if !saved.is_empty() => current != saved,
@@ -116,6 +127,21 @@ pub async fn restore_faces(
             .apply_identities(Path::new(&path), &assignments)
             .map(|entry| entry.faces)
             .unwrap_or(frames);
+        // 恢复项目里保存的稠密关键点与门控；旧项目没有这些字段时保持 5 点并锁定 LEVEL 3。
+        let analyses: Vec<_> = records
+            .iter()
+            .map(|record| {
+                (
+                    record.uuid.clone(),
+                    record.dense.clone(),
+                    record.level3.clone(),
+                )
+            })
+            .collect();
+        let faces = repo
+            .attach_analyses(Path::new(&path), &analyses)
+            .map(|entry| entry.faces)
+            .unwrap_or(faces);
         Ok(FaceRestoreResult { outcome, faces })
     })
     .await

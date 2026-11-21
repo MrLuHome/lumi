@@ -15,10 +15,7 @@ pub fn apply(points: &mut [ControlPoint], params: &MouthShape, center: [f32; 2])
         if !matches!(point.tag, ControlTag::Mouth { .. }) || point.weight <= 0.0 {
             continue;
         }
-        let rel = [
-            point.local_to[0] - center[0],
-            point.local_to[1] - center[1],
-        ];
+        let rel = [point.local_to[0] - center[0], point.local_to[1] - center[1]];
         let size = params.size / 100.0;
         let sx = 1.0 + size * 0.09 + (params.width / 100.0) * 0.08;
         let vertical = if rel[1] < 0.0 {

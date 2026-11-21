@@ -15,10 +15,7 @@ pub fn apply(points: &mut [ControlPoint], params: &NoseShape, center: [f32; 2]) 
         if !matches!(point.tag, ControlTag::Nose { .. }) || point.weight <= 0.0 {
             continue;
         }
-        let rel = [
-            point.local_to[0] - center[0],
-            point.local_to[1] - center[1],
-        ];
+        let rel = [point.local_to[0] - center[0], point.local_to[1] - center[1]];
         let mut du = 0.0;
         let mut dv = 0.0;
 

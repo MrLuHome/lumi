@@ -11,7 +11,7 @@ use crate::error::{AppError, AppResult};
 use crate::state::{FaceRepository, ImageCache};
 
 /// 模型随安装包分发；开发时回退到仓库内的 resources 目录。
-fn model_path(app: &AppHandle) -> PathBuf {
+pub(crate) fn model_path(app: &AppHandle) -> PathBuf {
     if let Ok(resources) = app.path().resource_dir() {
         for relative in ["resources/models/yunet", "models/yunet"] {
             let candidate = resources.join(relative).join(MODEL_FILE);
@@ -89,16 +89,12 @@ pub async fn detect_faces(
         let stored = repo.store(Path::new(&path), frames);
         for face in result.faces.iter_mut() {
             let frame = FaceFrame::from_detected(face, cached.width, cached.height);
-            if let Some(best) = stored
-                .faces
-                .iter()
-                .max_by(|a, b| {
-                    frame
-                        .iou(a)
-                        .partial_cmp(&frame.iou(b))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-            {
+            if let Some(best) = stored.faces.iter().max_by(|a, b| {
+                frame
+                    .iou(a)
+                    .partial_cmp(&frame.iou(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
                 if frame.iou(best) > 0.2 {
                     face.id = best.id as usize;
                     face.uuid = best.uuid.clone();

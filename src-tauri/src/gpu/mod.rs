@@ -102,9 +102,13 @@ impl ComputeEngine {
         let criterion = rows
             .iter()
             .find(|row| row.width == 3000)
-            .or_else(|| rows.iter().max_by(|a, b| {
-                a.speedup.partial_cmp(&b.speedup).unwrap_or(std::cmp::Ordering::Equal)
-            }))
+            .or_else(|| {
+                rows.iter().max_by(|a, b| {
+                    a.speedup
+                        .partial_cmp(&b.speedup)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+            })
             .map(|row| row.speedup);
         if let Ok(mut guard) = self.verified_speedup.write() {
             *guard = criterion;

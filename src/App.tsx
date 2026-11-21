@@ -9,6 +9,8 @@ import { BatchWorkspace } from "./components/BatchWorkspace";
 import { RawPanel } from "./components/RawPanel";
 import { ColorPanel } from "./components/ColorPanel";
 import { PerformancePanel } from "./components/PerformancePanel";
+import { AiPortraitPanel } from "./components/AiPortraitPanel";
+import { ModelHubPanel } from "./components/ModelHubPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/ui/Toast";
 import { usePreviewRenderer } from "./hooks/usePreviewRenderer";
@@ -407,6 +409,10 @@ export default function App() {
               <ColorPanel />
             ) : workspace === "performance" ? (
               <PerformancePanel />
+            ) : workspace === "ai" ? (
+              <AiPortraitPanel photo={photo} />
+            ) : workspace === "models" ? (
+              <ModelHubPanel />
             ) : (
               <Inspector photo={photo} params={params} />
             )}

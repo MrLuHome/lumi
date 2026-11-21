@@ -4,6 +4,7 @@ pub mod batch;
 pub mod beauty;
 pub mod body;
 pub mod color;
+pub mod face_intelligence;
 pub mod faces;
 pub mod gpu;
 pub mod library;

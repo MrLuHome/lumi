@@ -11,7 +11,12 @@ use crate::image_engine::params::SubjectMaskParams;
 use super::alpha;
 
 /// 按参数执行平滑 → 扩张/收缩 → 羽化。返回与输入同尺寸的 Alpha。
-pub fn refine_alpha(values: &[f32], width: u32, height: u32, params: &SubjectMaskParams) -> Vec<f32> {
+pub fn refine_alpha(
+    values: &[f32],
+    width: u32,
+    height: u32,
+    params: &SubjectMaskParams,
+) -> Vec<f32> {
     let short = width.min(height) as f32;
     let mut current = values.to_vec();
 
@@ -120,9 +125,9 @@ mod tests {
 
     #[test]
     fn decontamination_changes_only_soft_edges() {
-        let mut image: Image16 = Image16::from_pixel(8, 8, image::Rgba([30000, 30000, 30000, 65535]));
-        let background: Image16 =
-            Image16::from_pixel(8, 8, image::Rgba([60000, 0, 0, 65535]));
+        let mut image: Image16 =
+            Image16::from_pixel(8, 8, image::Rgba([30000, 30000, 30000, 65535]));
+        let background: Image16 = Image16::from_pixel(8, 8, image::Rgba([60000, 0, 0, 65535]));
         let interior_before = image.get_pixel(4, 4).0;
         let mut alpha = vec![0.0f32; 64];
         alpha[4 * 8 + 4] = 1.0;

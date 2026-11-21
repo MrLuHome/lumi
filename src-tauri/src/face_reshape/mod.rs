@@ -9,8 +9,8 @@
 //! - 眼睑、唇轮廓、鼻翼等需要稠密轮廓的参数在 UI 中禁用并提示；
 //! - 所有变形限制在脸部椭圆内，外圈控制点固定，背景不会被弯曲。
 
-pub mod boundary;
 pub mod blending;
+pub mod boundary;
 pub mod deformation;
 pub mod face_mesh;
 pub mod identity;
@@ -30,6 +30,7 @@ use serde::Serialize;
 
 use crate::ai_engine::face_frame::FaceFrame;
 use crate::error::AppResult;
+use crate::face_intelligence::quality::Level3Gate;
 use crate::image_engine::buffer::Image16;
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::params::FaceReshape;
@@ -77,19 +78,19 @@ pub fn capability() -> ReshapeCapability {
         disabled: vec![
             DisabledParam {
                 key: "eyes.*",
-                reason: "LEVEL 3：需要 478/106 点稠密眼睑轮廓，当前不开放",
+                reason: "LEVEL 3：需要通过质量验证的稠密眼睑轮廓；当前人脸未解锁",
             },
             DisabledParam {
                 key: "eyes.corner",
-                reason: "眼角需要 106 点眼睑轮廓，当前 5 点模型不开放",
+                reason: "眼角需要稠密眼睑轮廓；当前人脸未解锁",
             },
             DisabledParam {
                 key: "nose.*",
-                reason: "LEVEL 3：鼻梁/鼻翼需要稠密关键点或商业 SDK",
+                reason: "LEVEL 3：需要稠密鼻部轮廓；当前人脸未解锁",
             },
             DisabledParam {
                 key: "nose.alar",
-                reason: "鼻翼宽度需要鼻孔关键点，当前不开放",
+                reason: "鼻翼宽度需要稠密鼻孔/鼻翼关键点；当前人脸未解锁",
             },
             DisabledParam {
                 key: "nose.height",
@@ -97,30 +98,30 @@ pub fn capability() -> ReshapeCapability {
             },
             DisabledParam {
                 key: "mouth.*",
-                reason: "LEVEL 3：唇线与嘴角需要稠密唇轮廓，当前不开放",
+                reason: "LEVEL 3：需要稠密唇轮廓；当前人脸未解锁",
             },
             DisabledParam {
                 key: "mouth.upper",
-                reason: "上唇厚度需要上下唇轮廓线",
+                reason: "上唇厚度需要上下唇轮廓线；当前人脸未解锁",
             },
             DisabledParam {
                 key: "mouth.lower",
-                reason: "下唇厚度需要上下唇轮廓线",
+                reason: "下唇厚度需要上下唇轮廓线；当前人脸未解锁",
             },
             DisabledParam {
                 key: "mouth.symmetry",
-                reason: "唇形对称性需要完整唇轮廓",
+                reason: "唇形对称性需要完整唇轮廓；当前人脸未解锁",
             },
             DisabledParam {
                 key: "chin.*",
-                reason: "LEVEL 3：独立下巴塑形需要下巴轮廓链，本轮仅开放下颌线整体调整",
+                reason: "LEVEL 3：需要通过质量验证的下巴轮廓链；当前人脸未解锁",
             },
             DisabledParam {
                 key: "chin.point",
                 reason: "下巴尖度需要下巴轮廓链，当前只开放长度/宽度/下颌线",
             },
         ],
-        note: "正式交付 LEVEL 1 手动变形 + LEVEL 2 轮廓级保守调整；LEVEL 3 稠密五官精修未启用。",
+        note: "LEVEL 1 手动变形 + LEVEL 2 轮廓级调整常驻；LEVEL 3 由每张脸的 AI 稠密关键点实测门控决定，未达标时滑杆禁用并显示原因。",
     }
 }
 
@@ -154,18 +155,26 @@ struct Candidate {
     region: AlphaRegion,
     params: FaceReshape,
     elapsed: f32,
+    dense_source: Option<String>,
+    dense_used: bool,
+    gate_note: Option<String>,
 }
 
-/// LEVEL 3 稠密五官塑形当前不交付。即使项目文件里带有这些参数，
-/// 渲染时也会被清零，避免“接口存在 = 功能已完成”的误判。
-pub const LEVEL3_ENABLED: bool = false;
-
-fn sanitize(entry: &FaceReshape) -> FaceReshape {
+/// LEVEL 3 不再由全局开关决定：每张脸根据 `FaceFrame.level3` 的实测门控
+/// 逐项清零未解锁的参数，避免“滑杆能拖动但算法不生效”的假解锁。
+fn sanitize(entry: &FaceReshape, gate: Option<&Level3Gate>) -> FaceReshape {
     let mut output = entry.clone();
-    if !LEVEL3_ENABLED {
+    let enabled = |pick: fn(&Level3Gate) -> bool| gate.map(pick).unwrap_or(false);
+    if !enabled(|value| value.eyes.enabled) {
         output.eyes = Default::default();
+    }
+    if !enabled(|value| value.nose.enabled) {
         output.nose = Default::default();
+    }
+    if !enabled(|value| value.mouth.enabled) {
         output.mouth = Default::default();
+    }
+    if !enabled(|value| value.chin.enabled) {
         output.chin = Default::default();
     }
     output
@@ -195,7 +204,14 @@ pub fn apply_face_reshape(
         if !entry.enabled || !entry.is_active() {
             continue;
         }
-        let entry = sanitize(entry);
+        let gate = face.level3.as_ref();
+        let requested_level3 = !entry.eyes.is_neutral()
+            || !entry.nose.is_neutral()
+            || !entry.mouth.is_neutral()
+            || !entry.chin.is_neutral();
+        let level3_unlocked = gate.map(|value| value.any_enabled()).unwrap_or(false);
+        let gate_note = requested_level3 && !level3_unlocked;
+        let entry = sanitize(entry, gate);
         cancel.check()?;
         let started = Instant::now();
         let landmarks = match landmark::analyze(face, image.width(), image.height()) {
@@ -224,11 +240,17 @@ pub fn apply_face_reshape(
             }
         };
 
-        let mut mesh = (*face_mesh::build_cached(&landmarks.geometry, &entry)).clone();
+        // 未解锁时稠密数据完全不参与网格构建：不是“有数据但不用”，
+        // 而是从控制点层面就退回 5 点能力，避免锁定状态产生隐性差异。
+        let dense = face.dense.as_ref().filter(|_| level3_unlocked);
+        let dense_used = dense.is_some();
+        let mut mesh = (*face_mesh::build_cached(&landmarks.geometry, &entry, dense)).clone();
         // 低置信度先整体降强度，再做质量检查，避免“勉强可用”的极端参数。
         deformation::scale_targets(&mut mesh.points, landmarks.auto_scale);
         let quality = quality::stabilize(&mut mesh, quality::MAX_FACE_DISPLACEMENT_RATIO);
-        let Some(region) = boundary::build_region(&landmarks.geometry, image.width(), image.height()) else {
+        let Some(region) =
+            boundary::build_region(&landmarks.geometry, image.width(), image.height())
+        else {
             continue;
         };
         candidates.push(Candidate {
@@ -239,6 +261,16 @@ pub fn apply_face_reshape(
             region,
             params: entry,
             elapsed: started.elapsed().as_secs_f32() * 1000.0,
+            dense_source: if dense_used {
+                dense.map(|value| value.provider_id.clone())
+            } else {
+                None
+            },
+            dense_used,
+            gate_note: gate_note.then(|| {
+                gate.map(|value| value.summary.clone())
+                    .unwrap_or_else(|| "当前人脸没有可用的稠密关键点".into())
+            }),
         });
     }
 
@@ -246,7 +278,10 @@ pub fn apply_face_reshape(
         return Ok(reports);
     }
 
-    let mut regions: Vec<AlphaRegion> = candidates.iter().map(|entry| entry.region.clone()).collect();
+    let mut regions: Vec<AlphaRegion> = candidates
+        .iter()
+        .map(|entry| entry.region.clone())
+        .collect();
     boundary::apply_ownership(&mut regions);
 
     for (candidate, region) in candidates.into_iter().zip(regions) {
@@ -269,13 +304,8 @@ pub fn apply_face_reshape(
                 image.height(),
                 candidate.landmarks.geometry.eye_distance,
             ) {
-                let stats = operations::manual::apply(
-                    image,
-                    &effect,
-                    &region,
-                    &original_roi,
-                    cancel,
-                )?;
+                let stats =
+                    operations::manual::apply(image, &effect, &region, &original_roi, cancel)?;
                 warped_pixels += stats.pixels;
                 extra_notes.push(format!(
                     "手动笔触 {} 笔，最大位移 {:.1}px",
@@ -288,14 +318,27 @@ pub fn apply_face_reshape(
         let mut notes = candidate.landmarks.notes.clone();
         notes.extend(candidate.quality.notes.iter().cloned());
         notes.extend(extra_notes);
+        if let Some(note) = &candidate.gate_note {
+            notes.push(format!("LEVEL 3 参数已忽略：{note}"));
+        }
+        if candidate.dense_used {
+            notes.push(format!(
+                "网格已使用 {} 的稠密轮廓（{} 个控制点）",
+                candidate.dense_source.as_deref().unwrap_or("AI Provider"),
+                candidate.mesh.points.len()
+            ));
+        }
         if candidate.quality.applied_scale <= 0.0 && warped_pixels == 0 {
             notes.push("参数超出安全范围，本次未改变像素".into());
         }
 
         reports.push(FaceReshapeReport {
             face_id: candidate.face_id,
-            source: candidate.landmarks.source.id().to_string(),
-            dense_landmarks: candidate.landmarks.dense(),
+            source: candidate
+                .dense_source
+                .clone()
+                .unwrap_or_else(|| candidate.landmarks.source.id().to_string()),
+            dense_landmarks: candidate.dense_used,
             confidence: candidate.landmarks.confidence,
             auto_scale: candidate.landmarks.auto_scale,
             control_points: candidate.mesh.points.len(),
@@ -330,8 +373,8 @@ fn copy_roi(image: &Image16, rect: boundary::Rect) -> Vec<u16> {
 mod tests {
     use super::*;
     use crate::ai_engine::face_frame::NormPoint;
-    use crate::image_engine::params::{FaceReshape, FaceShape, WarpMode, WarpStroke};
     use crate::image_engine::params::MaskPoint;
+    use crate::image_engine::params::{FaceReshape, FaceShape, WarpMode, WarpStroke};
     use image::Rgba;
 
     fn face(id: u32, center_x: f32) -> FaceFrame {
@@ -365,17 +408,14 @@ mod tests {
                     y: 0.58,
                 },
             ],
+            dense: None,
+            level3: None,
         }
     }
 
     fn photo() -> Image16 {
         Image16::from_fn(240, 240, |x, y| {
-            Rgba([
-                (x * 180) as u16,
-                (y * 180) as u16,
-                30_000,
-                65535,
-            ])
+            Rgba([(x * 180) as u16, (y * 180) as u16, 30_000, 65535])
         })
     }
 
@@ -422,8 +462,13 @@ mod tests {
             },
             ..FaceReshape::new(1)
         }];
-        apply_face_reshape(&mut image, &[face(1, 0.5)], &params, &CancelToken::default())
-            .unwrap();
+        apply_face_reshape(
+            &mut image,
+            &[face(1, 0.5)],
+            &params,
+            &CancelToken::default(),
+        )
+        .unwrap();
         for y in 0..240u32 {
             for x in 0..240u32 {
                 if x < 20 || y < 20 || x > 220 || y > 220 {
@@ -445,10 +490,7 @@ mod tests {
                     radius: 0.06,
                     strength: 100.0,
                     feather: 80.0,
-                    points: vec![
-                        MaskPoint { x: 0.45, y: 0.5 },
-                        MaskPoint { x: 0.55, y: 0.5 },
-                    ],
+                    points: vec![MaskPoint { x: 0.45, y: 0.5 }, MaskPoint { x: 0.55, y: 0.5 }],
                 }],
             },
             ..FaceReshape::new(1)
@@ -476,8 +518,13 @@ mod tests {
             ..FaceReshape::new(1)
         }];
         params[0].enabled = false;
-        let reports = apply_face_reshape(&mut image, &[face(1, 0.5)], &params, &CancelToken::default())
-            .unwrap();
+        let reports = apply_face_reshape(
+            &mut image,
+            &[face(1, 0.5)],
+            &params,
+            &CancelToken::default(),
+        )
+        .unwrap();
         assert!(reports.is_empty());
         assert_eq!(image.into_raw(), before.into_raw());
     }
@@ -486,7 +533,10 @@ mod tests {
     fn cap_scale_is_full_for_good_face() {
         let report = capability();
         assert!(!report.dense_landmarks);
-        assert!(report.disabled.iter().any(|entry| entry.key == "mouth.upper"));
+        assert!(report
+            .disabled
+            .iter()
+            .any(|entry| entry.key == "mouth.upper"));
         assert!(!report.supported.is_empty());
     }
 }

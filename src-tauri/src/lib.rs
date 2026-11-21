@@ -26,11 +26,12 @@
 pub mod ai;
 pub mod ai_engine;
 pub mod color_management;
+mod commands;
 pub mod error;
+pub mod face_intelligence;
 pub mod face_reshape;
 pub mod gpu;
 pub mod image_engine;
-mod commands;
 mod state;
 
 pub use error::{AppError, AppResult};
@@ -38,9 +39,26 @@ pub use error::{AppError, AppResult};
 use ai::FaceEngine;
 use commands::render::{RenderCache, RenderRegistry};
 use state::{FaceRepository, ImageCache};
+use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            // 人脸智能层：Provider 注册表 + 模型目录 + 隔离探针入口。
+            // 模型目录放在应用数据目录，避免写安装包内部；不存在时自动创建。
+            let yunet = commands::faces::model_path(app.handle());
+            let yunet = yunet.is_file().then_some(yunet);
+            let models_root = app
+                .path()
+                .app_data_dir()
+                .map(|dir| dir.join("face-models"))
+                .unwrap_or_else(|_| std::env::temp_dir().join("lumi-face-models"));
+            let executable = std::env::current_exe().ok();
+            app.manage(std::sync::Arc::new(
+                face_intelligence::FaceIntelligence::new(yunet, models_root, executable),
+            ));
+            Ok(())
+        })
         .manage(ImageCache::new(8))
         .manage(FaceRepository::default())
         .manage(RenderRegistry::default())
@@ -116,6 +134,18 @@ pub fn run() {
             commands::gpu::gpu_status,
             commands::gpu::gpu_benchmark,
             commands::gpu::set_compute_backend,
+            commands::face_intelligence::list_face_providers,
+            commands::face_intelligence::face_intelligence_status,
+            commands::face_intelligence::select_face_provider,
+            commands::face_intelligence::face_quality_thresholds,
+            commands::face_intelligence::last_face_analysis,
+            commands::face_intelligence::analyze_photo_faces,
+            commands::face_intelligence::probe_face_quality,
+            commands::face_intelligence::list_face_models,
+            commands::face_intelligence::pick_face_model_file,
+            commands::face_intelligence::import_face_model,
+            commands::face_intelligence::revalidate_face_model,
+            commands::face_intelligence::remove_face_model,
         ])
         .run(tauri::generate_context!())
         .expect("LUMI RETOUCH 启动失败");

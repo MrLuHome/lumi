@@ -123,7 +123,8 @@ mod tests {
     fn solid_background_changes_only_background() {
         let width = 16;
         let height = 16;
-        let mut image: Image16 = Image16::from_pixel(width, height, Rgba([10000, 12000, 14000, 65535]));
+        let mut image: Image16 =
+            Image16::from_pixel(width, height, Rgba([10000, 12000, 14000, 65535]));
         let foreground_before = image.get_pixel(8, 8).0;
         let settings = BackgroundParams {
             enabled: true,

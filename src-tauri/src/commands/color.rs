@@ -111,13 +111,9 @@ pub async fn soft_proof(
             .get(Path::new(&path))
             .map(|entry| entry.faces)
             .unwrap_or_default();
-        let rendered = pipeline::render(
-            &cached.full,
-            &params,
-            &faces,
-            &CancelToken::default(),
-        )?;
-        let (preview_image, report) = transform::soft_proof(&rendered, &settings, warn.unwrap_or(true))?;
+        let rendered = pipeline::render(&cached.full, &params, &faces, &CancelToken::default())?;
+        let (preview_image, report) =
+            transform::soft_proof(&rendered, &settings, warn.unwrap_or(true))?;
         let canvas = preview::encode_canvas(&preview_image, false)?;
         Ok(SoftProofResult {
             url: canvas.url,
@@ -153,15 +149,9 @@ pub async fn display_preview(
             .get(Path::new(&path))
             .map(|entry| entry.faces)
             .unwrap_or_default();
-        let rendered = pipeline::render(
-            &cached.full,
-            &params,
-            &faces,
-            &CancelToken::default(),
-        )?;
+        let rendered = pipeline::render(&cached.full, &params, &faces, &CancelToken::default())?;
         let (display_image, status) = color_management::display::to_display(&rendered)?;
-        let preview_image =
-            crate::image_engine::preview::build_preview(&display_image, 1800);
+        let preview_image = crate::image_engine::preview::build_preview(&display_image, 1800);
         let canvas = preview::encode_canvas(&preview_image, false)?;
 
         // 只有真实读取到显示器 Profile 时才标记，回退 sRGB 时保持普通 PNG。
@@ -169,7 +159,9 @@ pub async fn display_preview(
             color_management::display::display_icc()
                 .and_then(|icc| {
                     let data = canvas.url.strip_prefix("data:image/png;base64,")?;
-                    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .ok()?;
                     let tagged = embed::embed(bytes, &icc).ok()?;
                     Some(format!(
                         "data:image/png;base64,{}",
@@ -197,10 +189,7 @@ pub async fn display_preview(
 /// CMYK TIFF → sRGB。优先使用文件内嵌 ICC；否则使用用户 ICC；都没有时
 /// 使用通用公式并在 `quality` 中标注“基础”。
 #[tauri::command]
-pub async fn color_convert_cmyk(
-    path: String,
-    icc_path: Option<String>,
-) -> AppResult<CmykResult> {
+pub async fn color_convert_cmyk(path: String, icc_path: Option<String>) -> AppResult<CmykResult> {
     tauri::async_runtime::spawn_blocking(move || {
         let source = PathBuf::from(&path);
         let bytes = std::fs::read(&source)?;

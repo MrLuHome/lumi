@@ -137,10 +137,15 @@ mod tests {
             landmarks: vec![
                 NormPoint { x: 0.44, y: 0.40 },
                 NormPoint { x: 0.56, y: 0.40 },
-                NormPoint { x: nose_x, y: nose_y },
+                NormPoint {
+                    x: nose_x,
+                    y: nose_y,
+                },
                 NormPoint { x: 0.44, y: 0.58 },
                 NormPoint { x: 0.56, y: 0.58 },
             ],
+            dense: None,
+            level3: None,
         }
     }
 

@@ -77,7 +77,11 @@ pub struct FaceEngine {
 
 impl FaceEngine {
     pub fn status(&self, model_path: Option<&Path>) -> FaceModelStatus {
-        let loaded = self.inner.lock().map(|guard| guard.is_some()).unwrap_or(false);
+        let loaded = self
+            .inner
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false);
         FaceModelStatus {
             available: model_path.map(|path| path.exists()).unwrap_or(false),
             loaded,
@@ -153,12 +157,8 @@ impl FaceEngine {
         let model = self.model()?;
         progress("预处理", 0.25);
 
-        let resized = image::imageops::resize(
-            preview,
-            DETECT_SIZE,
-            DETECT_SIZE,
-            FilterType::Triangle,
-        );
+        let resized =
+            image::imageops::resize(preview, DETECT_SIZE, DETECT_SIZE, FilterType::Triangle);
         let mut input = vec![0f32; 3 * (DETECT_SIZE * DETECT_SIZE) as usize];
         let plane = (DETECT_SIZE * DETECT_SIZE) as usize;
         // YuNet 使用 BGR、0..255 输入（OpenCV 训练口径），这里按同一口径喂入。
