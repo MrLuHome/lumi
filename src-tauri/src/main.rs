@@ -6,11 +6,15 @@ fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let probe = lumi_retouch_lib::face_intelligence::model_hub::probe::PROBE_FLAG;
     let infer = lumi_retouch_lib::face_intelligence::model_hub::probe::INFER_FLAG;
+    let predict = lumi_retouch_lib::face_intelligence::eval_export::PREDICT_FLAG;
     match argv.get(1).map(String::as_str) {
         Some(flag) if flag == probe || flag == infer => {
             std::process::exit(
                 lumi_retouch_lib::face_intelligence::model_hub::probe::run_cli(&argv),
             );
+        }
+        Some(flag) if flag == predict => {
+            std::process::exit(lumi_retouch_lib::face_intelligence::eval_export::run_cli(&argv));
         }
         _ => {}
     }

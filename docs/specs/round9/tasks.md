@@ -69,13 +69,13 @@
 
 ## 阶段 7 NME 评测
 
-- [ ] 采集/授权 ≥50 张，划分开发/验证/测试集（同人不得跨集泄漏）
-- [ ] 统一 8 区域语义与 Semantic ID，标注规范
-- [ ] 可重复评测脚本，输出 JSON/CSV、总体与分区、P50/P95、失败率、分组
-- [ ] 预置门槛后再看结果
-- [ ] 输出 `ROUND9_NME_EVALUATION.md`、`ROUND9_LANDMARK_ANNOTATION_GUIDE.md`
-- [ ] 无授权则标 `BLOCKED`
-- [ ] 提交 `test(round9): NME 评测`
+- [ ] 采集/授权 ≥50 张，划分开发/验证/测试集（同人不得跨集泄漏）— **BLOCKED：无授权数据集**
+- [x] 统一 8 区域语义与 Semantic ID，标注规范
+- [x] 可重复评测脚本，输出 JSON/CSV、总体与分区、P50/P95、失败率、分组
+- [x] 预置门槛后再看结果
+- [x] 输出 `ROUND9_NME_EVALUATION.md`、`ROUND9_LANDMARK_ANNOTATION_GUIDE.md`
+- [x] 无授权则标 `BLOCKED`
+- [x] 提交 `test(round9): NME 评测`
 
 ## 阶段 8 打包与跨平台回归
 

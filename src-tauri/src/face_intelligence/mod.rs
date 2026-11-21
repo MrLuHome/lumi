@@ -12,6 +12,7 @@ pub mod anchors;
 pub mod capability;
 pub mod coordinate;
 pub mod dense;
+pub mod eval_export;
 pub mod model_hub;
 pub mod provider;
 pub mod providers;
