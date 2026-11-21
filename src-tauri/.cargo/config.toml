@@ -1,0 +1,4 @@
+[env]
+# libraw_rs_vendor 的 build.rs 用 bindgen 生成绑定，需要 libclang。
+# 本机 libclang 位于命令行工具目录，Xcode 完整安装时该路径依然可用。
+LIBCLANG_PATH = "/Library/Developer/CommandLineTools/usr/lib"

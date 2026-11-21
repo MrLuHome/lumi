@@ -123,6 +123,15 @@ impl ImageCache {
         Ok(cached)
     }
 
+    /// 立即释放缓存中的全部图像。批量任务在载入下一张前调用，
+    /// 避免“新图解码完成”与“旧图仍在缓存”同时存在导致峰值翻倍。
+    pub fn clear(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.entries.clear();
+            guard.total_bytes = 0;
+        }
+    }
+
     #[allow(dead_code)] // 目前仅测试断言使用，保留用于排查缓存占用
     pub fn memory_usage(&self) -> usize {
         self.inner

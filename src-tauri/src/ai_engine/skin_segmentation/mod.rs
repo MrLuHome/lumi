@@ -209,7 +209,7 @@ fn build_mask_from_geometry(
 
     if manual.invert {
         let protect = feature_protection(
-            &geometry,
+            geometry,
             eye_right_local,
             eye_left_local,
             nose_local,

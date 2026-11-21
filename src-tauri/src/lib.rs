@@ -8,10 +8,27 @@
 //! - `commands`：Tauri 命令边界，只做参数校验、线程调度与序列化；
 //! - `state`：进程内图片缓存与人脸结果缓存。
 
+// 图像处理与 Tauri 命令中，显式索引/多参数签名可读性更好；这些风格 lint
+// 由 Rust 1.95 的 clippy 新增，沿用既有代码约定，按 lint 名称显式放行。
+#![allow(
+    clippy::needless_range_loop,
+    clippy::too_many_arguments,
+    clippy::excessive_precision,
+    clippy::field_reassign_with_default,
+    clippy::useless_vec,
+    clippy::derivable_impls,
+    clippy::default_constructed_unit_structs,
+    clippy::explicit_into_iter_loop,
+    clippy::redundant_clone,
+    clippy::manual_is_multiple_of
+)]
+
 pub mod ai;
 pub mod ai_engine;
+pub mod color_management;
 pub mod error;
 pub mod face_reshape;
+pub mod gpu;
 pub mod image_engine;
 mod commands;
 mod state;
@@ -32,6 +49,8 @@ pub fn run() {
         .manage(commands::analysis::AnalysisCache::default())
         .manage(commands::preset::PresetStore::new())
         .manage(commands::batch::BatchEngine::default())
+        .manage(color_management::ColorEngine::new())
+        .manage(gpu::ComputeEngine::new())
         .invoke_handler(tauri::generate_handler![
             commands::library::pick_images,
             commands::library::load_images,
@@ -81,6 +100,22 @@ pub fn run() {
             commands::batch::batch_clear_completed,
             commands::batch::batch_failures,
             commands::batch::pick_batch_output_dir,
+            commands::raw::raw_info,
+            commands::raw::raw_preview,
+            commands::raw::raw_develop,
+            commands::raw::raw_capabilities,
+            commands::raw::raw_probe,
+            commands::color::color_status,
+            commands::color::color_profiles,
+            commands::color::color_set_output,
+            commands::color::color_check_profile,
+            commands::color::soft_proof,
+            commands::color::display_preview,
+            commands::color::color_convert_cmyk,
+            commands::color::display_profile_refresh,
+            commands::gpu::gpu_status,
+            commands::gpu::gpu_benchmark,
+            commands::gpu::set_compute_backend,
         ])
         .run(tauri::generate_context!())
         .expect("LUMI RETOUCH 启动失败");

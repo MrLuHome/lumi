@@ -77,6 +77,7 @@ export function BatchWorkspace() {
   const applyExternalParams = useEditorStore((state) => state.applyExternalParams);
   const notify = useEditorStore((state) => state.notify);
   const presets = useEditorStore((state) => state.presets);
+  const rawByPhoto = useEditorStore((state) => state.rawByPhoto);
 
   const [sortAsc, setSortAsc] = useState(true);
   const [formatFilter, setFormatFilter] = useState<"all" | string>("all");
@@ -237,7 +238,9 @@ export function BatchWorkspace() {
       const started = await batchStart({
         photos: selectedPhotos.flatMap((photo) => {
           const photoParams = params[photo.id];
-          return photoParams ? [{ path: photo.path, params: photoParams }] : [];
+          return photoParams
+            ? [{ path: photo.path, params: photoParams, rawParams: rawByPhoto[photo.id] ?? null }]
+            : [];
         }),
         settings,
         outputDir,

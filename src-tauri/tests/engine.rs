@@ -1,4 +1,5 @@
 //! 统一图像引擎的集成测试：真实文件解码、处理、导出、项目往返、任务取消。
+#![allow(clippy::field_reassign_with_default)]
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -151,11 +152,11 @@ fn export_writes_file_and_never_overwrites_original() {
     let image = fit_within(&decoded.image, 600);
     let settings = ExportSettings::default();
 
-    let overwrite = export::write(&source, &source, &image, settings, BitDepth::Eight);
+    let overwrite = export::write(&source, &source, &image, settings, BitDepth::Eight, None);
     assert!(overwrite.is_err(), "导出到原图路径必须被拒绝");
 
     let target = dir.join("out.png");
-    let outcome = export::write(&target, &source, &image, settings, BitDepth::Eight).unwrap();
+    let outcome = export::write(&target, &source, &image, settings, BitDepth::Eight, None).unwrap();
     assert_eq!(outcome.format, "PNG");
     assert_eq!(outcome.bytes, std::fs::metadata(&target).unwrap().len());
     let reloaded: Image16 = image::ImageReader::open(&target)
@@ -194,6 +195,9 @@ fn project_roundtrip_keeps_params_and_masks() {
             faces: Vec::new(),
             subjects: Vec::new(),
             mask_meta: None,
+            source: None,
+            raw: None,
+            color: None,
         }],
         0,
         ExportSettings::default(),
@@ -264,6 +268,7 @@ fn benchmark_full_pipeline() {
         &full,
         ExportSettings::default(),
         BitDepth::Eight,
+        None,
     )
     .unwrap();
     let export_time = started.elapsed();

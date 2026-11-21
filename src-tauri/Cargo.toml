@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "LUMI RETOUCH · 专业 AI 人像修图桌面应用"
 authors = ["LUMI"]
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.87"
 
 [lib]
 name = "lumi_retouch_lib"
@@ -24,6 +24,13 @@ rayon = "1.10"
 thiserror = "2"
 tract-onnx = "0.23"
 sha2 = "0.10"
+libraw_rs_vendor = "1.0.0"
+lcms2 = { version = "6.3.0", features = ["static"] }
+wgpu = "30.0.2"
+pollster = "0.4"
+flate2 = "1"
+tiff = "0.9"
+bytemuck = "1"
 
 [profile.dev]
 incremental = true

@@ -196,7 +196,7 @@ export function BeautyPanel({ photo }: BeautyPanelProps) {
     } catch (error) {
       const message = toMessage(error);
       setBeautyError(message);
-      notify("error", `AI 美肤失败：${message}`);
+      notify("error", `美肤分析失败：${message}`);
     }
   };
 
@@ -242,7 +242,7 @@ export function BeautyPanel({ photo }: BeautyPanelProps) {
         <header className="param-group-head">
           <button type="button" className="param-group-toggle" onClick={() => toggle("ai")}>
             <ChevronDown size={12} className="chev" />
-            <span>AI 美肤</span>
+            <span>美肤精修</span>
           </button>
           <span className={`beauty-badge ${analysis ? "is-ready" : ""}`}>
             {analysis ? "已分析" : "未分析"}

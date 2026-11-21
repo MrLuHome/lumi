@@ -31,6 +31,14 @@
 | thiserror | 2.x | https://github.com/dtolnay/thiserror | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | — |
 | rfd | 0.15.x | https://github.com/PolyMeilex/rfd | MIT | 是 | 随应用二进制分发 | 系统原生文件对话框 |
 | tauri-plugin-opener | 2.x | https://github.com/tauri-apps/plugins-workspace | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | — |
+| libraw_rs_vendor | 1.0.0（LibRaw 0.21.1） | https://github.com/LibRaw/LibRaw | LGPL-2.1-only OR CDDL-1.0 | 是 | 静态链接进应用二进制 | 仅使用识别/unpack/元数据/内嵌预览，不调用 `dcraw_process`。**发行前必须提供 LibRaw 对应源码、构建脚本与重链接说明**（当前未随包提供，缺口已记录在 `docs/ROUND7_DEPENDENCY_AUDIT.md`） |
+| lcms2 | 6.3.0（static） | https://github.com/mm2/Little-CMS | MIT | 是 | 静态链接进应用二进制 | Little CMS；16-bit ICC 转换、软打样、显示 Profile |
+| wgpu | 30.0.2 | https://github.com/gfx-rs/wgpu | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | Metal 后端；其他平台未实机验证 |
+| pollster | 0.4 | https://github.com/zesterer/pollster | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | GPU 异步等待 |
+| bytemuck | 1.x | https://github.com/Lokathor/bytemuck | Zlib OR MIT OR Apache-2.0 | 是 | 随应用二进制分发 | GPU buffer 字节转换 |
+| flate2 | 1.x | https://github.com/rust-lang/flate2-rs | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | PNG iCCP 压缩 |
+| tiff | 0.9.x | https://github.com/image-rs/image-tiff | MIT | 是 | 随应用二进制分发 | CMYK TIFF 读取；16-bit 导出为自实现编码器 |
+| base64 | 0.22.x | https://github.com/marshallpierce/rust-base64 | MIT OR Apache-2.0 | 是 | 随应用二进制分发 | RAW 内嵌预览与 PNG data URL |
 
 > 说明：`image` 的传递依赖（jpeg-decoder、png、image-webp 等）均为 MIT/Apache-2.0 系许可；发布前建议用 `cargo license` 做一次全量核对。
 

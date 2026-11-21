@@ -6,6 +6,9 @@ import { Inspector } from "./components/Inspector";
 import { SmartPanel } from "./components/SmartPanel";
 import { PresetPanel } from "./components/PresetPanel";
 import { BatchWorkspace } from "./components/BatchWorkspace";
+import { RawPanel } from "./components/RawPanel";
+import { ColorPanel } from "./components/ColorPanel";
+import { PerformancePanel } from "./components/PerformancePanel";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/ui/Toast";
 import { usePreviewRenderer } from "./hooks/usePreviewRenderer";
@@ -88,7 +91,13 @@ export default function App() {
     if (!active || state.exporting) return;
     state.setExporting(true);
     try {
-      const result = await exportImage(active.path, selectActiveParams(state), state.exportSettings);
+      const result = await exportImage(
+        active.path,
+        selectActiveParams(state),
+        state.exportSettings,
+        undefined,
+        state.rawByPhoto[active.id] ?? null,
+      );
       useEditorStore
         .getState()
         .notify(
@@ -392,6 +401,12 @@ export default function App() {
               <SmartPanel />
             ) : workspace === "presets" ? (
               <PresetPanel />
+            ) : workspace === "raw" ? (
+              <RawPanel />
+            ) : workspace === "color" ? (
+              <ColorPanel />
+            ) : workspace === "performance" ? (
+              <PerformancePanel />
             ) : (
               <Inspector photo={photo} params={params} />
             )}

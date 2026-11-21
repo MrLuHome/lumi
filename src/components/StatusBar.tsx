@@ -20,6 +20,8 @@ export function StatusBar({ photo }: StatusBarProps) {
   const setZoom = useEditorStore((state) => state.setZoom);
   const fitToWindow = useEditorStore((state) => state.fitToWindow);
   const actualPixels = useEditorStore((state) => state.actualPixels);
+  const colorStatus = useEditorStore((state) => state.colorStatus);
+  const gpuStatus = useEditorStore((state) => state.gpuStatus);
 
   return (
     <footer className="statusbar">
@@ -36,6 +38,8 @@ export function StatusBar({ photo }: StatusBarProps) {
             <span className="status-muted">{formatMegapixels(photo.width, photo.height)}</span>
             <span className="status-badge">{photo.format}</span>
             {photo.bitDepth > 8 ? <span className="status-badge">16-bit</span> : null}
+            <span className="status-muted">工作区 sRGB</span>
+            {colorStatus ? <span className="status-badge">{colorStatus.outputLabel}</span> : null}
             <span className="status-muted">{formatFileSize(photo.fileSize)}</span>
           </>
         ) : (
@@ -98,6 +102,11 @@ export function StatusBar({ photo }: StatusBarProps) {
 
       <div className="status-right">
         {!isDesktopRuntime() && <span className="status-note">浏览器预览模式</span>}
+        {gpuStatus ? (
+          <span className="status-muted" title={gpuStatus.reason}>
+            {gpuStatus.enabled ? `GPU · ${gpuStatus.device || "Metal"}` : "CPU 计算"}
+          </span>
+        ) : null}
         <span className={`proc proc-${error ? "error" : status}`} title={error ?? undefined}>
           {error ? (
             <>处理失败</>

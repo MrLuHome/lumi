@@ -93,7 +93,43 @@ pub struct MaskMeta {
     pub revision: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// 第七轮：来源信息（RAW/Raster）、RAW 显影参数、色彩输出设置与计算后端。
+/// 字段全部可选，旧项目（v1/v2/v3）缺失时按默认值处理，不要求迁移。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectSource {
+    /// `raw` 或 `raster`。
+    pub source_type: String,
+    pub path: String,
+    pub hash: String,
+    /// 相机/文件元数据快照（JSON，仅用于展示，不参与渲染）。
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectRaw {
+    pub params: crate::image_engine::raw::RawDevelopParams,
+    /// 解码器版本；变化时提示可能需要重新渲染。
+    pub decoder_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectColor {
+    pub output: crate::color_management::ColorOutputSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectCompute {
+    pub preference: crate::gpu::BackendPreference,
+}
+
+/// 当前 RAW 解码/显影实现版本，写入项目用于提示重渲染。
+pub const RAW_DECODER_VERSION: &str = "libraw-0.21.1+lumi-mhc-1";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectPhoto {
     pub path: String,
@@ -108,21 +144,12 @@ pub struct ProjectPhoto {
     pub subjects: Vec<ProjectSubject>,
     /// 第五轮蒙版元数据。
     pub mask_meta: Option<MaskMeta>,
-}
-
-impl Default for ProjectPhoto {
-    fn default() -> Self {
-        Self {
-            path: String::new(),
-            params: EditParams::default(),
-            masks: Vec::new(),
-            export: None,
-            source_hash: String::new(),
-            faces: Vec::new(),
-            subjects: Vec::new(),
-            mask_meta: None,
-        }
-    }
+    /// 第七轮：来源文件信息（RAW 缺失时保留参数并提示重定位）。
+    pub source: Option<ProjectSource>,
+    /// 第七轮：RAW 显影参数。
+    pub raw: Option<ProjectRaw>,
+    /// 第七轮：色彩输出设置。
+    pub color: Option<ProjectColor>,
 }
 
 impl ProjectPhoto {
@@ -166,6 +193,9 @@ pub struct ProjectDoc {
     pub active_index: usize,
     #[serde(default)]
     pub export: ExportSettings,
+    /// 第七轮：计算后端偏好（Auto/Gpu/Cpu）。
+    #[serde(default)]
+    pub compute: Option<ProjectCompute>,
     pub photos: Vec<ProjectPhoto>,
 }
 
@@ -176,6 +206,7 @@ impl ProjectDoc {
             created_at: now_label(),
             active_index,
             export,
+            compute: None,
             photos,
         }
     }
@@ -237,6 +268,7 @@ pub fn load(path: &Path) -> AppResult<ProjectDoc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image_engine::params::{HslChannel, HslParams};
 
     #[test]
     fn project_roundtrip_keeps_params_and_masks() {
@@ -244,9 +276,17 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("portrait.lumi");
 
-        let mut params = EditParams::default();
-        params.exposure = 24.0;
-        params.hsl.orange.saturation = 18.0;
+        let params = EditParams {
+            exposure: 24.0,
+            hsl: HslParams {
+                orange: HslChannel {
+                    saturation: 18.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let project = ProjectDoc::new(
             vec![ProjectPhoto {
                 path: "/photos/portrait.jpg".into(),
@@ -270,6 +310,9 @@ mod tests {
                 faces: Vec::new(),
                 subjects: Vec::new(),
                 mask_meta: None,
+                source: None,
+                raw: None,
+                color: None,
             }],
             0,
             ExportSettings::default(),
@@ -281,6 +324,93 @@ mod tests {
         assert_eq!(loaded.photos[0].masks.len(), 1);
         assert_eq!(loaded.photos[0].masks[0].kind, MaskKind::Radial);
         assert_eq!(loaded.photos[0].source_hash, "abc123");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn project_v3_keeps_raw_color_and_compute() {
+        let dir = std::env::temp_dir().join("lumi-project-v3-raw");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("raw.lumi");
+
+        let mut photo = ProjectPhoto {
+            path: "/photos/sample.CR3".into(),
+            source_hash: "hash".into(),
+            source: Some(ProjectSource {
+                source_type: "raw".into(),
+                path: "/photos/sample.CR3".into(),
+                hash: "hash".into(),
+                metadata: Some(serde_json::json!({"make": "Canon"})),
+            }),
+            ..Default::default()
+        };
+        photo.raw = Some(ProjectRaw {
+            params: crate::image_engine::raw::RawDevelopParams {
+                exposure_ev: 0.75,
+                wb_mode: crate::image_engine::raw::WbMode::Custom,
+                max_edge: None,
+                ..Default::default()
+            },
+            decoder_version: RAW_DECODER_VERSION.into(),
+        });
+        photo.color = Some(ProjectColor {
+            output: crate::color_management::ColorOutputSettings {
+                profile: crate::color_management::ProfileKind::AdobeRgb,
+                ..Default::default()
+            },
+        });
+        let mut project = ProjectDoc::new(vec![photo], 0, ExportSettings::default());
+        project.compute = Some(ProjectCompute {
+            preference: crate::gpu::BackendPreference::Gpu,
+        });
+
+        save(&path, &project).unwrap();
+        let loaded = load(&path).unwrap();
+        let photo = &loaded.photos[0];
+        assert_eq!(photo.source.as_ref().unwrap().source_type, "raw");
+        let raw = photo.raw.as_ref().unwrap();
+        assert!((raw.params.exposure_ev - 0.75).abs() < 1e-6);
+        assert_eq!(raw.decoder_version, RAW_DECODER_VERSION);
+        assert_eq!(
+            photo.color.as_ref().unwrap().output.profile,
+            crate::color_management::ProfileKind::AdobeRgb
+        );
+        assert_eq!(
+            loaded.compute.as_ref().unwrap().preference,
+            crate::gpu::BackendPreference::Gpu
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn project_without_round7_fields_still_opens() {
+        let dir = std::env::temp_dir().join("lumi-project-legacy");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("legacy.lumi");
+        // 模拟第六轮项目：没有 source/raw/color/compute。
+        let json = serde_json::json!({
+            "version": 2,
+            "createdAt": "1",
+            "activeIndex": 0,
+            "export": {},
+            "photos": [{
+                "path": "/photos/a.jpg",
+                "params": {},
+                "masks": [],
+                "export": null,
+                "sourceHash": "abc",
+                "faces": [],
+                "subjects": [],
+                "maskMeta": null
+            }]
+        });
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.photos.len(), 1);
+        assert!(loaded.photos[0].source.is_none());
+        assert!(loaded.photos[0].raw.is_none());
+        assert!(loaded.photos[0].color.is_none());
+        assert!(loaded.compute.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -316,6 +446,9 @@ mod tests {
                 faces: vec![face.clone()],
                 subjects: Vec::new(),
                 mask_meta: None,
+                source: None,
+                raw: None,
+                color: None,
             }],
             0,
             ExportSettings::default(),
@@ -336,33 +469,35 @@ mod tests {
         let dir = std::env::temp_dir().join("lumi-project-v3");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("v3.lumi");
-        let mut params = EditParams::default();
-        params.subject_mask = SubjectMaskParams {
-            enabled: true,
-            strokes: vec![SubjectMaskStroke {
-                kind: SubjectMaskStrokeKind::Paint,
-                radius: 0.2,
-                hardness: 70.0,
-                strength: 100.0,
-                points: vec![MaskPoint { x: 0.5, y: 0.6 }],
-            }],
-            ..Default::default()
-        };
-        params.body = vec![BodyAdjust {
-            subject_id: "subject-uuid-1".into(),
-            enabled: true,
-            shape: BodyShape {
-                waist: -30.0,
+        let params = EditParams {
+            subject_mask: SubjectMaskParams {
+                enabled: true,
+                strokes: vec![SubjectMaskStroke {
+                    kind: SubjectMaskStrokeKind::Paint,
+                    radius: 0.2,
+                    hardness: 70.0,
+                    strength: 100.0,
+                    points: vec![MaskPoint { x: 0.5, y: 0.6 }],
+                }],
                 ..Default::default()
             },
-            anchors: Vec::new(),
-            strokes: Vec::new(),
-            mask_strokes: Vec::new(),
-        }];
-        params.background = BackgroundParams {
-            enabled: true,
-            mode: BackgroundMode::SolidColor,
-            color: "#102030".into(),
+            body: vec![BodyAdjust {
+                subject_id: "subject-uuid-1".into(),
+                enabled: true,
+                shape: BodyShape {
+                    waist: -30.0,
+                    ..Default::default()
+                },
+                anchors: Vec::new(),
+                strokes: Vec::new(),
+                mask_strokes: Vec::new(),
+            }],
+            background: BackgroundParams {
+                enabled: true,
+                mode: BackgroundMode::SolidColor,
+                color: "#102030".into(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let project = ProjectDoc::new(

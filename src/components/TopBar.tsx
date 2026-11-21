@@ -130,6 +130,9 @@ export function TopBar({
             ["edit", "编辑"],
             ["smart", "智能精修"],
             ["presets", "预设库"],
+            ["raw", "RAW"],
+            ["color", "色彩"],
+            ["performance", "性能"],
             ["batch", "批量处理"],
           ] as [Workspace, string][]
         ).map(([value, label]) => (

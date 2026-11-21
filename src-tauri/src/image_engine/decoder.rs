@@ -101,8 +101,19 @@ pub fn decode(path: &Path) -> AppResult<DecodedImage> {
     }
     ensure_reasonable_size(width, height)?;
 
+    // 输入 ICC：文件内嵌 RGB Profile 先转换到 sRGB 工作空间，再做后续编辑。
+    // 无 Profile、非 RGB 或损坏 Profile 时按 sRGB 处理（在色彩状态中标注）。
+    let mut pixels = image.to_rgba16();
+    if let Ok(Some(icc)) = crate::color_management::embed::extract_icc(&bytes) {
+        if let Ok((converted, _label)) =
+            crate::color_management::transform::from_input_profile(&pixels, Some(&icc))
+        {
+            pixels = converted;
+        }
+    }
+
     Ok(DecodedImage {
-        image: image.to_rgba16(),
+        image: pixels,
         format: format_label(path),
         bit_depth,
     })
@@ -153,5 +164,33 @@ mod tests {
         assert_eq!(pixel[0], 65535);
         assert_eq!(pixel[1], 0);
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn embedded_rgb_profile_is_converted_to_srgb_workspace() {
+        let plain = std::env::temp_dir().join("lumi-icc-plain-round7.png");
+        let tagged = std::env::temp_dir().join("lumi-icc-tagged-round7.png");
+        RgbaImage::from_pixel(4, 4, Rgba([90, 140, 200, 255]))
+            .save(&plain)
+            .unwrap();
+        let icc = crate::color_management::profiles::builtin_bytes(
+            crate::color_management::ProfileKind::ProPhoto,
+        )
+        .unwrap();
+        let bytes = std::fs::read(&plain).unwrap();
+        std::fs::write(
+            &tagged,
+            crate::color_management::embed::embed(bytes, &icc).unwrap(),
+        )
+        .unwrap();
+
+        let before = decode(&plain).unwrap().image.get_pixel(0, 0).0;
+        let after = decode(&tagged).unwrap().image.get_pixel(0, 0).0;
+        // ProPhoto 原色与 sRGB 差异明显，转换必须真实改变像素而不是只读元数据。
+        assert_ne!(before, after, "嵌入 ICC 应触发输入到 sRGB 的真实转换");
+        assert_eq!(after[3], 65535, "Alpha 必须保留");
+
+        std::fs::remove_file(&plain).ok();
+        std::fs::remove_file(&tagged).ok();
     }
 }

@@ -1,7 +1,9 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::color_management::{embed, tiff16, transform, ColorOutputSettings};
 use crate::error::{AppError, AppResult};
 use crate::image_engine::buffer::Image16;
 use crate::image_engine::decoder::BitDepth;
@@ -14,6 +16,8 @@ pub enum ExportFormat {
     Jpeg,
     Png,
     Webp,
+    /// 16-bit 未压缩 TIFF（自实现编码器）。
+    Tiff,
 }
 
 impl ExportFormat {
@@ -22,6 +26,7 @@ impl ExportFormat {
             ExportFormat::Jpeg => "jpg",
             ExportFormat::Png => "png",
             ExportFormat::Webp => "webp",
+            ExportFormat::Tiff => "tif",
         }
     }
 
@@ -30,6 +35,7 @@ impl ExportFormat {
             ExportFormat::Jpeg => "JPEG",
             ExportFormat::Png => "PNG",
             ExportFormat::Webp => "WebP",
+            ExportFormat::Tiff => "TIFF 16-bit",
         }
     }
 
@@ -43,6 +49,7 @@ impl ExportFormat {
             Some("jpg") | Some("jpeg") => Some(ExportFormat::Jpeg),
             Some("png") => Some(ExportFormat::Png),
             Some("webp") => Some(ExportFormat::Webp),
+            Some("tif") | Some("tiff") => Some(ExportFormat::Tiff),
             _ => None,
         }
     }
@@ -97,18 +104,23 @@ pub fn write(
     image: &Image16,
     settings: ExportSettings,
     source_depth: BitDepth,
+    color: Option<&ColorOutputSettings>,
 ) -> AppResult<ExportOutcome> {
-    write_atomic(destination, original, image, settings, source_depth)
+    write_atomic(destination, original, image, settings, source_depth, color)
 }
 
 /// 原子写出：先写同目录临时文件，成功后重命名。
 /// 取消或异常退出不会在目标位置留下半张损坏的图片。
+///
+/// `color` 为 `Some` 时：16-bit 转换到目标 Profile，并嵌入 ICC
+/// （TIFF 由自实现编码器写 tag 34675；WebP 不支持嵌入，会保持原样）。
 pub fn write_atomic(
     destination: &Path,
     original: &Path,
     image: &Image16,
     settings: ExportSettings,
     source_depth: BitDepth,
+    color: Option<&ColorOutputSettings>,
 ) -> AppResult<ExportOutcome> {
     if same_path(destination, original) {
         return Err(AppError::Unsupported(
@@ -116,11 +128,29 @@ pub fn write_atomic(
         ));
     }
     let settings = settings.clamped().with_destination(destination);
-    let sixteen_bit = settings.format == ExportFormat::Png && source_depth == BitDepth::Sixteen;
+    let (converted, icc) = match color {
+        Some(settings) => {
+            let (converted, icc, _) = transform::to_output(image, settings)?;
+            (Cow::Owned(converted), Some(icc))
+        }
+        None => (Cow::Borrowed(image), None),
+    };
+    let image = converted.as_ref();
+    let embed_enabled = color.map(|settings| settings.embed).unwrap_or(false);
+    let icc = if embed_enabled { icc } else { None };
+
     let bytes = match settings.format {
-        ExportFormat::Jpeg => encoder::jpeg_bytes(image, settings.quality)?,
-        ExportFormat::Png => encoder::png_bytes(image, sixteen_bit)?,
+        ExportFormat::Jpeg => {
+            let bytes = encoder::jpeg_bytes(image, settings.quality)?;
+            embed::embed(bytes, icc.as_deref().unwrap_or(&[]))?
+        }
+        ExportFormat::Png => {
+            let sixteen_bit = color.is_some() || source_depth == BitDepth::Sixteen;
+            let bytes = encoder::png_bytes(image, sixteen_bit)?;
+            embed::embed(bytes, icc.as_deref().unwrap_or(&[]))?
+        }
         ExportFormat::Webp => encoder::webp_bytes(image, true)?,
+        ExportFormat::Tiff => tiff16::encode(image, icc.as_deref())?,
     };
     if let Some(parent) = destination.parent() {
         if !parent.exists() {
@@ -189,6 +219,7 @@ mod tests {
             &image,
             ExportSettings::default(),
             BitDepth::Eight,
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("不能与原图相同"));
@@ -211,6 +242,7 @@ mod tests {
             &image,
             ExportSettings::default(),
             BitDepth::Eight,
+            None,
         )
         .unwrap();
         assert_eq!(outcome.format, "PNG");

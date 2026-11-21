@@ -215,7 +215,7 @@ fn ensure_faces(
     }
     if !model.is_file() {
         return Err(AppError::Unsupported(
-            "安装包中缺少人脸检测模型，无法执行 AI 美肤".into(),
+            "安装包中缺少人脸检测模型，无法执行美肤分析".into(),
         ));
     }
     let result: FaceDetectionResult =

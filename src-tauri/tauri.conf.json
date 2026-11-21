@@ -27,12 +27,16 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+      "csp": "default-src 'self' tauri: http://tauri.localhost; script-src 'self' tauri: http://tauri.localhost; style-src 'self' 'unsafe-inline' tauri:; img-src 'self' data: blob: tauri:; font-src 'self' data: tauri:; connect-src 'self' ipc: http://ipc.localhost tauri:; media-src 'self' data: blob: tauri:; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
     "category": "Photography",
     "shortDescription": "专业 AI 人像修图工作台",
     "longDescription": "LUMI RETOUCH 是一款面向专业摄影后期的 AI 人像修图桌面应用，提供统一参数管线、无损对比与本地高速图像处理。",
@@ -53,7 +57,10 @@
     "windows": {
       "nsis": {
         "installMode": "perMachine",
-        "languages": ["SimpChinese", "English"]
+        "languages": [
+          "SimpChinese",
+          "English"
+        ]
       }
     }
   }

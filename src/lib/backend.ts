@@ -10,6 +10,11 @@ import type {
   BeautyProgress,
   BodyAnchorPreset,
   BodyCapability,
+  ColorOutputSettings,
+  ColorStatus,
+  ComputeBackend,
+  DisplayPreviewResult,
+  DisplayStatus,
   EditParams,
   ExportResult,
   ExportSettings,
@@ -17,6 +22,8 @@ import type {
   FaceModelStatus,
   FaceProgress,
   FaceRestoreResult,
+  GpuBenchmarkResult,
+  GpuStatus,
   MaskPreview,
   MeshPreview,
   PhotoAsset,
@@ -27,6 +34,11 @@ import type {
   ProjectDoc,
   ProjectFaceRecord,
   ProjectOpenResult,
+  ProfileSummary,
+  RawCapabilities,
+  RawDevelopParams,
+  RawDevelopResult,
+  RawInfo,
   RenderProgress,
   RenderResult,
   ReshapeCapability,
@@ -34,6 +46,7 @@ import type {
   RetouchSuggestion,
   SegmentationCapability,
   SkinModelStatus,
+  SoftProofResult,
   SubjectMaskPreview,
   SubjectMaskParams,
 } from "../types";
@@ -61,6 +74,7 @@ export async function renderPreview(
   params: EditParams,
   requestId: number,
   maxEdge?: number,
+  rawParams?: RawDevelopParams | null,
 ): Promise<RenderResult> {
   if (!isDesktopRuntime()) {
     throw new Error("浏览器预览模式不执行桌面图像管线，请使用桌面端运行");
@@ -70,6 +84,7 @@ export async function renderPreview(
     path,
     params,
     maxEdge: maxEdge ?? null,
+    rawParams: rawParams ?? null,
   });
 }
 
@@ -83,6 +98,7 @@ export async function exportImage(
   params: EditParams,
   settings: ExportSettings,
   destination?: string,
+  rawParams?: RawDevelopParams | null,
 ): Promise<ExportResult> {
   if (!isDesktopRuntime()) {
     throw new Error("导出需要在桌面端运行");
@@ -93,7 +109,73 @@ export async function exportImage(
     params,
     settings,
     destination: destination ?? null,
+    rawParams: rawParams ?? null,
   });
+}
+
+/** 第七轮：RAW 元数据、能力矩阵与显影预览。 */
+export async function rawInfo(path: string): Promise<RawInfo> {
+  if (!isDesktopRuntime()) throw new Error("RAW 解析需要在桌面端运行");
+  return invoke<RawInfo>("raw_info", { path });
+}
+
+export async function rawPreview(
+  path: string,
+  params?: Partial<RawDevelopParams> | null,
+): Promise<RawDevelopResult> {
+  if (!isDesktopRuntime()) throw new Error("RAW 显影需要在桌面端运行");
+  return invoke<RawDevelopResult>("raw_preview", { path, params: params ?? null });
+}
+
+export async function rawCapabilities(): Promise<RawCapabilities> {
+  return invoke<RawCapabilities>("raw_capabilities");
+}
+
+/** 第七轮：色彩管理与输出 Profile。 */
+export async function colorStatus(): Promise<ColorStatus> {
+  return invoke<ColorStatus>("color_status");
+}
+
+export async function colorSetOutput(settings: ColorOutputSettings): Promise<ColorStatus> {
+  return invoke<ColorStatus>("color_set_output", { settings });
+}
+
+export async function colorCheckProfile(path: string): Promise<ProfileSummary> {
+  return invoke<ProfileSummary>("color_check_profile", { path });
+}
+
+export async function displayProfileRefresh(): Promise<DisplayStatus> {
+  return invoke<DisplayStatus>("display_profile_refresh");
+}
+
+/** 软打样：当前照片渲染后做输出 Profile 往返，返回预览与色域统计。 */
+export async function softProof(
+  path: string,
+  params: EditParams,
+  warn = true,
+): Promise<SoftProofResult> {
+  return invoke<SoftProofResult>("soft_proof", { path, params, warn });
+}
+
+/** 显示器色彩预览：sRGB → ColorSync 显示器 Profile，PNG 内嵌显示 ICC。 */
+export async function displayPreview(
+  path: string,
+  params: EditParams,
+): Promise<DisplayPreviewResult> {
+  return invoke<DisplayPreviewResult>("display_preview", { path, params });
+}
+
+/** 第七轮：计算后端状态与基准。 */
+export async function gpuStatus(): Promise<GpuStatus> {
+  return invoke<GpuStatus>("gpu_status");
+}
+
+export async function gpuBenchmark(): Promise<GpuBenchmarkResult> {
+  return invoke<GpuBenchmarkResult>("gpu_benchmark");
+}
+
+export async function setComputeBackend(preference: ComputeBackend): Promise<GpuStatus> {
+  return invoke<GpuStatus>("set_compute_backend", { preference });
 }
 
 export async function saveProject(
@@ -140,7 +222,7 @@ export async function skinModelStatus(): Promise<SkinModelStatus> {
 
 /** 一键美肤：真实执行检测 → 皮肤区域 → 指标分析，返回可编辑建议参数。 */
 export async function analyzeBeauty(path: string): Promise<BeautyAnalysis> {
-  if (!isDesktopRuntime()) throw new Error("AI 美肤需要在桌面端运行");
+  if (!isDesktopRuntime()) throw new Error("美肤分析需要在桌面端运行");
   return invoke<BeautyAnalysis>("analyze_beauty", { path });
 }
 

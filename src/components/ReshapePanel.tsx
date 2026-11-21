@@ -11,7 +11,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import type { PhotoAsset, ReshapeCapability } from "../types";
+import type { FaceMatchEntry, PhotoAsset, ProjectFaceRecord, ReshapeCapability } from "../types";
 import { confirmFaceMatch, reshapeCapability } from "../lib/backend";
 import { isDesktopRuntime } from "../lib/platform";
 import type { FaceShapeKey, WarpMode } from "../state/params";
@@ -56,6 +56,11 @@ const LEVEL3_LABELS: Record<string, string> = {
   lands: "精确面部关键点",
 };
 
+// Zustand 快照必须保持引用稳定：选择器里每次返回新的 `[]` 会让 React 判定快照持续变化，
+// 触发 “getSnapshot should be cached” 并最终抛 maximum update depth（窗口空白）。
+const EMPTY_MATCHES: FaceMatchEntry[] = [];
+const EMPTY_RECORDS: ProjectFaceRecord[] = [];
+
 export function ReshapePanel({ photo }: ReshapePanelProps) {
   const params = useEditorStore(selectActiveParams);
   const face = useEditorStore(selectActiveFace);
@@ -69,11 +74,11 @@ export function ReshapePanel({ photo }: ReshapePanelProps) {
   const renderStatus = useEditorStore((state) => state.renderStatus);
   const renderWarnings = useEditorStore((state) => state.renderWarnings);
   const reshapeReports = useEditorStore((state) => state.reshapeReports);
-  const pending = useEditorStore((state) =>
-    photo ? state.pendingFaceMatches[photo.id] ?? [] : [],
+  const pending = useEditorStore(
+    (state) => (photo && state.pendingFaceMatches[photo.id]) || EMPTY_MATCHES,
   );
-  const missing = useEditorStore((state) =>
-    photo ? state.missingFaceRecords[photo.id] ?? [] : [],
+  const missing = useEditorStore(
+    (state) => (photo && state.missingFaceRecords[photo.id]) || EMPTY_RECORDS,
   );
   const setWarpTool = useEditorStore((state) => state.setWarpTool);
   const setWarpRadius = useEditorStore((state) => state.setWarpRadius);

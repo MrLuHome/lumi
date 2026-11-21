@@ -3,6 +3,7 @@
 //! 全部使用合成人像（可控肤色、纹理、瑕疵、光照），不依赖主观判断：
 //! 蒙版覆盖、五官保护、纹理保留率、瑕疵修复、肤色约束、多人脸参数独立、
 //! 手动蒙版、取消与全分辨率输出都有明确数值断言。
+#![allow(clippy::manual_range_contains, clippy::cloned_ref_to_slice_refs)]
 
 use image::Rgba;
 

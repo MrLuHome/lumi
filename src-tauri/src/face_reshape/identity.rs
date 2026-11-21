@@ -333,7 +333,7 @@ mod tests {
         let a = frame(1, 0.05, 0.2, marks(0.15, 0.3));
         let b = frame(2, 0.40, 0.2, marks(0.50, 0.3));
         let records = vec![record(&a), record(&b)];
-        let outcome = match_faces(&records, &[a.clone()], false);
+        let outcome = match_faces(&records, std::slice::from_ref(&a), false);
         assert_eq!(outcome.restored.len(), 1);
         assert_eq!(outcome.missing.len(), 1);
         assert_eq!(outcome.missing[0].uuid, records[1].uuid);

@@ -347,4 +347,43 @@ describe("美肤参数与蒙版历史", () => {
     expect(paramsOf(store).repairPoints).toHaveLength(1);
     expect(paramsOf(store).repairPoints[0]?.x).toBe(0.4);
   });
+
+  it("RAW 显影参数按照片保存并可重置", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("raw", { path: "/photos/raw.CR3" })]);
+    const id = store.getState().activeId!;
+    expect(store.getState().rawByPhoto[id]).toBeUndefined();
+    store.getState().setRawParams(id, { exposureEv: 1.2, wbMode: "custom", temperature: 5200 });
+    expect(store.getState().rawByPhoto[id]?.exposureEv).toBe(1.2);
+    expect(store.getState().rawByPhoto[id]?.wbMode).toBe("custom");
+    expect(store.getState().rawDirty).toBe(true);
+    store.getState().resetRawParams(id);
+    expect(store.getState().rawByPhoto[id]).toBeUndefined();
+    expect(store.getState().rawDirty).toBe(false);
+  });
+
+  it("项目文件写入 RAW/色彩/计算字段，非 RAW 不写 raw", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([
+      makePhoto("raw", { path: "/photos/raw.CR3" }),
+      makePhoto("jpg"),
+    ]);
+    const rawId = store.getState().photos[0]!.id;
+    store.getState().setRawParams(rawId, { exposureEv: 0.5 });
+    store.getState().setColorSettings({
+      profile: "displayP3",
+      customPath: null,
+      intent: "perceptual",
+      blackPointCompensation: true,
+      embed: true,
+    });
+    store.getState().setComputePreference("gpu");
+    const doc = buildProjectDoc(store.getState());
+    expect(doc.version).toBe(3);
+    expect(doc.compute?.preference).toBe("gpu");
+    expect(doc.photos[0]?.source?.sourceType).toBe("raw");
+    expect(doc.photos[0]?.raw?.params.exposureEv).toBe(0.5);
+    expect(doc.photos[0]?.color?.output.profile).toBe("displayP3");
+    expect(doc.photos[1]?.raw).toBeNull();
+  });
 });

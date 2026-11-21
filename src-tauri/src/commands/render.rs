@@ -161,6 +161,7 @@ pub async fn render_preview(
     path: String,
     params: EditParams,
     max_edge: Option<u32>,
+    raw_params: Option<crate::image_engine::raw::RawDevelopParams>,
 ) -> AppResult<RenderResult> {
     let cache = state.inner().clone();
     let repo = repo.inner().clone();
@@ -169,7 +170,15 @@ pub async fn render_preview(
     let max_edge = max_edge.unwrap_or(crate::image_engine::PREVIEW_MAX_EDGE);
     let max_edge = max_edge.clamp(320, DETAIL_MAX_EDGE);
     let signature = repo.signature(Path::new(&path));
-    let key = cache_key(Path::new(&path), &params, max_edge, &signature);
+    let raw_suffix = raw_params
+        .as_ref()
+        .map(|value| serde_json::to_string(value).unwrap_or_default())
+        .unwrap_or_default();
+    let key = format!(
+        "{}|{}",
+        cache_key(Path::new(&path), &params, max_edge, &signature),
+        raw_suffix
+    );
 
     if let Some(hit) = render_cache.get(&key) {
         return Ok(RenderResult {
@@ -181,25 +190,33 @@ pub async fn render_preview(
 
     tauri::async_runtime::spawn_blocking(move || {
         let started = Instant::now();
-        let cached = cache.load(Path::new(&path))?;
+        let source = Path::new(&path);
+        let is_raw = crate::image_engine::raw::is_raw_path(source);
+        let (working, has_alpha) = if is_raw {
+            let develop = raw_params.unwrap_or_default().sanitized();
+            let developed = crate::image_engine::raw::develop_from_path(source, &develop)?;
+            (fit_within(&developed.image, max_edge), false)
+        } else {
+            let cached = cache.load(source)?;
+            let base = if max_edge > crate::image_engine::PREVIEW_MAX_EDGE {
+                &cached.full
+            } else {
+                &cached.preview
+            };
+            (fit_within(base, max_edge), cached.has_alpha)
+        };
         cancel.check()?;
         let faces: Vec<FaceFrame> = repo
-            .get(Path::new(&path))
+            .get(source)
             .map(|entry| entry.faces)
             .unwrap_or_default();
 
-        let source = if max_edge > crate::image_engine::PREVIEW_MAX_EDGE {
-            &cached.full
-        } else {
-            &cached.preview
-        };
-        let working = fit_within(source, max_edge);
         emit_progress(&app, request_id, "开始", 0.02);
         let rendered = pipeline::render_with_report(&working, &params, &faces, &cancel, &mut |value, stage| {
             emit_progress(&app, request_id, stage, value);
         })?;
         let (rendered, report) = rendered;
-        let preview = encode_canvas(&rendered, cached.has_alpha)?;
+        let preview = encode_canvas(&rendered, has_alpha)?;
         cancel.check()?;
 
         let result = Arc::new(RenderResult {
@@ -244,37 +261,53 @@ pub async fn export_image(
     state: State<'_, ImageCache>,
     repo: State<'_, FaceRepository>,
     registry: State<'_, RenderRegistry>,
+    color_engine: State<'_, crate::color_management::ColorEngine>,
     request_id: u64,
     path: String,
     params: EditParams,
     settings: Option<ExportSettings>,
     destination: Option<String>,
+    raw_params: Option<crate::image_engine::raw::RawDevelopParams>,
 ) -> AppResult<ExportResult> {
     let cache = state.inner().clone();
     let repo = repo.inner().clone();
     let cancel = registry.begin(request_id);
     let settings = settings.unwrap_or_default().clamped();
+    let color = color_engine.settings();
 
     tauri::async_runtime::spawn_blocking(move || {
         let started = Instant::now();
-        let cached = cache.load(Path::new(&path))?;
+        let source = Path::new(&path);
+        let is_raw = crate::image_engine::raw::is_raw_path(source);
+        let original = PathBuf::from(&path);
+        let (working, depth) = if is_raw {
+            // RAW 导出：全尺寸重新解码 + 同一 develop 函数，参数不做降采样。
+            let mut develop = raw_params.unwrap_or_default().sanitized();
+            develop.max_edge = None;
+            let developed = crate::image_engine::raw::develop_from_path(source, &develop)?;
+            (Arc::new(developed.image), crate::image_engine::decoder::BitDepth::Sixteen)
+        } else {
+            let cached = cache.load(source)?;
+            (cached.full.clone(), cached.depth)
+        };
         cancel.check()?;
         // 导出复用同一份归一化人脸结果，AI 检测不重跑；蒙版按全分辨率重建。
         let faces: Vec<FaceFrame> = repo
-            .get(Path::new(&path))
+            .get(source)
             .map(|entry| entry.faces)
             .unwrap_or_default();
 
         let target = match destination {
             Some(value) if !value.trim().is_empty() => PathBuf::from(value),
             _ => {
-                let suggested = export::suggested_name(&cached.path, settings.format);
+                let suggested = export::suggested_name(&original, settings.format);
                 let dialog = rfd::FileDialog::new()
                     .set_title("导出照片")
                     .set_file_name(&suggested)
                     .add_filter("JPEG", &["jpg", "jpeg"])
                     .add_filter("PNG", &["png"])
-                    .add_filter("WebP", &["webp"]);
+                    .add_filter("WebP", &["webp"])
+                    .add_filter("TIFF 16-bit", &["tif", "tiff"]);
                 match dialog.save_file() {
                     Some(mut path) => {
                         if ExportFormat::from_extension(&path).is_none() {
@@ -288,12 +321,19 @@ pub async fn export_image(
         };
 
         emit_progress(&app, request_id, "全尺寸渲染", 0.05);
-        let rendered = pipeline::render_with_progress(&cached.full, &params, &faces, &cancel, &mut |value, stage| {
+        let rendered = pipeline::render_with_progress(&working, &params, &faces, &cancel, &mut |value, stage| {
             emit_progress(&app, request_id, stage, 0.05 + value * 0.85);
         })?;
         cancel.check()?;
         emit_progress(&app, request_id, "写出文件", 0.96);
-        let outcome = export::write(&target, &cached.path, &rendered, settings, cached.depth)?;
+        let outcome = export::write(
+            &target,
+            &original,
+            &rendered,
+            settings,
+            depth,
+            Some(&color),
+        )?;
         emit_progress(&app, request_id, "完成", 1.0);
 
         Ok(ExportResult {

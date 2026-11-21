@@ -17,6 +17,7 @@ pub mod pipeline;
 pub mod preset;
 pub mod preview;
 pub mod project;
+pub mod raw;
 
 pub use buffer::Image16;
 pub use cancel::CancelToken;

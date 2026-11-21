@@ -111,6 +111,9 @@ fn three_face_project_reopens_with_params_on_correct_people() {
             ],
             subjects: Vec::new(),
             mask_meta: None,
+            source: None,
+            raw: None,
+            color: None,
         }],
         0,
         ExportSettings::default(),
@@ -172,7 +175,11 @@ fn replaced_source_blocks_automatic_parameter_restore() {
     };
     assert_ne!(saved_hash, current_hash);
 
-    let outcome = match_faces(&[saved_record.clone()], &[face], saved_hash != current_hash);
+    let outcome = match_faces(
+        std::slice::from_ref(&saved_record),
+        std::slice::from_ref(&face),
+        saved_hash != current_hash,
+    );
     assert!(outcome.source_changed);
     assert!(outcome.restored.is_empty());
     assert_eq!(outcome.pending.len(), 1);
@@ -194,7 +201,11 @@ fn reimporting_same_photo_restores_identity() {
     let saved = record(face.clone());
     let mut redetected = face;
     redetected.id = 77;
-    let outcome = match_faces(&[saved.clone()], &[redetected], false);
+    let outcome = match_faces(
+        std::slice::from_ref(&saved),
+        std::slice::from_ref(&redetected),
+        false,
+    );
     assert_eq!(outcome.restored.len(), 1);
     assert_eq!(outcome.restored[0].face_uuid, saved.uuid);
     assert_eq!(outcome.restored[0].face_id, 77);

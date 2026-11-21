@@ -9,6 +9,9 @@ import type {
   BeautyProgress,
   BodyCapability,
   BodyReport,
+  ColorOutputSettings,
+  ColorStatus,
+  ComputeBackend,
   ConflictPolicy,
   EditParams,
   ExportSettings,
@@ -18,12 +21,14 @@ import type {
   FaceProgress,
   FaceReshapeReport,
   FaceRestoreResult,
+  GpuStatus,
   MaskPreview,
   MaskReport,
   MaskStroke,
   PhotoAsset,
   ProjectDoc,
   ProjectFaceRecord,
+  RawDevelopParams,
   RenderProgress,
   RetouchMode,
   RetouchPreset,
@@ -31,6 +36,10 @@ import type {
   SkinModelStatus,
   SubjectMaskPreview,
   Workspace,
+} from "../types";
+import {
+  DEFAULT_COLOR_SETTINGS,
+  DEFAULT_RAW_PARAMS,
 } from "../types";
 import {
   BEAUTY_LABELS,
@@ -206,6 +215,24 @@ export interface EditorState {
   /** 第六轮：工作区切换。 */
   workspace: Workspace;
   setWorkspace: (workspace: Workspace) => void;
+
+  /** 第七轮：Raster/RAW 来源、RAW 显影参数、色彩输出与计算后端。 */
+  rawByPhoto: Record<string, RawDevelopParams>;
+  rawStatus: Record<string, MaskStatus>;
+  rawError: string | null;
+  rawDirty: boolean;
+  setRawParams: (photoId: string, patch: Partial<RawDevelopParams>) => void;
+  setRawStatus: (photoId: string, status: MaskStatus) => void;
+  setRawError: (message: string | null) => void;
+  resetRawParams: (photoId: string) => void;
+  colorSettings: ColorOutputSettings;
+  colorStatus: ColorStatus | null;
+  setColorSettings: (settings: ColorOutputSettings) => void;
+  setColorStatus: (status: ColorStatus | null) => void;
+  computePreference: ComputeBackend;
+  setComputePreference: (preference: ComputeBackend) => void;
+  gpuStatus: GpuStatus | null;
+  setGpuStatus: (status: GpuStatus | null) => void;
 
   /** 智能精修分析：按照片保存最近一次真实报告。 */
   smartReports: Record<string, AnalysisReport>;
@@ -576,6 +603,36 @@ export function createEditorStore() {
       workspace: "edit",
       setWorkspace: (workspace) => set({ workspace }),
 
+      rawByPhoto: {},
+      rawStatus: {},
+      rawError: null,
+      rawDirty: false,
+      setRawParams: (photoId, patch) =>
+        set((state) => ({
+          rawByPhoto: {
+            ...state.rawByPhoto,
+            [photoId]: { ...(state.rawByPhoto[photoId] ?? DEFAULT_RAW_PARAMS), ...patch },
+          },
+          rawDirty: true,
+        })),
+      setRawStatus: (photoId, status) =>
+        set((state) => ({ rawStatus: { ...state.rawStatus, [photoId]: status } })),
+      setRawError: (rawError) => set({ rawError }),
+      resetRawParams: (photoId) =>
+        set((state) => {
+          const next = { ...state.rawByPhoto };
+          delete next[photoId];
+          return { rawByPhoto: next, rawDirty: false, rawError: null };
+        }),
+      colorSettings: DEFAULT_COLOR_SETTINGS,
+      colorStatus: null,
+      setColorSettings: (colorSettings) => set({ colorSettings }),
+      setColorStatus: (colorStatus) => set({ colorStatus }),
+      computePreference: "auto",
+      setComputePreference: (computePreference) => set({ computePreference }),
+      gpuStatus: null,
+      setGpuStatus: (gpuStatus) => set({ gpuStatus }),
+
       smartReports: {},
       smartStatus: "idle",
       smartError: null,
@@ -700,6 +757,12 @@ export function createEditorStore() {
           activeId = fallback ? fallback.id : null;
         }
 
+        // 浏览器模式导入的照片用 blob: 预览地址，移除时必须释放，否则整页生命周期内泄漏。
+        const removed = state.photos[index];
+        for (const url of [removed?.thumbUrl, removed?.previewUrl]) {
+          if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+        }
+
         set({
           photos,
           params,
@@ -743,6 +806,8 @@ export function createEditorStore() {
         const history: Record<string, HistoryStack<EditParams>> = {};
         const projectFaceRecords: Record<string, ProjectFaceRecord[]> = {};
         const projectSourceHashes: Record<string, string> = {};
+        const rawByPhoto: Record<string, RawDevelopParams> = {};
+        let loadedColor: ColorOutputSettings | null = null;
         for (const item of items) {
           params[item.id] = DEFAULT_PARAMS;
           history[item.id] = createHistory<EditParams>();
@@ -753,6 +818,8 @@ export function createEditorStore() {
           params[item.id] = clampParams(entry.params);
           projectFaceRecords[item.id] = entry.faces ?? [];
           projectSourceHashes[item.id] = entry.sourceHash ?? "";
+          if (entry.raw?.params) rawByPhoto[item.id] = { ...DEFAULT_RAW_PARAMS, ...entry.raw.params };
+          if (!loadedColor && entry.color?.output) loadedColor = entry.color.output;
         }
         const active = items[clamp(project.activeIndex ?? 0, 0, items.length - 1)] ?? items[0]!;
         set({
@@ -761,6 +828,12 @@ export function createEditorStore() {
           history,
           activeId: active.id,
           exportSettings: project.export ?? DEFAULT_EXPORT,
+          rawByPhoto,
+          rawStatus: {},
+          rawError: null,
+          rawDirty: false,
+          ...(loadedColor ? { colorSettings: loadedColor } : {}),
+          computePreference: project.compute?.preference ?? "auto",
           projectFaceRecords,
           projectSourceHashes,
           renderedPreviews: {},
@@ -1264,7 +1337,7 @@ export function createEditorStore() {
               }),
               uuid,
             ),
-          label ?? "应用 AI 建议",
+          label ?? "应用智能建议",
         );
       },
 

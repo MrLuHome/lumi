@@ -249,7 +249,7 @@ pub fn apply_face_reshape(
     let mut regions: Vec<AlphaRegion> = candidates.iter().map(|entry| entry.region.clone()).collect();
     boundary::apply_ownership(&mut regions);
 
-    for (candidate, region) in candidates.into_iter().zip(regions.into_iter()) {
+    for (candidate, region) in candidates.into_iter().zip(regions) {
         cancel.check()?;
         let warp_started = Instant::now();
         let rect = region.rect;

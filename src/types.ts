@@ -374,6 +374,17 @@ export interface ProjectPhoto {
   faces: ProjectFaceRecord[];
   subjects: ProjectSubject[];
   maskMeta: MaskMeta | null;
+  /** 第七轮：来源、RAW 显影参数与色彩输出设置（旧项目可缺省）。 */
+  source?: ProjectSource | null;
+  raw?: { params: RawDevelopParams; decoderVersion: string } | null;
+  color?: { output: ColorOutputSettings } | null;
+}
+
+export interface ProjectSource {
+  sourceType: string;
+  path: string;
+  hash: string;
+  metadata: unknown | null;
 }
 
 export interface ProjectDoc {
@@ -381,6 +392,8 @@ export interface ProjectDoc {
   createdAt: string;
   activeIndex: number;
   export: import("./state/params").ExportSettings;
+  /** 第七轮：计算后端偏好。 */
+  compute?: { preference: ComputeBackend } | null;
   photos: ProjectPhoto[];
 }
 
@@ -400,7 +413,196 @@ export interface ExportResult {
 
 /* ------------------------- 第六轮：智能精修 / 预设 / 批量 ------------------------- */
 
-export type Workspace = "edit" | "smart" | "presets" | "batch";
+export type Workspace = "edit" | "smart" | "presets" | "batch" | "raw" | "color" | "performance";
+
+/** 第七轮：RAW 显影参数，与 Rust `RawDevelopParams` 对应。 */
+export type WbMode = "camera" | "auto" | "custom";
+export type DemosaicMode = "mhc" | "bilinear";
+
+export interface RawDevelopParams {
+  exposureEv: number;
+  highlights: number;
+  shadows: number;
+  wbMode: WbMode;
+  temperature: number;
+  tint: number;
+  demosaic: DemosaicMode;
+  maxEdge: number | null;
+}
+
+export const DEFAULT_RAW_PARAMS: RawDevelopParams = {
+  exposureEv: 0,
+  highlights: 0,
+  shadows: 0,
+  wbMode: "camera",
+  temperature: 6500,
+  tint: 0,
+  demosaic: "mhc",
+  maxEdge: null,
+};
+
+export interface CfaInfo {
+  pattern: string;
+  filters: number;
+  colors: number;
+  xtrans: string[] | null;
+}
+
+export interface RawInfo {
+  path: string;
+  fileSize: number;
+  width: number;
+  height: number;
+  rawWidth: number;
+  rawHeight: number;
+  topMargin: number;
+  leftMargin: number;
+  cfa: CfaInfo;
+  blackLevel: { black: number; cblack: number[] };
+  whiteBalance: { camMul: number[]; rawCamMul: number[]; preMul: number[]; source: string };
+  cameraMatrix: number[][];
+  make: string;
+  model: string;
+  exif: { iso: number; shutter: number; aperture: number; focalLength: number; timestamp: number };
+  whiteLevel: number;
+  hasEmbeddedPreview: boolean;
+  preview: { format: string; width: number; height: number; bytes: number } | null;
+}
+
+export interface RawCapabilities {
+  decoder: string;
+  supported: string[];
+  unsupported: string[];
+  demosaic: string[];
+  notes: string[];
+}
+
+export interface RawDevelopResult {
+  url: string;
+  width: number;
+  height: number;
+  gains: number[];
+  wbSource: string;
+  demosaic: string;
+}
+
+/** 第七轮：输出 Profile 与色彩管理状态。 */
+export type ProfileKind = "srgb" | "adobeRgb" | "displayP3" | "proPhoto" | "custom";
+export type RenderingIntent = "perceptual" | "relative" | "saturation" | "absolute";
+
+export interface ColorOutputSettings {
+  profile: ProfileKind;
+  customPath: string | null;
+  intent: RenderingIntent;
+  blackPointCompensation: boolean;
+  embed: boolean;
+}
+
+export const DEFAULT_COLOR_SETTINGS: ColorOutputSettings = {
+  profile: "srgb",
+  customPath: null,
+  intent: "relative",
+  blackPointCompensation: true,
+  embed: true,
+};
+
+export interface ColorProfileOption {
+  kind: ProfileKind;
+  label: string;
+  builtin: boolean;
+}
+
+export interface DisplayStatus {
+  source: string;
+  description: string;
+  available: boolean;
+  reason: string;
+}
+
+export interface ColorStatus {
+  workingSpace: string;
+  output: ColorOutputSettings;
+  outputLabel: string;
+  display: DisplayStatus;
+  displayTransform: boolean;
+  cms: string;
+  profiles: ColorProfileOption[];
+  notes: string[];
+}
+
+export interface ProfileSummary {
+  path: string;
+  description: string;
+  colorSpace: string;
+  channels: number;
+  version: number;
+}
+
+/** 软打样预览：真实 sRGB → 输出 Profile → sRGB 往返统计。 */
+export interface SoftProofResult {
+  url: string;
+  width: number;
+  height: number;
+  outOfGamutPixels: number;
+  totalPixels: number;
+  ratio: number;
+  maxDeltaE00: number;
+  intent: string;
+  profile: string;
+}
+
+/** 显示器色彩预览：sRGB → ColorSync 主显示器 Profile，PNG 内嵌显示 ICC。 */
+export interface DisplayPreviewResult {
+  url: string;
+  width: number;
+  height: number;
+  source: string;
+  description: string;
+  reason: string;
+}
+
+/** 第七轮：计算后端。 */
+export type ComputeBackend = "auto" | "gpu" | "cpu";
+
+export interface GpuCapabilities {
+  deviceName: string;
+  backend: string;
+  driver: string;
+  deviceType: string;
+  maxTextureDimension2d: number;
+  maxStorageBufferBindingSize: number;
+  maxBufferSize: number;
+}
+
+export interface GpuStatus {
+  preference: ComputeBackend;
+  available: boolean;
+  enabled: boolean;
+  backend: string;
+  device: string;
+  reason: string;
+  verifiedSpeedup: number | null;
+  capabilities: GpuCapabilities | null;
+}
+
+export interface GpuBenchRow {
+  width: number;
+  height: number;
+  megapixels: number;
+  cpuMs: number;
+  gpuUploadMs: number;
+  gpuComputeMs: number;
+  gpuTotalMs: number;
+  speedup: number;
+  uploadBytes: number;
+}
+
+export interface GpuBenchmarkResult {
+  rows: GpuBenchRow[];
+  verifiedSpeedup: number | null;
+  autoEnabled: boolean;
+  status: GpuStatus;
+}
 
 export type RetouchMode = "natural" | "light" | "standard" | "strong";
 
@@ -570,7 +772,11 @@ export interface BatchSnapshot {
 export type ConflictPolicy = "skip" | "rename" | "overwrite";
 
 export interface BatchExportRequest {
-  photos: { path: string; params: import("./state/params").EditParams }[];
+  photos: {
+    path: string;
+    params: import("./state/params").EditParams;
+    rawParams?: RawDevelopParams | null;
+  }[];
   settings: import("./state/params").ExportSettings;
   outputDir: string;
   naming: string;

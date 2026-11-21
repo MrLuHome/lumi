@@ -59,6 +59,9 @@ pub struct BatchTask {
     /// 每张照片自己的编辑参数，不参与序列化，批量之间互不合并。
     #[serde(skip)]
     params: EditParams,
+    /// RAW 显影参数（仅 RAW 文件使用）。
+    #[serde(skip)]
+    raw_params: Option<crate::image_engine::raw::RawDevelopParams>,
 }
 
 impl BatchTask {
@@ -111,6 +114,9 @@ pub struct BatchSnapshot {
 pub struct BatchPhoto {
     pub path: String,
     pub params: EditParams,
+    /// RAW 文件的显影参数；非 RAW 时忽略。
+    #[serde(default)]
+    pub raw_params: Option<crate::image_engine::raw::RawDevelopParams>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -156,6 +162,8 @@ struct BatchState {
     started_at_ms: u64,
     finished_at_ms: u64,
     sequence: u64,
+    /// 导出时的输出 Profile；批量与单张共用同一套色彩设置。
+    color: crate::color_management::ColorOutputSettings,
 }
 
 /// 批量导出引擎。后台只有一个工作线程，逐张完整渲染、写盘后再处理下一张，
@@ -276,6 +284,13 @@ impl BatchEngine {
         }
     }
 
+    /// 更新批量导出使用的输出 Profile（与单张导出共用设置）。
+    pub fn set_color(&self, color: crate::color_management::ColorOutputSettings) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.color = color;
+        }
+    }
+
     /// 窗口对象在测试中不可构造，因此允许传入 None：队列本身照常运行，
     /// 只是不会向前端推送进度事件。
     fn emit(&self, app: Option<&AppHandle>) {
@@ -322,6 +337,7 @@ impl BatchEngine {
                 width: 0,
                 height: 0,
                 params: photo.params,
+                raw_params: photo.raw_params,
             });
         }
 
@@ -355,9 +371,9 @@ impl BatchEngine {
     fn spawn_worker(&self, app: AppHandle, repo: FaceRepository) {
         let engine = self.clone();
         std::thread::spawn(move || {
-            // 批处理使用独立的小缓存：每次最多保留一张全尺寸图，
-            // 完成一张并在下一张载入时回收，避免 10/50 张同时占满内存。
-            let cache = ImageCache::with_budget(1, 640 * 1024 * 1024);
+            // 批处理使用独立的小缓存：每张开始前清空缓存，
+            // 保证同一时刻只有一张全尺寸图（+ 一张渲染结果）驻留内存。
+            let cache = ImageCache::with_budget(1, 256 * 1024 * 1024);
             engine.run(Some(&app), &cache, &repo);
         });
     }
@@ -510,7 +526,26 @@ impl BatchEngine {
         token: &CancelToken,
         last_emit: &mut Instant,
     ) -> AppResult<TaskOutcome> {
-        let loaded = cache.load(Path::new(&task.path))?;
+        // 先释放上一张的全尺寸缓冲，再解码当前照片：两者不并存。
+        cache.clear();
+        let source = Path::new(&task.path);
+        let (working, original, depth) = if crate::image_engine::raw::is_raw_path(source) {
+            // RAW 批量：全尺寸显影，与单张导出共用同一函数。
+            let params = task
+                .raw_params
+                .clone()
+                .unwrap_or_default()
+                .sanitized();
+            let developed = crate::image_engine::raw::develop_from_path(source, &params)?;
+            (
+                std::sync::Arc::new(developed.image),
+                source.to_path_buf(),
+                crate::image_engine::decoder::BitDepth::Sixteen,
+            )
+        } else {
+            let loaded = cache.load(source)?;
+            (loaded.full.clone(), loaded.path.clone(), loaded.depth)
+        };
         token.check()?;
         self.set_progress(&task.job_id, "全尺寸渲染", 0.05);
         self.emit(app);
@@ -526,7 +561,7 @@ impl BatchEngine {
             }
         };
         let rendered = pipeline::render_with_progress(
-            &loaded.full,
+            &working,
             &task.params,
             known_faces,
             token,
@@ -535,7 +570,7 @@ impl BatchEngine {
         *last_emit = Instant::now();
         token.check()?;
 
-        let (settings, naming, conflict, overwrite_confirmed, output_dir) = {
+        let (settings, naming, conflict, overwrite_confirmed, output_dir, color) = {
             let state = self.inner.lock().map_err(|_| lock_error())?;
             (
                 state.settings,
@@ -543,6 +578,7 @@ impl BatchEngine {
                 state.conflict,
                 state.overwrite_confirmed,
                 state.output_dir.clone(),
+                state.color.clone(),
             )
         };
 
@@ -563,10 +599,11 @@ impl BatchEngine {
 
         let outcome = export::write_atomic(
             &destination,
-            &loaded.path,
+            &original,
             &rendered,
             settings,
-            loaded.depth,
+            depth,
+            Some(&color),
         )?;
         Ok(TaskOutcome::Exported(ExportInfo {
             path: outcome.path,
@@ -893,6 +930,7 @@ mod tests {
                 quality: 90,
             },
             loaded.depth,
+            None,
         )
         .unwrap();
         assert!(first.bytes > 0);
@@ -909,6 +947,7 @@ mod tests {
                 quality: 88,
             },
             loaded.depth,
+            None,
         )
         .unwrap();
         let leftovers: Vec<_> = std::fs::read_dir(&dir)
@@ -941,6 +980,7 @@ mod tests {
                 .map(|path| BatchPhoto {
                     path: path.to_string_lossy().into_owned(),
                     params: EditParams::default(),
+                    raw_params: None,
                 })
                 .collect(),
             settings: ExportSettings {
@@ -1185,6 +1225,7 @@ mod tests {
         )
         .unwrap();
         let single = dir.join("single.jpg");
+        let color = crate::color_management::ColorOutputSettings::default();
         export::write_atomic(
             &single,
             &loaded.path,
@@ -1194,6 +1235,7 @@ mod tests {
                 quality: 90,
             },
             loaded.depth,
+            Some(&color),
         )
         .unwrap();
         assert_eq!(
@@ -1356,6 +1398,58 @@ mod tests {
             crate::image_engine::preset::apply_preset(&base, &preset, 100.0, &[]);
         let full_rendered = pipeline::render(&loaded.full, &full, &[], &token).unwrap();
         assert_ne!(plain, full_rendered, "100% 强度必须真实改变像素");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 手工基准：50 张 1600×1200 的批量导出，用于复核内存峰值。
+    /// `cargo test --release batch_memory_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "manual memory benchmark"]
+    fn batch_memory_bench() {
+        let count: usize = std::env::var("LUMI_BENCH_COUNT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(50);
+        let dir = temp_dir("mem-bench");
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let mut photos = Vec::with_capacity(count);
+        for index in 0..count {
+            let source = dir.join(format!("bench-{index:03}.jpg"));
+            let image = image::RgbaImage::from_fn(1600, 1200, |x, y| {
+                image::Rgba([
+                    (x.wrapping_add(index as u32 * 7) % 256) as u8,
+                    (y.wrapping_add(index as u32 * 3) % 256) as u8,
+                    ((x + y) % 256) as u8,
+                    255,
+                ])
+            });
+            image::DynamicImage::ImageRgba8(image)
+                .to_rgb8()
+                .save(&source)
+                .unwrap();
+            photos.push(source);
+        }
+
+        let engine = BatchEngine::default();
+        engine.begin(make_request(photos, &out)).unwrap();
+        let cache = ImageCache::with_budget(1, 256 * 1024 * 1024);
+        let started = Instant::now();
+        engine.run(None, &cache, &FaceRepository::default());
+        let snapshot = engine.snapshot();
+        println!(
+            "BENCH count={} completed={} failed={} elapsed_ms={} exported_bytes={}",
+            count,
+            snapshot.completed,
+            snapshot.failed,
+            started.elapsed().as_millis(),
+            snapshot
+                .tasks
+                .iter()
+                .map(|task| task.bytes)
+                .sum::<u64>()
+        );
+        assert_eq!(snapshot.completed, count);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

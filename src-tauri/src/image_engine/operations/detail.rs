@@ -20,8 +20,8 @@ pub fn unsharp_mask(image: &Image16, radius: u32, amount: f32) -> Image16 {
     output
 }
 
-/// 磨皮已迁移到 `ai_engine::retouch`：必须带皮肤蒙版与关键点保护，
-/// 这里不再保留全图模糊实现。
+// 磨皮已迁移到 `ai_engine::retouch`：必须带皮肤蒙版与关键点保护，
+// 这里不再保留全图模糊实现。
 
 fn hash_noise(x: u32, y: u32) -> f32 {
     let mut hash = x

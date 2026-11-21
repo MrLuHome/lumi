@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { renderPreview, cancelRender, subscribeRenderProgress } from "../lib/backend";
 import { isDesktopRuntime } from "../lib/platform";
 import { isNeutral, paramsKey } from "../state/params";
+import { isRawPath } from "../state/project";
+import { DEFAULT_RAW_PARAMS } from "../types";
 import {
   DETAIL_ZOOM_THRESHOLD,
   selectActiveParams,
@@ -24,6 +26,9 @@ export function usePreviewRenderer(): void {
     state.photos.find((item) => item.id === state.activeId),
   );
   const params = useEditorStore(selectActiveParams);
+  const rawParams = useEditorStore(
+    (state) => state.rawByPhoto[state.activeId ?? ""] ?? DEFAULT_RAW_PARAMS,
+  );
   const zoom = useEditorStore((state) => state.zoom);
   const desktop = isDesktopRuntime();
   const requestSeq = useRef(0);
@@ -54,9 +59,11 @@ export function usePreviewRenderer(): void {
 
     const detail = zoom >= DETAIL_ZOOM_THRESHOLD;
     const maxEdge = detail ? DETAIL_MAX_EDGE : undefined;
-    const cacheKey = `${key}|${maxEdge ?? "fit"}`;
+    const raw = isRawPath(photo.path);
+    const rawKey = raw ? JSON.stringify(rawParams) : "";
+    const cacheKey = `${key}|${maxEdge ?? "fit"}|${rawKey}`;
 
-    if (isNeutral(params) && !detail) {
+    if (!raw && isNeutral(params) && !detail) {
       store.markRendered(photo.id, photo.previewUrl, cacheKey, 0);
       return;
     }
@@ -73,12 +80,21 @@ export function usePreviewRenderer(): void {
 
     const timer = window.setTimeout(async () => {
       try {
-        const result = await renderPreview(photo.path, params, requestId, maxEdge);
+        const result = await renderPreview(
+          photo.path,
+          params,
+          requestId,
+          maxEdge,
+          raw ? rawParams : null,
+        );
         if (disposed || requestId !== activeRequest.current) return;
         const current = useEditorStore.getState();
         if (current.activeId !== photo.id) return;
         const liveParams = current.params[photo.id];
         if (!liveParams || paramsKey(liveParams) !== key) return;
+        if (raw && JSON.stringify(current.rawByPhoto[photo.id] ?? DEFAULT_RAW_PARAMS) !== rawKey) {
+          return;
+        }
         current.markRendered(photo.id, result.previewUrl, cacheKey, result.elapsedMs, {
           warnings: result.warnings,
           reshape: result.reshape,
@@ -100,5 +116,5 @@ export function usePreviewRenderer(): void {
       // 后端只会保留最新任务，这里显式取消可避免排队中的旧任务浪费 CPU。
       void cancelRender(requestId);
     };
-  }, [photo, params, zoom, desktop]);
+  }, [photo, params, zoom, desktop, rawParams]);
 }

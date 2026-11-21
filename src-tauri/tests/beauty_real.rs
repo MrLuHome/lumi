@@ -211,9 +211,7 @@ fn real_group_faces_get_disjoint_owned_masks() {
         for second in first + 1..masks.len() {
             let mut shared = 0usize;
             for (x, y, alpha) in masks[first].iter() {
-                if alpha > 0.4
-                    && masks[second].at(x as u32, y as u32) > 0.4
-                {
+                if alpha > 0.4 && masks[second].at(x, y) > 0.4 {
                     shared += 1;
                 }
             }
