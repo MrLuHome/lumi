@@ -325,6 +325,24 @@ describe("ROUND 9 项目恢复", () => {
     expect(store.getState().photos).toHaveLength(0);
   });
 
+  it("加载中关闭：迟到的提交被丢弃，不写默认值也不恢复数据", () => {
+    const store = createEditorStore();
+    const photo = makePhoto("a");
+    const face = faceParams(UUID_A, FACE_ID_A);
+    const doc = makeDoc([
+      { ...makePhotoDoc(photo.path, { faces: [face] } as EditParams) },
+    ]);
+    const requestId = store.getState().beginProjectLoad("/tmp/project.lumi");
+    store.getState().closeProject();
+    const snapshot = buildProjectSnapshot([photo], doc, "project-1");
+    const committed = store.getState().commitProjectSnapshot(requestId, snapshot);
+    expect(committed).toBe(false);
+    expect(store.getState().loadSession.phase).not.toBe("ready");
+    expect(store.getState().photos).toHaveLength(0);
+    expect(store.getState().params).toEqual({});
+    expect(store.getState().loadSnapshot).toBeNull();
+  });
+
   it("多人脸各自独立参数，恢复后不交错", () => {
     const store = createEditorStore();
     const photo = makePhoto("a");

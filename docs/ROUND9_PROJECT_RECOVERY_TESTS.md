@@ -20,7 +20,7 @@
 | --- | --- | --- | --- |
 | A | 连续恢复 20 次参数一致 | 是 | `连续恢复 20 次参数完全一致` |
 | B | A 加载中切 B，A 迟到回调不得覆盖 B | 是 | `A 加载中切 B：A 的迟到回调不覆盖 B` |
-| C | 读取中关窗 / 半写入 | 部分 | 原子写 + 回读校验 + `.lumi.bak`；OS 关窗在阶段 8 |
+| C | 读取中关窗 / 半写入 | 通过（状态机级）+ 未触发 OS 级 | 原子写 + 回读校验 + `.lumi.bak`；新增「加载中关闭 → 迟到提交被丢弃」测试；OS 关窗无法在 150 ms 加载窗内手动触发，见 §7 |
 | D | 缺字段 / 非法参数 / 人脸缺失 / 蒙版缺失 / 旧版本 / 损坏文件 | 是（前端 + Rust） | `参数损坏时进入 Failed…`、`未匹配的人脸记录保留原参数…`、`v2_project_without_new_fields_loads_with_defaults`、`project_without_round7_fields_still_opens`、`future_version_is_rejected` |
 | E | 加载中保存 / 切换 / 多请求同时返回 | 是 | `恢复期间禁止编辑与保存`、`A 加载中切 B` |
 | F | 多照片 / 多人脸 / 每脸独立参数 | 是 | `多人脸各自独立参数，恢复后不交错` |
@@ -88,10 +88,13 @@ integration: 全部通过（face_detection 4、face_intelligence 5、raw_real 2�
 | 人脸 UUID + 参数一致 | `buildProjectSnapshot` 产出 warnings | 同步扫描 `params.faces[].faceUuid` |
 | 源图哈希关联 | 复用 `sourceHash`，不重算图片 SHA256 | 阶段 1 数据样本 + `replace_source_blocks_automatic_parameter_restore` |
 
-## 6. 未覆盖 / 待阶段 8
+## 6. 未覆盖 / 阶段 8 补充
 
-- OS 级「读取中直接关窗」无法由 Vitest 驱动；当前依靠：恢复期禁止保存、读文件在 `spawn_blocking`、写入原子化 + 回读校验。
-- 大项目（50+ 照片）的峰值内存与恢复耗时在阶段 8 记录。
+- OS 级「读取中直接关窗」未能在 GUI 中触发：实测项目加载仅 145–158 ms，
+  无法在窗口内手动退出。已改为状态机级验证（`加载中关闭：迟到的提交被丢弃…`，
+  66 个前端测试中的一项），并依靠：恢复期禁止保存、读文件在 `spawn_blocking`、
+  写入原子化 + 回读校验 + `.lumi.bak`。
+- 大项目（50+ 照片）的峰值内存与恢复耗时未测（当前项目仅 1 张照片）。
 - 多人脸 + 多蒙版组合的像素级一致性属于渲染回归，不在本阶段范围。
 
 ## 6.1 阶段 8 GUI 验收发现的保存数据丢失（已修复）
