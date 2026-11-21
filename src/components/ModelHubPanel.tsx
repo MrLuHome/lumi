@@ -22,6 +22,7 @@ const NORMALIZATIONS = [
 
 export function ModelHubPanel() {
   const notify = useEditorStore((state) => state.notify);
+  const clearFaceAnalyses = useEditorStore((state) => state.clearFaceAnalyses);
   const desktop = isDesktopRuntime();
   const [models, setModels] = useState<InstalledModel[]>([]);
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
@@ -133,6 +134,11 @@ export function ModelHubPanel() {
     setBusy(`use:${id}`);
     try {
       const report = await selectFaceProvider(providerId);
+      if (report.requiresReview) {
+        for (const photoId of Object.keys(useEditorStore.getState().faces)) {
+          clearFaceAnalyses(photoId);
+        }
+      }
       notify("success", report.message);
     } catch (cause) {
       notify("error", `切换失败：${cause instanceof Error ? cause.message : String(cause)}`);

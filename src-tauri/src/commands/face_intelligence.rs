@@ -47,6 +47,8 @@ pub struct ProviderSwitchReport {
     pub previous_gate_summary: Option<String>,
     /// true 表示切换后 LEVEL 3 的可用性可能变化，需要用户重新确认参数。
     pub requires_review: bool,
+    /// 被清空稠密关键点/门控的人脸数；这些脸必须按新 Provider 重新分析。
+    pub cleared_faces: usize,
     pub message: String,
 }
 
@@ -69,6 +71,7 @@ pub fn face_intelligence_status(
 #[tauri::command]
 pub fn select_face_provider(
     intelligence: State<'_, std::sync::Arc<FaceIntelligence>>,
+    repo: State<'_, FaceRepository>,
     provider_id: String,
 ) -> AppResult<ProviderSwitchReport> {
     let previous = intelligence.last_analysis();
@@ -79,9 +82,18 @@ pub fn select_face_provider(
     let descriptor = intelligence.select(&provider_id)?;
     let changed =
         previous.as_ref().map(|record| record.provider_id.clone()) != Some(descriptor.id.clone());
+    // 旧 Provider 的稠密关键点与门控结论不能继续使用：切换后一律清空，
+    // 必须按新 Provider + 拓扑 + 模型版本重新分析并重新确认。
+    let cleared_faces = if changed { repo.clear_analyses() } else { 0 };
+    if changed {
+        // 旧 Provider 的分析记录同样作废，否则 AI 面板会继续显示旧的 85 点表格。
+        intelligence.clear_last_analysis();
+    }
     let message = if changed {
-        "Provider 已切换。LEVEL 3 参数按新 Provider 的实测门控重新判定，请确认五官参数。"
-            .to_string()
+        format!(
+            "Provider 已切换到 {}。旧 Provider 的稠密关键点与 LEVEL 3 门控已清空（{cleared_faces} 张人脸），请重新分析并按新 Provider 的实测门控确认五官参数。",
+            descriptor.display_name
+        )
     } else {
         "Provider 未变化。".to_string()
     };
@@ -90,6 +102,7 @@ pub fn select_face_provider(
         to: descriptor.id,
         previous_gate_summary: previous.map(|record| record.gate_summary()),
         requires_review: changed,
+        cleared_faces,
         message,
     })
 }

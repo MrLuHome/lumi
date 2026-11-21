@@ -155,7 +155,10 @@ impl FaceIntelligence {
         }
         let installed = model_hub.list();
         for model in &installed {
-            if let Ok(provider) = onnx::OnnxLandmarkProvider::load(model, yunet_path.clone()) {
+            let executable = model_hub.executable().map(Path::to_path_buf);
+            if let Ok(provider) =
+                onnx::OnnxLandmarkProvider::load(model, yunet_path.clone(), executable)
+            {
                 providers.insert(provider.id().to_string(), Arc::new(provider));
             }
         }
@@ -272,6 +275,7 @@ impl FaceIntelligence {
         let stability = read(&self.verifications)
             .get(provider.id())
             .map(|verification| verification.stability.clone());
+        let model_version = result.model_version.clone().unwrap_or_default();
         let mut faces = Vec::with_capacity(result.faces.len());
         for face in &result.faces {
             let dense = dense::assemble_dense(face, &result);
@@ -286,6 +290,7 @@ impl FaceIntelligence {
                     &descriptor,
                     stability.as_ref(),
                     &self.thresholds,
+                    &model_version,
                 )
             } else {
                 // 稀疏 Provider 已经完成分析，必须说明“是能力不足”，
@@ -302,6 +307,8 @@ impl FaceIntelligence {
             };
             gate.face_uuid = face.face_uuid.clone();
             gate.topology_id = result.topology_id.clone();
+            gate.provider_version = descriptor.version.clone();
+            gate.model_version = model_version.clone();
             faces.push(AnalyzedFace {
                 face_uuid: face.face_uuid.clone(),
                 bounding_box: face.bounding_box,
@@ -408,7 +415,7 @@ impl FaceIntelligence {
             max_edge: 900,
             ..Default::default()
         };
-        let mut dense_runs: Vec<Vec<DenseFace>> = Vec::new();
+        let mut stability_runs: Vec<quality::StabilityRun> = Vec::new();
         let mut elapsed = Vec::new();
         let mut first_result: Option<FaceAnalysisResult> = None;
         for _ in 0..runs {
@@ -424,12 +431,20 @@ impl FaceIntelligence {
                 .map(|face| dense::assemble_dense(face, &result))
                 .filter(|face| !face.regions.is_empty())
                 .collect();
-            dense_runs.push(dense);
+            stability_runs.push(quality::StabilityRun {
+                provider_id: result.provider_id.clone(),
+                topology_id: result.topology_id.clone(),
+                model_version: result.model_version.clone().unwrap_or_default(),
+                faces: dense,
+            });
             if first_result.is_none() {
                 first_result = Some(result);
             }
         }
-        let sample = dense_runs.first().cloned().unwrap_or_default();
+        let sample = stability_runs
+            .first()
+            .map(|run| run.faces.clone())
+            .unwrap_or_default();
         let quality_sample: Vec<FaceQuality> = sample
             .iter()
             .map(|face| quality::evaluate_face_quality(face, &self.thresholds))
@@ -443,10 +458,15 @@ impl FaceIntelligence {
             .as_ref()
             .map(|result| result.topology_id.clone())
             .unwrap_or_default();
+        let model_version = first_result
+            .as_ref()
+            .and_then(|result| result.model_version.clone())
+            .unwrap_or_default();
         let mut stability = quality::measure_stability(
             provider.id(),
             &topology,
-            &dense_runs,
+            &model_version,
+            &stability_runs,
             &elapsed,
             &self.thresholds,
         );
@@ -544,6 +564,13 @@ impl FaceIntelligence {
         read(&self.last).clone()
     }
 
+    /// Provider 切换后作废上一次分析记录，避免 UI 继续展示旧 Provider 的
+    /// 85 点表格与 LEVEL 3 解锁结论。
+    pub fn clear_last_analysis(&self) {
+        let mut guard = write(&self.last);
+        *guard = None;
+    }
+
     /// 模型变化后重建 Provider 集合，保留验证缓存与当前选择（若仍存在）。
     pub fn reload_models(&self) {
         let installed = self.model_hub.list();
@@ -559,7 +586,10 @@ impl FaceIntelligence {
             );
         }
         for model in &installed {
-            if let Ok(provider) = onnx::OnnxLandmarkProvider::load(model, self.yunet_path.clone()) {
+            let executable = self.model_hub.executable().map(Path::to_path_buf);
+            if let Ok(provider) =
+                onnx::OnnxLandmarkProvider::load(model, self.yunet_path.clone(), executable)
+            {
                 providers.insert(provider.id().to_string(), Arc::new(provider));
             }
         }

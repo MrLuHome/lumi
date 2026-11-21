@@ -159,6 +159,7 @@ export default function App() {
       let pending = 0;
       let missingFaces = 0;
       let changed = 0;
+      let discarded = 0;
       for (const item of items) {
         const snapshot = useEditorStore.getState();
         const records = snapshot.projectFaceRecords[item.id] ?? [];
@@ -174,6 +175,7 @@ export default function App() {
           useEditorStore.getState().applyFaceRestore(item.id, restored);
           pending += restored.pending.length;
           missingFaces += restored.missing.length;
+          discarded += restored.discardedDense;
           if (restored.sourceChanged) changed += 1;
         } catch {
           // 单张照片检测失败不影响项目其余部分。
@@ -183,6 +185,13 @@ export default function App() {
         useEditorStore
           .getState()
           .notify("info", `${changed} 张照片的原图文件已变化，人脸参数需人工确认`);
+      } else if (discarded > 0) {
+        useEditorStore
+          .getState()
+          .notify(
+            "info",
+            `${discarded} 张人脸的旧 Provider/模型版本稠密结论与当前环境不一致，已锁定 LEVEL 3，需重新分析`,
+          );
       } else if (pending > 0) {
         useEditorStore
           .getState()

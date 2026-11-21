@@ -95,18 +95,25 @@ pub struct FaceRestoreResult {
     pub outcome: FaceMatchOutcome,
     /// 已写回持久 UUID 的检测结果；前端用它替换本地人脸列表。
     pub faces: Vec<FaceFrame>,
+    /// 因 Provider/拓扑/模型版本/源图不一致而丢弃的旧稠密结论数量。
+    pub discarded_dense: usize,
 }
 
 /// 项目重开：比较保存的哈希与当前文件，再按几何一一匹配。
 /// 高置信自动恢复 UUID；低置信进入 pending；源图变化则全部转人工确认。
+///
+/// 稠密关键点与 LEVEL 3 门控只有在 Provider ID、Provider 版本、拓扑、模型版本
+/// 与照片来源全部一致时才恢复；否则丢弃旧结论，回到 5 点并锁定 LEVEL 3。
 #[tauri::command]
 pub async fn restore_faces(
     repo: State<'_, FaceRepository>,
+    intelligence: State<'_, std::sync::Arc<crate::face_intelligence::FaceIntelligence>>,
     path: String,
     records: Vec<ProjectFace>,
     source_hash: Option<String>,
 ) -> AppResult<FaceRestoreResult> {
     let repo = repo.inner().clone();
+    let intelligence = intelligence.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let frames = repo
             .get(Path::new(&path))
@@ -127,22 +134,56 @@ pub async fn restore_faces(
             .apply_identities(Path::new(&path), &assignments)
             .map(|entry| entry.faces)
             .unwrap_or(frames);
-        // 恢复项目里保存的稠密关键点与门控；旧项目没有这些字段时保持 5 点并锁定 LEVEL 3。
+
+        let active_id = intelligence.active_id();
+        let provider = intelligence.descriptor(&active_id).ok();
+        let expected_model = intelligence
+            .last_analysis()
+            .filter(|record| record.provider_id == active_id)
+            .and_then(|record| {
+                record
+                    .faces
+                    .iter()
+                    .find(|face| !face.gate.model_version.is_empty())
+                    .map(|face| face.gate.model_version.clone())
+            })
+            .unwrap_or_default();
+        let mut discarded = 0usize;
+        // 恢复项目里保存的稠密关键点与门控；身份不一致或源图变化时一律丢弃。
         let analyses: Vec<_> = records
             .iter()
             .map(|record| {
-                (
-                    record.uuid.clone(),
-                    record.dense.clone(),
-                    record.level3.clone(),
-                )
+                let restored = provider.as_ref().and_then(|provider| {
+                    record.restorable_analysis(
+                        &provider.id,
+                        &provider.version,
+                        provider.topology_id.as_deref().unwrap_or_default(),
+                        &expected_model,
+                        source_changed,
+                    )
+                });
+                match restored {
+                    Some((dense, gate)) => {
+                        (record.uuid.clone(), Some(dense.clone()), Some(gate.clone()))
+                    }
+                    None => {
+                        if record.dense.is_some() || record.level3.is_some() {
+                            discarded += 1;
+                        }
+                        (record.uuid.clone(), None, None)
+                    }
+                }
             })
             .collect();
         let faces = repo
             .attach_analyses(Path::new(&path), &analyses)
             .map(|entry| entry.faces)
             .unwrap_or(faces);
-        Ok(FaceRestoreResult { outcome, faces })
+        Ok(FaceRestoreResult {
+            outcome,
+            faces,
+            discarded_dense: discarded,
+        })
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?

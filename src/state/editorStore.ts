@@ -342,6 +342,8 @@ export interface EditorState {
   applyFaceRestore: (photoId: string, result: FaceRestoreResult) => void;
   /** 人工确认后，用后端返回的新人脸列表重新绑定 UUID。 */
   applyConfirmedFaces: (photoId: string, faces: FaceDetectionResult["faces"]) => void;
+  /** Provider 切换后清空本地稠密关键点与门控，强制按新 Provider 重新分析。 */
+  clearFaceAnalyses: (photoId: string) => void;
 
   setWarpTool: (tool: WarpMode | "off") => void;
   setWarpRadius: (radius: number) => void;
@@ -349,7 +351,7 @@ export interface EditorState {
   setWarpFeather: (value: number) => void;
   setShowMesh: (value: boolean) => void;
   updateFaceShape: (faceId: number, key: FaceShapeKey, value: number) => void;
-  /** LEVEL 3 精确五官参数；只有该人脸门控解锁后才应调用。 */
+  /** LEVEL 3 五官轮廓参数；只有该人脸门控解锁后才应调用。 */
   updateFaceFeature: (
     faceId: number,
     group: "eyes" | "nose" | "mouth" | "chin",
@@ -1154,6 +1156,26 @@ export function createEditorStore() {
         });
       },
 
+      clearFaceAnalyses: (photoId) => {
+        const state = get();
+        const result = state.faces[photoId];
+        if (!result) return;
+        set({
+          faces: {
+            ...state.faces,
+            [photoId]: {
+              ...result,
+              model: "未分析",
+              faces: result.faces.map((face) => ({
+                ...face,
+                dense: null,
+                level3: null,
+              })),
+            },
+          },
+        });
+      },
+
       setWarpTool: (tool) =>
         set({
           warpTool: tool,
@@ -1191,7 +1213,7 @@ export function createEditorStore() {
               ...entry,
               [group]: { ...entry[group], ...patch },
             })),
-          `精确五官 · ${group}`,
+          `五官轮廓精修 · ${group}`,
           `reshape:${faceId}:${group}`,
         );
       },

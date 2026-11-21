@@ -32,6 +32,9 @@ flate2 = "1"
 tiff = "0.9"
 bytemuck = "1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.dev]
 incremental = true
 

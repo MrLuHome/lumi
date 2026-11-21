@@ -64,6 +64,7 @@ function capabilityChips(provider: ProviderDescriptor) {
 export function AiPortraitPanel({ photo }: AiPortraitPanelProps) {
   const notify = useEditorStore((state) => state.notify);
   const setFaces = useEditorStore((state) => state.setFaces);
+  const clearFaceAnalyses = useEditorStore((state) => state.clearFaceAnalyses);
   const desktop = isDesktopRuntime();
   const [status, setStatus] = useState<FaceIntelligenceStatus | null>(null);
   const [busy, setBusy] = useState<"analyze" | "probe" | "switch" | "refresh" | null>(null);
@@ -100,6 +101,12 @@ export function AiPortraitPanel({ photo }: AiPortraitPanelProps) {
     try {
       const report = await selectFaceProvider(providerId);
       setSwitchNote(report.message);
+      if (report.requiresReview && photo) {
+        // 旧 Provider 的 dense/level3 不能继续解锁五官。
+        clearFaceAnalyses(photo.id);
+        // 旧 Provider 的稳定性探针结论同样作废。
+        setProbe(null);
+      }
       notify("success", report.message);
       await refresh();
     } catch (cause) {
@@ -404,6 +411,53 @@ export function AiPortraitPanel({ photo }: AiPortraitPanelProps) {
         </div>
       )}
 
+      {active?.id === "apple-vision" && gate ? (
+        <div className="reshape-warning">
+          <AlertTriangle size={12} />
+          <span>
+            稳定性与结构检查已通过，定位精度尚未经人工标注验证。重复运行一致只说明结果稳定，不代表位置准确。
+          </span>
+        </div>
+      ) : null}
+
+      <div className="ai-section-title">精度证据</div>
+      <dl className="perf-list">
+        <div>
+          <dt>稳定性</dt>
+          <dd>
+            {stability && stability.runs > 0
+              ? `${stability.runs} 次重复分析，眼距占比 ${(stability.ratio * 100).toFixed(3)}%，${
+                  stability.passed ? "通过" : "未通过"
+                }`
+              : "未运行重复分析"}
+          </dd>
+        </div>
+        <div>
+          <dt>结构验证</dt>
+          <dd>
+            {gate
+              ? gate.faces
+                  .map((face) => {
+                    const enabled = [
+                      face.gate.eyes.enabled,
+                      face.gate.nose.enabled,
+                      face.gate.mouth.enabled,
+                      face.gate.chin.enabled,
+                    ].filter(Boolean).length;
+                    return `${face.faceUuid.slice(0, 6)} ${enabled}/4 区域`;
+                  })
+                  .join(" · ")
+              : "未分析"}
+          </dd>
+        </div>
+        <div>
+          <dt>定位精度</dt>
+          <dd>
+            未验证：尚缺 50 张以上人工标注样本与 NME 评测；检测级 confidence 不等于逐点精度。
+          </dd>
+        </div>
+      </dl>
+
       {stability && stability.runs > 0 ? (
         <>
           <div className="ai-section-title">
@@ -454,8 +508,8 @@ export function AiPortraitPanel({ photo }: AiPortraitPanelProps) {
       ) : null}
 
       <p className="hint-text">
-        <Cpu size={12} /> 质量验证在本机重复推理并测量关键点抖动；未通过时不会产生任何 LEVEL 3
-        变形，也不会用声明代替实测。
+        <Cpu size={12} /> 质量验证只衡量重复运行的一致性与结构完整性，不代表定位精度；未通过时不会产生任何
+        LEVEL 3 变形，也不会用声明代替实测。
       </p>
     </aside>
   );

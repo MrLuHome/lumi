@@ -95,6 +95,41 @@ impl ProjectFace {
         }
         &self.uuid
     }
+
+    /// 项目重开时是否允许恢复这张脸的稠密关键点与门控。
+    ///
+    /// 必须同时满足：原图未被替换、门控记录的 Provider ID / Provider 版本 /
+    /// 拓扑 / 模型版本与当前环境一致。任一项不符都返回 `None`，
+    /// 让这张脸回到 5 点并锁定 LEVEL 3，而不是套用旧结论。
+    ///
+    /// `expected_model_version` 为空表示当前还没有同 Provider 的分析记录；
+    /// 此时信任项目里已记录的模型版本，但仍要求它非空且 Provider 版本一致。
+    pub fn restorable_analysis<'a>(
+        &'a self,
+        provider_id: &str,
+        provider_version: &str,
+        topology_id: &str,
+        expected_model_version: &str,
+        source_changed: bool,
+    ) -> Option<(&'a DenseFace, &'a Level3Gate)> {
+        if source_changed {
+            return None;
+        }
+        let gate = self.level3.as_ref()?;
+        let dense = self.dense.as_ref()?;
+        if gate.model_version.is_empty() {
+            return None;
+        }
+        let model_version = if expected_model_version.is_empty() {
+            gate.model_version.as_str()
+        } else {
+            expected_model_version
+        };
+        if !gate.matches_identity(provider_id, provider_version, topology_id, model_version) {
+            return None;
+        }
+        Some((dense, gate))
+    }
 }
 
 /// 读取源文件 SHA-256，用来判断项目重开时原图是否被替换。
@@ -422,5 +457,149 @@ mod tests {
         assert_eq!(loaded.bbox, saved.bbox);
         assert_eq!(loaded.landmarks.len(), 5);
         assert_eq!(loaded.model, MATCH_MODEL_VERSION);
+    }
+
+    fn dense() -> DenseFace {
+        DenseFace {
+            topology_id: "face-68".into(),
+            provider_id: "apple-vision".into(),
+            provider_version: "vision-rev3".into(),
+            image_width: 100,
+            image_height: 100,
+            bounding_box: crate::face_intelligence::types::BoundingBox {
+                x: 0.1,
+                y: 0.1,
+                width: 0.3,
+                height: 0.3,
+            },
+            confidence: 0.9,
+            regions: Vec::new(),
+        }
+    }
+
+    fn gate(provider: &str, version: &str, topology: &str, model: &str) -> Level3Gate {
+        let mut gate = Level3Gate::locked(provider, "face-uuid", "test");
+        gate.provider_version = version.into();
+        gate.topology_id = topology.into();
+        gate.model_version = model.into();
+        gate
+    }
+
+    fn analysed(provider: &str, version: &str, topology: &str, model: &str) -> ProjectFace {
+        let frame = frame(1, 0.05, 0.2, marks(0.15, 0.3));
+        let mut record = record(&frame);
+        record.dense = Some(dense());
+        record.level3 = Some(gate(provider, version, topology, model));
+        record
+    }
+
+    #[test]
+    fn matching_identity_restores_dense_and_gate() {
+        let record = analysed(
+            "apple-vision",
+            "vision-rev3",
+            "face-68",
+            "macOS Vision revision 3",
+        );
+        let restored = record.restorable_analysis(
+            "apple-vision",
+            "vision-rev3",
+            "face-68",
+            "macOS Vision revision 3",
+            false,
+        );
+        assert!(restored.is_some());
+    }
+
+    #[test]
+    fn provider_switch_discards_old_dense() {
+        let record = analysed(
+            "apple-vision",
+            "vision-rev3",
+            "face-68",
+            "macOS Vision revision 3",
+        );
+        assert!(record
+            .restorable_analysis("yunet", "2023mar", "face-5", "", false)
+            .is_none());
+    }
+
+    #[test]
+    fn provider_version_mismatch_discards_old_dense() {
+        let record = analysed(
+            "apple-vision",
+            "vision-rev3",
+            "face-68",
+            "macOS Vision revision 3",
+        );
+        assert!(record
+            .restorable_analysis(
+                "apple-vision",
+                "vision-rev4",
+                "face-68",
+                "macOS Vision revision 4",
+                false
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn model_version_mismatch_discards_old_dense() {
+        let record = analysed(
+            "apple-vision",
+            "vision-rev3",
+            "face-68",
+            "macOS Vision revision 3",
+        );
+        assert!(record
+            .restorable_analysis(
+                "apple-vision",
+                "vision-rev3",
+                "face-68",
+                "macOS Vision revision 4",
+                false
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn topology_mismatch_discards_old_dense() {
+        let record = analysed(
+            "apple-vision",
+            "vision-rev3",
+            "face-68",
+            "macOS Vision revision 3",
+        );
+        assert!(record
+            .restorable_analysis("apple-vision", "vision-rev3", "face-126", "", false)
+            .is_none());
+    }
+
+    #[test]
+    fn replaced_source_discards_old_dense() {
+        let record = analysed(
+            "apple-vision",
+            "vision-rev3",
+            "face-68",
+            "macOS Vision revision 3",
+        );
+        assert!(record
+            .restorable_analysis(
+                "apple-vision",
+                "vision-rev3",
+                "face-68",
+                "macOS Vision revision 3",
+                true
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn old_project_without_dense_stays_compatible() {
+        let frame = frame(1, 0.05, 0.2, marks(0.15, 0.3));
+        let record = record(&frame);
+        assert!(record
+            .restorable_analysis("yunet", "2023mar", "face-5", "", false)
+            .is_none());
     }
 }

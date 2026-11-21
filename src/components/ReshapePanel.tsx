@@ -371,13 +371,17 @@ export function ReshapePanel({ photo }: ReshapePanelProps) {
       ) : null}
 
       <div className={`reshape-section-title ${level3Unlocked ? "" : "is-disabled"}`}>
-        精确五官（LEVEL 3 · {level3Unlocked ? "已解锁" : "未解锁"})
+        五官轮廓精修（LEVEL 3 · 结构门控{level3Unlocked ? " · 已解锁" : " · 未解锁"}）
       </div>
       {level3Unlocked ? (
         <>
           <p className="param-hint">
-            当前人脸使用 {level3?.providerId ?? "AI Provider"} 的稠密轮廓（{level3?.topologyId ?? "—"}）。
-            参数只作用于实测通过的部位。
+            当前人脸使用 {level3?.providerId ?? "AI Provider"}{" "}
+            {level3?.providerVersion ?? ""} 的稠密轮廓（{level3?.topologyId ?? "—"} ·{" "}
+            {level3?.modelVersion || "模型版本未记录"}）。参数只作用于实测通过的部位。
+          </p>
+          <p className="param-hint">
+            稳定性、结构验证已通过；定位精度尚未经人工标注验证，这里的“通过”不代表五官位置准确。
           </p>
           {level3Groups.map((group) =>
             group.gate?.enabled ? (

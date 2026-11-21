@@ -365,6 +365,8 @@ export interface FaceRestoreResult {
   missing: ProjectFaceRecord[];
   sourceChanged: boolean;
   faces: DetectedFace[];
+  /** 因 Provider/拓扑/模型版本/源图不一致而丢弃的旧稠密结论数量。 */
+  discardedDense: number;
 }
 
 /** 与 Rust `ReshapeCapability` 对应。 */
@@ -932,7 +934,9 @@ export interface FeatureGate {
 
 export interface Level3Gate {
   providerId: string;
+  providerVersion: string;
   topologyId: string;
+  modelVersion: string;
   faceUuid: string;
   denseLandmarks: boolean;
   eyes: FeatureGate;
@@ -1028,6 +1032,7 @@ export interface ProviderSwitchReport {
   to: string;
   previousGateSummary: string | null;
   requiresReview: boolean;
+  clearedFaces: number;
   message: string;
 }
 

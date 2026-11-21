@@ -327,6 +327,7 @@ export async function restoreFaces(
       missing: records,
       sourceChanged: false,
       faces: [],
+      discardedDense: 0,
     };
   }
   return invoke<FaceRestoreResult>("restore_faces", {

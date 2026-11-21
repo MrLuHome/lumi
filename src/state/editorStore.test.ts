@@ -387,3 +387,38 @@ describe("美肤参数与蒙版历史", () => {
     expect(doc.photos[1]?.raw).toBeNull();
   });
 });
+
+describe("Provider 切换后的本地人脸数据", () => {
+  it("清空稠密关键点与 LEVEL 3 门控，但保留 5 点检测结果", () => {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a")]);
+    store.getState().setFaces("a", {
+      faces: [
+        {
+          id: 1,
+          uuid: "face-uuid",
+          score: 0.9,
+          x: 0.1,
+          y: 0.1,
+          width: 0.2,
+          height: 0.2,
+          landmarks: [],
+          dense: { regions: [] } as never,
+          level3: { providerId: "apple-vision" } as never,
+        },
+      ],
+      imageWidth: 100,
+      imageHeight: 100,
+      elapsedMs: 1,
+      inferenceMs: 1,
+      model: "apple-vision",
+    });
+
+    store.getState().clearFaceAnalyses("a");
+    const face = store.getState().faces.a?.faces[0];
+    expect(face?.dense).toBeNull();
+    expect(face?.level3).toBeNull();
+    expect(face?.landmarks).toEqual([]);
+    expect(face?.uuid).toBe("face-uuid");
+  });
+});

@@ -234,6 +234,35 @@ impl FaceRepository {
         guard.trackers.insert(canonical, FaceTracker);
         Some(cached)
     }
+    /// Provider 切换后清空所有稠密关键点与 LEVEL 3 门控。
+    ///
+    /// 旧 Provider 的门控结论不能用于新 Provider：宁可回到 5 点并重新分析，
+    /// 也不能让 Apple Vision 的稠密数据在 YuNet 下继续解锁五官。
+    pub fn clear_analyses(&self) -> usize {
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(error) => error.into_inner(),
+        };
+        let mut cleared = 0;
+        for entry in guard.entries.values_mut() {
+            for face in entry.faces.iter_mut() {
+                if face.dense.is_some() || face.level3.is_some() {
+                    cleared += 1;
+                }
+                face.dense = None;
+                face.level3 = None;
+            }
+        }
+        if cleared > 0 {
+            let new_version = guard.version.saturating_add(1);
+            guard.version = new_version;
+            for entry in guard.entries.values_mut() {
+                entry.version = new_version;
+            }
+        }
+        cleared
+    }
+
     /// 项目重开后恢复稠密关键点与 LEVEL 3 门控。
     ///
     /// 只在 UUID 精确匹配时写入；没有稠密记录的旧项目保持 5 点，

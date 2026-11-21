@@ -13,7 +13,6 @@ pub mod validator;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use inference::LandmarkModel;
 pub use manifest::{
     InputSpec, LicenseDeclaration, ModelManifest, ModelTask, Normalization, OutputCoordinate,
     OutputLayout, OutputSpec, TensorLayout, ValidationSummary,
@@ -101,6 +100,12 @@ impl ModelHub {
 
     pub fn remove(&self, id: &str) -> Result<(), String> {
         self.store.remove(id)
+    }
+
+    /// Worker 可执行文件（应用自身）。用户 ONNX 的真实推理只在这个子进程里跑，
+    /// 主进程不加载用户模型；没有可执行文件时不提供 ONNX Provider。
+    pub fn executable(&self) -> Option<&Path> {
+        self.executable.as_deref()
     }
 
     fn run_probe(&self, path: &Path) -> Result<ProbeReport, String> {

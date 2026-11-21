@@ -2638,6 +2638,7 @@ dependencies = [
  "flate2",
  "image",
  "lcms2",
+ "libc",
  "libraw_rs_vendor",
  "pollster",
  "rayon",
