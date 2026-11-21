@@ -158,7 +158,11 @@ pub enum MatchConfidence {
 #[serde(rename_all = "camelCase")]
 pub struct FaceMatch {
     pub record_index: usize,
+    /// 匹配阶段的检测临时 ID。
     pub face_id: u32,
+    /// `apply_identities` 之后该人脸的最终 ID（由项目 UUID 推导）。
+    /// 前端必须用它写回参数，避免检测 ID 与持久 ID 两个空间混淆。
+    pub final_face_id: u32,
     pub face_uuid: String,
     pub score: f32,
     pub confidence: MatchConfidence,
@@ -288,6 +292,7 @@ pub fn match_faces(
         let entry = FaceMatch {
             record_index,
             face_id: frame.id,
+            final_face_id: frame.id,
             face_uuid: record.uuid.clone(),
             score,
             confidence,

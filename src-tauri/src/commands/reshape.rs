@@ -5,7 +5,7 @@ use std::path::Path;
 use serde::Serialize;
 use tauri::State;
 
-use crate::ai_engine::face_frame::FaceFrame;
+use crate::ai_engine::face_frame::{id_from_uuid, FaceFrame};
 use crate::error::{AppError, AppResult};
 use crate::face_reshape::face_mesh;
 use crate::face_reshape::identity::{self, FaceMatchOutcome, ProjectFace};
@@ -13,6 +13,19 @@ use crate::face_reshape::mesh::MeshPreview;
 use crate::face_reshape::{capability, ReshapeCapability};
 use crate::image_engine::params::EditParams;
 use crate::state::{FaceRepository, ImageCache};
+
+/// 匹配发生在 `apply_identities` 之前，当时用的是检测临时 ID。
+/// 高置信人脸最终 ID 由项目 UUID 推导；低置信保持检测 ID，等待人工确认。
+fn assign_final_face_ids(faces: &[FaceFrame], outcome: &mut FaceMatchOutcome) {
+    let final_ids: std::collections::HashMap<&str, u32> =
+        faces.iter().map(|face| (face.uuid.as_str(), face.id)).collect();
+    for entry in outcome.restored.iter_mut() {
+        entry.final_face_id = final_ids
+            .get(entry.face_uuid.as_str())
+            .copied()
+            .unwrap_or_else(|| id_from_uuid(&entry.face_uuid));
+    }
+}
 
 /// 当前真实可用的塑形能力（LEVEL 1 + LEVEL 2）。UI 据此禁用未验证功能。
 #[tauri::command]
@@ -124,7 +137,7 @@ pub async fn restore_faces(
             (Some(current), Some(saved)) if !saved.is_empty() => current != saved,
             _ => false,
         };
-        let outcome = identity::match_faces(&records, &frames, source_changed);
+        let mut outcome = identity::match_faces(&records, &frames, source_changed);
         let assignments: Vec<(u32, String)> = outcome
             .restored
             .iter()
@@ -179,6 +192,9 @@ pub async fn restore_faces(
             .attach_analyses(Path::new(&path), &analyses)
             .map(|entry| entry.faces)
             .unwrap_or(faces);
+        // 匹配发生在 apply_identities 之前，当时用的是检测临时 ID。
+        // 高置信人脸最终 ID 由项目 UUID 推导；低置信保持检测 ID，等待人工确认。
+        assign_final_face_ids(&faces, &mut outcome);
         Ok(FaceRestoreResult {
             outcome,
             faces,
@@ -216,4 +232,78 @@ pub async fn confirm_face_match(
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai_engine::face_frame::FaceFrame;
+    use crate::face_reshape::identity::{FaceMatch, MatchConfidence};
+
+    fn frame(id: u32, uuid: &str) -> FaceFrame {
+        FaceFrame {
+            id,
+            uuid: uuid.into(),
+            score: 0.95,
+            x: 0.2,
+            y: 0.2,
+            width: 0.3,
+            height: 0.3,
+            landmarks: Vec::new(),
+            dense: None,
+            level3: None,
+        }
+    }
+
+    fn matched(face_id: u32, uuid: &str) -> FaceMatch {
+        FaceMatch {
+            record_index: 0,
+            face_id,
+            final_face_id: face_id,
+            face_uuid: uuid.into(),
+            score: 0.98,
+            confidence: MatchConfidence::High,
+        }
+    }
+
+    #[test]
+    fn final_face_id_uses_persisted_identity_not_detection_id() {
+        // apply_identities 之后仓库里的人脸 id 已经由项目 UUID 推导。
+        let faces = vec![frame(1700055149, "18e9-uuid")];
+        let mut outcome = FaceMatchOutcome {
+            restored: vec![matched(101, "18e9-uuid")],
+            pending: Vec::new(),
+            missing: Vec::new(),
+            source_changed: false,
+        };
+        assign_final_face_ids(&faces, &mut outcome);
+        assert_eq!(outcome.restored[0].face_id, 101);
+        assert_eq!(outcome.restored[0].final_face_id, 1700055149);
+    }
+
+    #[test]
+    fn final_face_id_falls_back_to_uuid_derived_id() {
+        let outcome = FaceMatchOutcome {
+            restored: vec![matched(101, "standalone-uuid")],
+            pending: Vec::new(),
+            missing: Vec::new(),
+            source_changed: false,
+        };
+        let mut outcome = outcome;
+        assign_final_face_ids(&[], &mut outcome);
+        assert_eq!(outcome.restored[0].final_face_id, id_from_uuid("standalone-uuid"));
+    }
+
+    #[test]
+    fn final_face_id_keeps_pending_detection_id() {
+        let faces = vec![frame(1700055149, "18e9-uuid")];
+        let mut outcome = FaceMatchOutcome {
+            restored: Vec::new(),
+            pending: vec![matched(303, "18e9-uuid")],
+            missing: Vec::new(),
+            source_changed: false,
+        };
+        assign_final_face_ids(&faces, &mut outcome);
+        assert_eq!(outcome.pending[0].final_face_id, 303);
+    }
 }

@@ -353,6 +353,8 @@ export interface ProjectFaceRecord {
 export interface FaceMatchEntry {
   recordIndex: number;
   faceId: number;
+  /** `apply_identities` 之后由项目 UUID 推导的最终人脸 ID。 */
+  finalFaceId?: number;
   faceUuid: string;
   score: number;
   confidence: "high" | "low";

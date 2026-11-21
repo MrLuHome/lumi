@@ -23,6 +23,7 @@ export function StatusBar({ photo }: StatusBarProps) {
   const colorStatus = useEditorStore((state) => state.colorStatus);
   const gpuStatus = useEditorStore((state) => state.gpuStatus);
   const faceResult = useEditorStore((state) => (photo ? state.faces[photo.id] : undefined));
+  const loadSession = useEditorStore((state) => state.loadSession);
 
   return (
     <footer className="statusbar">
@@ -46,6 +47,15 @@ export function StatusBar({ photo }: StatusBarProps) {
         ) : (
           <span className="status-muted">未打开照片</span>
         )}
+        {loadSession.phase === "loading" ? (
+          <span className="status-badge">项目读取中…</span>
+        ) : loadSession.phase === "restoring" ? (
+          <span className="status-badge">人脸参数恢复中…</span>
+        ) : loadSession.phase === "failed" ? (
+          <span className="status-badge" title={loadSession.error?.message}>
+            项目加载失败{loadSession.error ? `：${loadSession.error.code}` : ""}
+          </span>
+        ) : null}
       </div>
 
       <div className="status-center">

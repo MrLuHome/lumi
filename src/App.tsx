@@ -28,6 +28,7 @@ import {
 } from "./lib/backend";
 import { formatDuration, formatFileSize } from "./lib/format";
 import { platformClass } from "./lib/platform";
+import { devLog, safeName } from "./lib/diagnostics";
 import {
   selectActiveParams,
   selectActivePhoto,
@@ -36,7 +37,7 @@ import {
   selectEffectUrl,
   useEditorStore,
 } from "./state/editorStore";
-import { buildProjectDoc } from "./state/project";
+import { buildProjectDoc, buildProjectSnapshot, computeProjectId } from "./state/project";
 
 function toMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -120,10 +121,21 @@ export default function App() {
   const handleSaveProject = useCallback(async () => {
     const state = useEditorStore.getState();
     if (state.photos.length === 0) return;
+    if (state.loadSession.phase !== "ready") {
+      state.notify("info", "项目正在加载或恢复，暂不能保存");
+      return;
+    }
+    const started = performance.now();
+    devLog("save_started", { projectId: state.loadSession.projectId, photos: state.photos.length });
     try {
       const doc = buildProjectDoc(state);
       const saved = await saveProject(doc, state.projectPath ?? undefined);
       useEditorStore.getState().setProjectPath(saved.path);
+      devLog("save_completed", {
+        projectId: state.loadSession.projectId,
+        bytes: saved.bytes,
+        elapsedMs: Math.round(performance.now() - started),
+      });
       useEditorStore
         .getState()
         .notify(
@@ -137,50 +149,84 @@ export default function App() {
   }, []);
 
   const handleOpenProject = useCallback(async () => {
+    const started = performance.now();
     try {
       const opened = await openProject();
+      const requestId = useEditorStore.getState().beginProjectLoad(opened.path);
+      devLog("load_started", {
+        requestId,
+        project: safeName(opened.path),
+        photos: opened.project.photos.length,
+      });
+
       const items = await importPaths(opened.project.photos.map((entry) => entry.path));
+      if (useEditorStore.getState().loadSession.requestId !== requestId) return;
+      devLog("database_loaded", {
+        requestId,
+        restoredItems: items.length,
+        elapsedMs: Math.round(performance.now() - started),
+      });
       if (items.length === 0) {
+        useEditorStore
+          .getState()
+          .failProjectLoad(requestId, "photos-unavailable", "项目中的照片文件都不存在");
         useEditorStore.getState().notify("error", "项目中的照片文件都不存在，无法恢复");
         return;
       }
-      const store = useEditorStore.getState();
-      store.loadProject(items, opened.project);
-      store.setProjectPath(opened.path);
-      const missing = opened.project.photos.length - items.length;
-      store.notify(
+
+      const projectId = await computeProjectId(opened.path, opened.project);
+      const snapshot = buildProjectSnapshot(items, opened.project, projectId);
+      const committed = useEditorStore.getState().commitProjectSnapshot(requestId, snapshot);
+      if (!committed) {
+        if (snapshot.fatal) useEditorStore.getState().notify("error", snapshot.fatal);
+        devLog("load_failed", { requestId, code: "project-invalid" });
+        return;
+      }
+      useEditorStore.getState().setProjectPath(opened.path);
+      const missing = snapshot.missing.length;
+      useEditorStore.getState().notify(
         missing > 0 ? "info" : "success",
         missing > 0
           ? `已恢复项目（${items.length}/${opened.project.photos.length} 张照片，${missing} 张文件缺失）`
           : `已打开项目：${baseName(opened.path)}`,
       );
+      if (snapshot.warnings.length > 0) {
+        devLog("load_warnings", { requestId, count: snapshot.warnings.length });
+      }
 
-      // 重新检测并与项目保存的人脸身份记录匹配，恢复每张脸的参数。
+      // 恢复到 ready 之前只更新检测结果与参数快照，不允许默认参数写回。
+      useEditorStore.getState().beginFaceRestore(requestId);
       let pending = 0;
       let missingFaces = 0;
       let changed = 0;
       let discarded = 0;
       for (const item of items) {
-        const snapshot = useEditorStore.getState();
-        const records = snapshot.projectFaceRecords[item.id] ?? [];
+        if (useEditorStore.getState().loadSession.requestId !== requestId) return;
+        const records = useEditorStore.getState().projectFaceRecords[item.id] ?? [];
         if (records.length === 0) continue;
         try {
           const detection = await detectFaces(item.path);
-          useEditorStore.getState().setFaces(item.id, detection);
+          if (useEditorStore.getState().loadSession.requestId !== requestId) return;
+          useEditorStore.getState().setDetectedFaces(item.id, detection, requestId);
           const restored = await restoreFaces(
             item.path,
             records,
-            snapshot.projectSourceHashes[item.id],
+            useEditorStore.getState().projectSourceHashes[item.id],
           );
-          useEditorStore.getState().applyFaceRestore(item.id, restored);
+          if (useEditorStore.getState().loadSession.requestId !== requestId) return;
+          useEditorStore.getState().applyFaceRestore(item.id, restored, requestId);
           pending += restored.pending.length;
           missingFaces += restored.missing.length;
           discarded += restored.discardedDense;
           if (restored.sourceChanged) changed += 1;
-        } catch {
-          // 单张照片检测失败不影响项目其余部分。
+        } catch (error) {
+          devLog("face_restore_failed", { requestId, photo: safeName(item.path), error: toMessage(error) });
         }
       }
+      if (useEditorStore.getState().loadSession.requestId !== requestId) return;
+      useEditorStore.getState().finishProjectLoad(requestId);
+      devLog("ui_ready", { requestId, elapsedMs: Math.round(performance.now() - started) });
+
       if (changed > 0) {
         useEditorStore
           .getState()
@@ -203,6 +249,7 @@ export default function App() {
       }
     } catch (error) {
       const message = toMessage(error);
+      devLog("load_failed", { error: message });
       if (!isCancelled(message)) useEditorStore.getState().notify("error", message);
     }
   }, []);

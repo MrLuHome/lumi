@@ -240,8 +240,18 @@ pub fn save(path: &Path, project: &ProjectDoc) -> AppResult<()> {
         std::fs::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("lumi.tmp");
-    std::fs::write(&temporary, json)?;
+    // 覆盖已有项目前保留一份备份；写入失败时原文件仍在。
+    if path.exists() {
+        let backup = path.with_extension("lumi.bak");
+        std::fs::copy(path, backup)?;
+    }
+    std::fs::write(&temporary, &json)?;
     std::fs::rename(&temporary, path)?;
+    // 回读校验：确认落盘内容与序列化结果一致，避免半写入被当成成功。
+    let written = std::fs::read(path)?;
+    if written != json {
+        return Err(AppError::Task("项目写入校验失败".into()));
+    }
     Ok(())
 }
 
@@ -324,6 +334,10 @@ mod tests {
         assert_eq!(loaded.photos[0].masks.len(), 1);
         assert_eq!(loaded.photos[0].masks[0].kind, MaskKind::Radial);
         assert_eq!(loaded.photos[0].source_hash, "abc123");
+        // 二次保存保留上一版本备份，且回读校验通过。
+        save(&path, &project).unwrap();
+        assert!(path.with_extension("lumi.bak").exists());
+        assert_eq!(load(&path).unwrap().photos[0].params.exposure, 24.0);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -82,6 +82,8 @@ import {
   undoHistory,
   type HistoryStack,
 } from "./history";
+import { buildProjectSnapshot, type ProjectSnapshot } from "./project";
+import { devLog } from "../lib/diagnostics";
 
 export const COALESCE_WINDOW_MS = 600;
 export const ZOOM_MIN = 0.02;
@@ -96,6 +98,35 @@ export type FaceStatus = "idle" | "loading" | "ready" | "error";
 export type BeautyStatus = "idle" | "analyzing" | "ready" | "error";
 export type MaskStatus = "idle" | "loading" | "ready" | "error";
 export type BrushMode = "off" | "paint" | "erase" | "repair";
+
+/** 项目加载状态机：只有 ready 允许编辑与保存。 */
+export type ProjectLoadPhase = "idle" | "loading" | "restoring" | "ready" | "failed" | "closing";
+
+export interface ProjectLoadError {
+  code: string;
+  message: string;
+}
+
+export interface ProjectLoadSession {
+  requestId: number;
+  projectPath: string;
+  projectId: string;
+  phase: ProjectLoadPhase;
+  error: ProjectLoadError | null;
+  missing: string[];
+  warnings: string[];
+}
+
+export const IDLE_LOAD_SESSION: ProjectLoadSession = {
+  requestId: 0,
+  projectPath: "",
+  projectId: "",
+  phase: "idle",
+  error: null,
+  missing: [],
+  warnings: [],
+};
+
 
 export interface Notice {
   id: number;
@@ -122,6 +153,10 @@ export interface EditorState {
   clipboard: EditParams | null;
   exportSettings: ExportSettings;
   projectPath: string | null;
+  /** ROUND 9：加载状态与 UI 状态严格分离。 */
+  loadSession: ProjectLoadSession;
+  /** 加载时的原始参数快照，仅用于恢复期按 UUID 合并，禁止被默认值污染。 */
+  loadSnapshot: Record<string, EditParams> | null;
   /** 项目载入时保存的原始人脸记录与源图哈希，用于重开匹配。 */
   projectFaceRecords: Record<string, ProjectFaceRecord[]>;
   projectSourceHashes: Record<string, string>;
@@ -284,8 +319,19 @@ export interface EditorState {
   addPhotos: (items: PhotoAsset[]) => void;
   removePhoto: (id: string) => void;
   setActive: (id: string) => void;
+  /** 兼容入口：构建快照后立即完成一次加载（无异步人脸恢复）。 */
   loadProject: (items: PhotoAsset[], project: ProjectDoc) => void;
   setProjectPath: (path: string | null) => void;
+
+  /** ROUND 9：加载状态机。 */
+  beginProjectLoad: (projectPath: string) => number;
+  commitProjectSnapshot: (requestId: number, snapshot: ProjectSnapshot) => boolean;
+  beginFaceRestore: (requestId: number) => void;
+  finishProjectLoad: (requestId: number) => void;
+  failProjectLoad: (requestId: number, code: string, message: string) => void;
+  closeProject: () => void;
+  /** 项目恢复期只更新检测结果，不触碰 params.faces。 */
+  setDetectedFaces: (photoId: string, result: FaceDetectionResult, requestId?: number) => void;
 
   updateParam: (key: keyof typeof PARAM_LABELS, value: number) => void;
   updateParams: (updater: ParamUpdater, label: string, coalesceKey?: string) => void;
@@ -338,8 +384,8 @@ export interface EditorState {
   setActiveFace: (index: number) => void;
   setShowFaceOverlay: (value: boolean) => void;
   setModelStatus: (status: FaceModelStatus) => void;
-  /** 项目重开后应用后端恢复结果：只按 UUID 恢复高置信人脸参数。 */
-  applyFaceRestore: (photoId: string, result: FaceRestoreResult) => void;
+  /** 项目重开后应用后端恢复结果：按 UUID 合并到加载快照，禁止默认值覆盖。 */
+  applyFaceRestore: (photoId: string, result: FaceRestoreResult, requestId?: number) => void;
   /** 人工确认后，用后端返回的新人脸列表重新绑定 UUID。 */
   applyConfirmedFaces: (photoId: string, faces: FaceDetectionResult["faces"]) => void;
   /** Provider 切换后清空本地稠密关键点与门控，强制按新 Provider 重新分析。 */
@@ -475,7 +521,11 @@ export function createEditorStore() {
       return photos.find((photo) => photo.id === activeId);
     };
 
+    /** 只有 ready 才允许改参数；loading/restoring/failed/closing 一律 no-op。 */
+    const editable = (): boolean => get().loadSession.phase === "ready";
+
     const commit = (label: string, next: EditParams) => {
+      if (!editable()) return;
       const state = get();
       const photoId = state.activeId;
       if (!photoId) return;
@@ -492,6 +542,7 @@ export function createEditorStore() {
     };
 
     const apply = (updater: ParamUpdater, label: string, coalesceKey?: string) => {
+      if (!editable()) return;
       const state = get();
       const photoId = state.activeId;
       if (!photoId) return;
@@ -529,6 +580,8 @@ export function createEditorStore() {
       clipboard: null,
       exportSettings: DEFAULT_EXPORT,
       projectPath: null,
+      loadSession: { ...IDLE_LOAD_SESSION },
+      loadSnapshot: null,
       projectFaceRecords: {},
       projectSourceHashes: {},
 
@@ -732,6 +785,8 @@ export function createEditorStore() {
           params,
           history,
           activeId: state.activeId ?? firstFresh.id,
+          loadSession: { ...IDLE_LOAD_SESSION, phase: "ready" },
+          loadSnapshot: null,
           autoFit: hadActive ? state.autoFit : true,
           pan: hadActive ? state.pan : { x: 0, y: 0 },
           faceStatus: "idle",
@@ -809,41 +864,73 @@ export function createEditorStore() {
 
       loadProject: (items, project) => {
         if (items.length === 0) return;
-        const byPath = new Map(items.map((item) => [item.path, item]));
-        const params: Record<string, EditParams> = {};
-        const history: Record<string, HistoryStack<EditParams>> = {};
-        const projectFaceRecords: Record<string, ProjectFaceRecord[]> = {};
-        const projectSourceHashes: Record<string, string> = {};
-        const rawByPhoto: Record<string, RawDevelopParams> = {};
-        let loadedColor: ColorOutputSettings | null = null;
-        for (const item of items) {
-          params[item.id] = DEFAULT_PARAMS;
-          history[item.id] = createHistory<EditParams>();
-        }
-        for (const entry of project.photos) {
-          const item = byPath.get(entry.path);
-          if (!item) continue;
-          params[item.id] = clampParams(entry.params);
-          projectFaceRecords[item.id] = entry.faces ?? [];
-          projectSourceHashes[item.id] = entry.sourceHash ?? "";
-          if (entry.raw?.params) rawByPhoto[item.id] = { ...DEFAULT_RAW_PARAMS, ...entry.raw.params };
-          if (!loadedColor && entry.color?.output) loadedColor = entry.color.output;
-        }
-        const active = items[clamp(project.activeIndex ?? 0, 0, items.length - 1)] ?? items[0]!;
+        const requestId = get().beginProjectLoad("");
+        const snapshot = buildProjectSnapshot(items, project, "");
+        get().commitProjectSnapshot(requestId, snapshot);
+        get().finishProjectLoad(requestId);
+      },
+
+      setProjectPath: (path) => set({ projectPath: path }),
+
+      beginProjectLoad: (projectPath) => {
+        const requestId = get().loadSession.requestId + 1;
         set({
-          photos: items,
-          params,
+          loadSession: {
+            requestId,
+            projectPath,
+            projectId: "",
+            phase: "loading",
+            error: null,
+            missing: [],
+            warnings: [],
+          },
+        });
+        return requestId;
+      },
+
+      commitProjectSnapshot: (requestId, snapshot) => {
+        const state = get();
+        if (state.loadSession.requestId !== requestId) return false;
+        if (snapshot.fatal) {
+          devLog("load_failed", { requestId, code: "project-invalid" });
+          set({
+            loadSession: {
+              ...state.loadSession,
+              projectId: snapshot.projectId,
+              phase: "failed",
+              error: { code: "project-invalid", message: snapshot.fatal },
+              missing: snapshot.missing,
+              warnings: snapshot.warnings,
+            },
+          });
+          return false;
+        }
+        const history: Record<string, HistoryStack<EditParams>> = {};
+        for (const item of snapshot.photos) history[item.id] = createHistory<EditParams>();
+        set({
+          photos: snapshot.photos,
+          params: snapshot.params,
           history,
-          activeId: active.id,
-          exportSettings: project.export ?? DEFAULT_EXPORT,
-          rawByPhoto,
+          activeId: snapshot.activeId || null,
+          exportSettings: snapshot.exportSettings,
+          rawByPhoto: snapshot.rawByPhoto,
           rawStatus: {},
           rawError: null,
           rawDirty: false,
-          ...(loadedColor ? { colorSettings: loadedColor } : {}),
-          computePreference: project.compute?.preference ?? "auto",
-          projectFaceRecords,
-          projectSourceHashes,
+          ...(snapshot.color ? { colorSettings: snapshot.color } : {}),
+          computePreference: snapshot.computePreference,
+          projectFaceRecords: snapshot.projectFaceRecords,
+          projectSourceHashes: snapshot.projectSourceHashes,
+          // 恢复期以快照为唯一事实来源；任何合并都不得写入默认参数。
+          loadSnapshot: snapshot.params,
+          loadSession: {
+            ...state.loadSession,
+            projectId: snapshot.projectId,
+            phase: "restoring",
+            error: null,
+            missing: snapshot.missing,
+            warnings: snapshot.warnings,
+          },
           renderedPreviews: {},
           faces: {},
           faceStatus: "idle",
@@ -864,9 +951,75 @@ export function createEditorStore() {
           maskError: null,
           brushMode: "off",
         });
+        devLog("params_restored", {
+          requestId,
+          photos: snapshot.photos.length,
+          missing: snapshot.missing.length,
+          warnings: snapshot.warnings.length,
+        });
+        return true;
       },
 
-      setProjectPath: (path) => set({ projectPath: path }),
+      beginFaceRestore: (requestId) => {
+        const state = get();
+        if (state.loadSession.requestId !== requestId) return;
+        if (state.loadSession.phase === "failed" || state.loadSession.phase === "closing") return;
+        set({ loadSession: { ...state.loadSession, phase: "restoring" } });
+      },
+
+      finishProjectLoad: (requestId) => {
+        const state = get();
+        if (state.loadSession.requestId !== requestId) return;
+        if (state.loadSession.phase === "failed") return;
+        set({
+          loadSnapshot: null,
+          loadSession: { ...state.loadSession, phase: "ready", error: null },
+        });
+      },
+
+      failProjectLoad: (requestId, code, message) => {
+        const state = get();
+        if (state.loadSession.requestId !== requestId) return;
+        set({
+          loadSession: {
+            ...state.loadSession,
+            phase: "failed",
+            error: { code, message },
+          },
+        });
+      },
+
+      closeProject: () => {
+        const requestId = get().loadSession.requestId + 1;
+        set({
+          photos: [],
+          activeId: null,
+          params: {},
+          history: {},
+          lastEdit: null,
+          projectPath: null,
+          projectFaceRecords: {},
+          projectSourceHashes: {},
+          loadSnapshot: null,
+          loadSession: { ...IDLE_LOAD_SESSION, requestId, phase: "closing" },
+          renderedPreviews: {},
+          faces: {},
+          faceStatus: "idle",
+          faceError: null,
+          pendingFaceMatches: {},
+          missingFaceRecords: {},
+          beautyAnalysis: {},
+          beautyStatus: "idle",
+          beautyError: null,
+          beautyProgress: null,
+          maskPreview: null,
+          maskStatus: "idle",
+          maskError: null,
+          renderError: null,
+        });
+        set({ loadSession: { ...IDLE_LOAD_SESSION, requestId, phase: "idle" } });
+      },
+
 
       updateParam: (key, value) => {
         apply((current) => ({ ...current, [key]: value }), PARAM_LABELS[key], key);
@@ -1049,6 +1202,8 @@ export function createEditorStore() {
 
       setFaces: (photoId, result) => {
         const state = get();
+        // 项目恢复期禁止用检测结果重写参数；改用 setDetectedFaces。
+        if (state.loadSession.phase !== "ready") return;
         const current = state.params[photoId] ?? DEFAULT_PARAMS;
         // 检测结果与参数按稳定 UUID 对齐；UUID 不可用时回退旧 faceId。
         const beauty = result.faces
@@ -1083,38 +1238,67 @@ export function createEditorStore() {
         });
       },
 
-      applyFaceRestore: (photoId, result) => {
+      setDetectedFaces: (photoId, result, requestId) => {
         const state = get();
-        const current = state.params[photoId] ?? DEFAULT_PARAMS;
-        const restored = new Map(result.restored.map((entry) => [entry.faceId, entry.faceUuid]));
-        const beauty = result.faces
-          .map((face) => {
-            const uuid = restored.get(face.id);
-            const matched = uuid
-              ? current.faces.find((entry) => entry.faceUuid === uuid)
-              : undefined;
-            return {
-              ...(matched ?? defaultFaceBeauty(face.id, face.uuid)),
-              faceId: face.id,
-              faceUuid: uuid ?? face.uuid,
-            };
-          })
-          .sort((a, b) => a.faceId - b.faceId);
-        const reshape = result.faces
-          .map((face) => {
-            const uuid = restored.get(face.id);
-            const matched = uuid
-              ? current.reshape.find((entry) => entry.faceUuid === uuid)
-              : undefined;
-            return {
-              ...(matched ?? defaultFaceReshape(face.id, face.uuid)),
-              faceId: face.id,
-              faceUuid: uuid ?? face.uuid,
-            };
-          })
-          .sort((a, b) => a.faceId - b.faceId);
+        if (requestId !== undefined && state.loadSession.requestId !== requestId) return;
+        set({
+          faces: { ...state.faces, [photoId]: result },
+          faceStatus: "ready",
+          faceError: null,
+          faceProgress: null,
+          activeFace: 0,
+          showFaceOverlay: true,
+          maskPreview: null,
+          maskError: null,
+          brushMode: "off",
+        });
+      },
+
+      applyFaceRestore: (photoId, result, requestId) => {
+        const state = get();
+        if (requestId !== undefined && state.loadSession.requestId !== requestId) return;
         const previous = state.faces[photoId];
         if (!previous) return;
+        // 唯一事实来源：加载快照。恢复期间参数只允许从快照合并，禁止默认值覆盖。
+        const baseline = state.loadSnapshot?.[photoId] ?? state.params[photoId] ?? DEFAULT_PARAMS;
+        const current = state.params[photoId] ?? DEFAULT_PARAMS;
+        const restored = new Map(result.restored.map((entry) => [entry.faceUuid, entry]));
+        const pending = new Map(result.pending.map((entry) => [entry.faceUuid, entry]));
+
+        const mergeEntries = <T extends { faceId: number; faceUuid: string }>(
+          base: T[],
+          makeDefault: (id: number, uuid: string) => T,
+        ): T[] => {
+          const emitted = new Set<string>();
+          const merged = result.faces.map((face) => {
+            const entry = restored.get(face.uuid) ?? pending.get(face.uuid);
+            const uuid = entry?.faceUuid ?? face.uuid;
+            // finalFaceId 由后端在 apply_identities 之后回填，消除检测 ID 与持久 ID 的错位。
+            const finalId = entry?.finalFaceId ?? entry?.faceId ?? face.id;
+            const matched = entry
+              ? base.find((item) => item.faceUuid && item.faceUuid === uuid) ??
+                base.find((item) => item.faceId === entry.faceId)
+              : base.find((item) => item.faceUuid && item.faceUuid === face.uuid);
+            if (uuid) emitted.add(uuid);
+            return { ...(matched ?? makeDefault(finalId, uuid)), faceId: finalId, faceUuid: uuid };
+          });
+          // 本次未检测到的人脸：保留原有参数，绝不因为结果里没有就丢弃。
+          for (const item of base) {
+            if (item.faceUuid && emitted.has(item.faceUuid)) continue;
+            if (!item.faceUuid && merged.some((entry) => entry.faceId === item.faceId)) continue;
+            merged.push(item);
+          }
+          return merged.sort((a, b) => a.faceId - b.faceId);
+        };
+
+        const beauty = mergeEntries(baseline.faces, defaultFaceBeauty);
+        const reshape = mergeEntries(baseline.reshape, defaultFaceReshape);
+        devLog("faces_restored", {
+          requestId,
+          restored: result.restored.length,
+          pending: result.pending.length,
+          missing: result.missing.length,
+        });
         set({
           faces: {
             ...state.faces,
