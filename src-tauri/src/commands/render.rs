@@ -288,7 +288,6 @@ pub async fn export_image(
     let color = color_engine.settings();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let started = Instant::now();
         let source = Path::new(&path);
         let is_raw = crate::image_engine::raw::is_raw_path(source);
         let original = PathBuf::from(&path);
@@ -335,6 +334,8 @@ pub async fn export_image(
             }
         };
 
+        // 计时从真正开始渲染算起：文件对话框里用户停留的时间不算导出耗时。
+        let started = Instant::now();
         emit_progress(&app, request_id, "全尺寸渲染", 0.05);
         let rendered = pipeline::render_with_progress(
             &working,

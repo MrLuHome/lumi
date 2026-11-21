@@ -94,6 +94,51 @@ integration: 全部通过（face_detection 4、face_intelligence 5、raw_real 2�
 - 大项目（50+ 照片）的峰值内存与恢复耗时在阶段 8 记录。
 - 多人脸 + 多蒙版组合的像素级一致性属于渲染回归，不在本阶段范围。
 
+## 6.1 阶段 8 GUI 验收发现的保存数据丢失（已修复）
+
+**现象**：打开 `lumi-project-1.lumi`（记录中带 Apple Vision 稠密关键点与已解锁
+门控）→ 默认 Provider 为 YuNet，加载期判定稠密结论与当前环境不一致并锁定
+LEVEL 3 → 直接 ⌘S 保存。保存后的文件 `photos[0].faces[0]` 中 `dense` 字段
+**整段消失**，`level3` 被改写为“需重新分析”。即“打开→保存”永久删除用户已有
+分析结果，违反「用户项目数据不能丢」。
+
+**证据**：
+
+```
+$ python3 - <<'PY'   # 对比保存前后
+old keys: [..., 'dense', 'level3', ...]  dense.regions = 10
+new keys: [..., 'level3', ...]           dense = None
+PY
+保存前文件：27,281 B（.lumi.bak）
+保存后文件： 8,070 B（7.9 KB，与 GUI 提示一致）
+```
+
+**根因**：`commands/project.rs::save_project` 无条件用当前会话的
+`FaceRepository` 覆盖项目里的 `photo.faces`。会话在加载期已按 Provider
+一致性丢弃稠密结论，覆盖后就把丢弃结果写回了磁盘。
+
+**修复（两处）**：
+
+1. 新增 `merge_saved_faces(previous, live)`：以 UUID 合并；本次会话有稠密结论则
+   用新的；本次 `dense` 为空时，**连带**保留项目里的旧 `dense` 与旧 `level3`
+   （两者是一对，只补 dense 会造出“旧 Provider 稠密点 + 新 Provider 锁定结论”
+   的自相矛盾记录，导致下次打开又提示需重新分析）；本次未检测到的人脸记录原样保留。
+2. 保存后复验发现：只补 dense 不补 level3 时，重开仍会触发“不一致”提示；
+   已改为成对保留。
+
+**回归断言**（`cargo test --lib commands::project`，5 passed）：
+
+```
+test save_keeps_previous_dense_when_session_has_none ... ok
+test save_prefers_fresh_dense_from_current_session ... ok
+test save_keeps_records_missing_from_current_detection ... ok
+test save_keeps_unlocked_gate_with_kept_dense ... ok
+test save_without_previous_records_writes_live_faces ... ok
+```
+
+被破坏的样例项目已用 `.lumi.bak` 恢复（`dense` 与 LEVEL 3 结论回到保存前状态），
+修复版应用重新打包后再做一次「打开→保存→读盘」复验（见 `ROUND9_GUI_ACCEPTANCE.md`）。
+
 ## 7. 结论
 
 - 阶段 1 根因（冷启动人脸参数被默认值覆盖）已被自动化用例固定，修复后可重复验证。

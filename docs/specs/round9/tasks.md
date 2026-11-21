@@ -79,16 +79,16 @@
 
 ## 阶段 8 打包与跨平台回归
 
-- [ ] 全量命令：cargo test / clippy -D warnings / typecheck / vitest / build / app:build
-- [ ] macOS .app + DMG 实机验收（启动/恢复/Apple Vision/ONNX Worker/模型库/保存/导出）
-- [ ] Windows：有环境则 NSIS 实机；否则明确未验证
-- [ ] 性能记录（冷/热、内存、Worker、崩溃恢复）
-- [ ] 输出 `docs/ROUND9_GUI_ACCEPTANCE.md`
-- [ ] 提交 `docs(round9): GUI 验收与性能`
+- [x] 全量命令：cargo test 431 passed / clippy -D warnings / typecheck / vitest 65 / build / app:build
+- [x] macOS .app + DMG 实机验收（启动/恢复/Apple Vision/ONNX Worker/模型库/保存/导出）
+- [x] Windows：无环境，明确记录为未验证（不写 PASS）
+- [x] 性能记录（冷/热、内存、Worker、崩溃恢复）
+- [x] 输出 `docs/ROUND9_GUI_ACCEPTANCE.md`
+- [x] 提交 `docs(round9): GUI 验收与性能`
 
 ## 阶段 9 最终审计
 
 - [ ] `ROUND9_REPORT.md`（A–H）
-- [ ] `ROUND9_SECURITY_REVIEW.md`
-- [ ] `ROUND9_RELEASE_READINESS.md`
+- [x] `ROUND9_SECURITY_REVIEW.md`
+- [x] `ROUND9_RELEASE_READINESS.md`
 - [ ] 提交并停止，不进入第十轮

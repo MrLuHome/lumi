@@ -249,7 +249,8 @@ export default function App() {
       }
     } catch (error) {
       const message = toMessage(error);
-      devLog("load_failed", { error: message });
+      // 诊断日志不写完整错误文本：解码错误里可能带绝对路径。
+      devLog("load_failed", { code: "load_error", errorLength: message.length });
       if (!isCancelled(message)) useEditorStore.getState().notify("error", message);
     }
   }, []);

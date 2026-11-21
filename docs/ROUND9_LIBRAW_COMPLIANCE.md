@@ -67,7 +67,7 @@
 DMG 是否不早于 `.app`、Windows NSIS 是否存在。任何缺失 → `RESULT: BLOCKED` 且退出码 1；
 即使全部通过，脚本仍输出 `LEGAL_REVIEW_PENDING`，永不打印 `Release Ready` / `COMPLIANT`。
 
-本轮实测（仓库内材料全部 PASS）：
+本轮实测（阶段 8 重建产物后，仓库材料与 `.app`/DMG 全部 PASS）：
 
 ```
 PASS  Cargo.lock 锁定 libraw_rs_vendor 1.0.0（内置 LibRaw 0.21.1）
@@ -75,14 +75,15 @@ PASS  许可/版权文件存在：LICENSE.LGPL-2.1 / LICENSE.CDDL-1.0 / COPYRIGH
 PASS  对应源码包存在且 SHA256 一致（58317a28…）
 PASS  材料存在：SOURCE.md / RELINK.md / MODIFICATIONS.md / libraw-build.sh
 PASS  找到 .app
-FAIL  .app 内缺少合规附件: … （需重新打包）
+PASS  .app 内包含全部 LibRaw 合规附件
 PASS  DMG 存在且不早于 .app
 SKIP  未提供 Windows NSIS 安装包：跨平台合规未验证
-RESULT: BLOCKED
+RESULT: BLOCKED（原因：法律审核未完成 LEGAL_REVIEW_PENDING）
 ```
 
-`.app` 的 FAIL 是真实的：当前产物是加入 `resources/libraw/*` 之前构建的。
-阶段 8 重新 `npm run app:build` 后必须重跑本脚本，直到 `.app` 一项 PASS。
+首次运行时（加入 `resources/libraw/*` 之前的旧 `.app`）曾出现
+`FAIL .app 内缺少合规附件`；执行 `npm run app:build` 重建后该项已 PASS，
+说明打包配置生效。
 
 ## 5. 与其它依赖的边界
 
