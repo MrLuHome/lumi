@@ -45,27 +45,27 @@
 
 ## 阶段 4 ONNX 模型准备与协议验证
 
-- [ ] 选定合法测试模型，登记来源/版本/SHA256/许可/输入输出/语义拓扑
-- [ ] 无关键点模型则自建最小协议模型，标 `ProtocolTestOnly`
-- [ ] Manifest、结构、算子检查与 Worker 启动
-- [ ] 提交 `feat(round9): ONNX 协议模型与校验`
+- [x] 选定合法测试模型，登记来源/版本/SHA256/许可/输入输出/语义拓扑
+- [x] 无关键点模型则自建最小协议模型，标 `ProtocolTestOnly`
+- [x] Manifest、结构、算子检查与 Worker 启动
+- [x] 提交 `feat(round9): ONNX 协议模型与校验`
 
 ## 阶段 5 Worker 真实推理与安全
 
-- [ ] 跑通导入→推理→输出校验→语义映射→坐标转换→前端
-- [ ] 输入/张量/输出/模型大小/超时/CPU/内存/IPC 限额核对
-- [ ] 异常矩阵：损坏/不支持算子/维度错误/NaN/越界/启动失败/超时/意外退出/IPC 损坏/连续推理/切换/多人脸/重复加载
-- [ ] 能力等级严格区分，RuntimeTested 不解锁 LEVEL 3
-- [ ] 输出 `docs/ROUND9_ONNX_RUNTIME_VALIDATION.md`
-- [ ] 提交 `feat(round9): ONNX Worker 正常推理与异常安全`
+- [x] 跑通导入→推理→输出校验→语义映射→坐标转换→Provider 输出
+- [x] 输入/张量/输出/模型大小/超时/CPU/内存/IPC 限额核对
+- [x] 异常矩阵：损坏/不支持算子/维度错误/NaN/越界/启动失败/超时/意外退出/IPC 损坏/连续推理/切换/多人脸/重复加载
+- [x] 能力等级严格区分，RuntimeTested 不解锁 LEVEL 3
+- [x] 输出 `docs/ROUND9_ONNX_RUNTIME_VALIDATION.md`
+- [x] 提交 `feat(round9): ONNX Worker 正常推理与异常安全`
 
 ## 阶段 6 LibRaw 合规
 
-- [ ] 核查实际版本、源码来源、许可、链接方式、补丁、构建脚本
-- [ ] 整理发行包材料与重链接说明
-- [ ] 新增发行检查脚本，缺材料返回 `BLOCKED`
-- [ ] 输出 `docs/ROUND9_LIBRAW_COMPLIANCE.md`（`LEGAL_REVIEW_PENDING`）
-- [ ] 提交 `docs(round9): LibRaw 合规材料与检查脚本`
+- [x] 核查实际版本、源码来源、许可、链接方式、补丁、构建脚本
+- [x] 整理发行包材料与重链接说明
+- [x] 新增发行检查脚本，缺材料返回 `BLOCKED`
+- [x] 输出 `docs/ROUND9_LIBRAW_COMPLIANCE.md`（`LEGAL_REVIEW_PENDING`）
+- [x] 提交 `docs(round9): LibRaw 合规材料与检查脚本`
 
 ## 阶段 7 NME 评测
 

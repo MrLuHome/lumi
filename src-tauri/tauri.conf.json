@@ -49,7 +49,8 @@
     ],
     "resources": [
       "resources/models/yunet/face_detection_yunet_2023mar.onnx",
-      "resources/models/yunet/LICENSE"
+      "resources/models/yunet/LICENSE",
+      "resources/libraw/*"
     ],
     "macOS": {
       "minimumSystemVersion": "10.15"
