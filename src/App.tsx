@@ -23,6 +23,7 @@ import {
   restoreFaces,
   applyProjectChangeset,
   saveProject,
+  setUnsavedChanges,
   subscribeBeautyProgress,
   subscribeFaceProgress,
   subscribeToFileDrop,
@@ -82,8 +83,33 @@ export default function App() {
   const importing = useEditorStore((state) => state.importing);
   const exporting = useEditorStore((state) => state.exporting);
   const projectPath = useEditorStore((state) => state.projectPath);
+  const unsaved = useEditorStore((state) => state.unsaved);
   const workspace = useEditorStore((state) => state.workspace);
   const setWorkspace = useEditorStore((state) => state.setWorkspace);
+
+  // 有未保存修改时同步给 Rust：关闭窗口/⌘Q 前弹出原生确认，避免静默丢失。
+  useEffect(() => {
+    void setUnsavedChanges(unsaved).catch(() => {});
+  }, [unsaved]);
+
+  // 只比较会被写入项目的引用；恢复期由 commitProjectSnapshot 自己清零。
+  useEffect(() => {
+    return useEditorStore.subscribe((state, previous) => {
+      if (state.unsaved || state.loadSession.phase === "restoring") return;
+      const changed =
+        state.photos !== previous.photos ||
+        state.params !== previous.params ||
+        state.exportSettings !== previous.exportSettings ||
+        state.exportDirty !== previous.exportDirty ||
+        state.colorSettings !== previous.colorSettings ||
+        state.colorDirty !== previous.colorDirty ||
+        state.projectSourceHashes !== previous.projectSourceHashes ||
+        state.projectFaceRecords !== previous.projectFaceRecords ||
+        state.computePreference !== previous.computePreference ||
+        state.rawByPhoto !== previous.rawByPhoto;
+      if (changed) state.setUnsaved(true);
+    });
+  }, []);
 
   const handleImport = useCallback(async () => {
     const state = useEditorStore.getState();
@@ -148,6 +174,7 @@ export default function App() {
         // 已有项目：只提交本次真正修改的字段，后端校验身份与 revision。
         const changeset = buildChangeSet(state, newSaveRequestId());
         if (!changeset) {
+          useEditorStore.getState().setUnsaved(false);
           useEditorStore.getState().notify("info", "没有需要保存的修改");
           return;
         }
@@ -178,6 +205,7 @@ export default function App() {
         createdAt: state.projectMeta.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
+      useEditorStore.getState().setUnsaved(false);
       devLog("save_completed", {
         projectId: state.loadSession.projectId,
         bytes: saved.bytes,
@@ -533,9 +561,13 @@ export default function App() {
 
       <StatusBar photo={photo} />
       <Toast />
-      {projectPath ? (
-        <span className="project-indicator" title={projectPath}>
-          项目：{baseName(projectPath)}
+      {projectPath || unsaved ? (
+        <span
+          className={`project-indicator${unsaved ? " unsaved" : ""}`}
+          title={projectPath ?? "尚未保存到磁盘"}
+        >
+          {projectPath ? `项目：${baseName(projectPath)}` : "未命名项目"}
+          {unsaved ? " · 未保存" : ""}
         </span>
       ) : null}
     </div>

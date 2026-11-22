@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::State;
@@ -41,6 +43,28 @@ impl From<ChangeSetError> for ChangeSetFailure {
             current_revision: error.current_revision(),
         }
     }
+}
+
+/// 窗口关闭保护：前端把“是否有未保存修改”同步到这里。
+#[derive(Clone, Default)]
+pub struct UnsavedGuard(pub Arc<AtomicBool>);
+
+#[tauri::command]
+pub fn set_unsaved_changes(guard: State<'_, UnsavedGuard>, dirty: bool) {
+    guard.0.store(dirty, Ordering::Relaxed);
+}
+
+/// 退出前的原生确认。只在主线程调用（窗口事件与 RunEvent 都在主线程）。
+pub fn confirm_discard() -> bool {
+    matches!(
+        rfd::MessageDialog::new()
+            .set_title("LUMI RETOUCH")
+            .set_description("有尚未保存的修改，退出后本次修改会丢失。仍要退出吗？")
+            .set_level(rfd::MessageLevel::Warning)
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show(),
+        rfd::MessageDialogResult::Yes
+    )
 }
 
 #[derive(Serialize)]

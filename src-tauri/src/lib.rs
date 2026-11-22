@@ -59,8 +59,30 @@ pub fn run() {
             app.manage(std::sync::Arc::new(
                 face_intelligence::FaceIntelligence::new(yunet, models_root, executable),
             ));
+            // 关闭窗口前检查未保存修改：确认后才真正退出。
+            let guard = app
+                .state::<commands::project::UnsavedGuard>()
+                .0
+                .clone();
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = window.clone();
+                let flag = guard.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        if !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            return;
+                        }
+                        api.prevent_close();
+                        if commands::project::confirm_discard() {
+                            flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                            let _ = handle.close();
+                        }
+                    }
+                });
+            }
             Ok(())
         })
+        .manage(commands::project::UnsavedGuard::default())
         .manage(ImageCache::new(8))
         .manage(FaceRepository::default())
         .manage(RenderRegistry::default())
@@ -78,6 +100,7 @@ pub fn run() {
             commands::render::cancel_render,
             commands::render::export_image,
             commands::project::save_project,
+            commands::project::set_unsaved_changes,
             commands::project::apply_project_changeset,
             commands::project::open_project,
             commands::project::pick_lut,
@@ -150,6 +173,26 @@ pub fn run() {
             commands::face_intelligence::revalidate_face_model,
             commands::face_intelligence::remove_face_model,
         ])
-        .run(tauri::generate_context!())
-        .expect("LUMI RETOUCH 启动失败");
+        .build(tauri::generate_context!())
+        .expect("LUMI RETOUCH 启动失败")
+        .run(|app_handle, event| {
+            // ⌘Q 或系统退出不经过窗口 CloseRequested，这里再保护一次。
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                if code.is_some() {
+                    return;
+                }
+                let guard = app_handle
+                    .state::<commands::project::UnsavedGuard>()
+                    .0
+                    .clone();
+                if !guard.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                api.prevent_exit();
+                if commands::project::confirm_discard() {
+                    guard.store(false, std::sync::atomic::Ordering::Relaxed);
+                    app_handle.exit(0);
+                }
+            }
+        });
 }

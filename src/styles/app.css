@@ -1706,6 +1706,10 @@
   pointer-events: none;
 }
 
+.project-indicator.unsaved {
+  color: var(--warning, #d8a648);
+}
+
 /* ---------- AI 美肤面板 ---------- */
 
 .beauty-panel {

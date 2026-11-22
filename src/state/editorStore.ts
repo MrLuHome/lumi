@@ -344,6 +344,9 @@ export interface EditorState {
   setProjectSaved: (meta: Partial<ProjectMeta>) => void;
   /** 首次整包保存后，把写盘结果当作后续增量保存的基线。 */
   setPersistenceBaseline: (doc: ProjectDoc) => void;
+  /** 是否存在尚未保存到磁盘的修改；关闭窗口时用于二次确认。 */
+  unsaved: boolean;
+  setUnsaved: (dirty: boolean) => void;
   /** 项目恢复期只更新检测结果，不触碰 params.faces。 */
   setDetectedFaces: (photoId: string, result: FaceDetectionResult, requestId?: number) => void;
 
@@ -601,6 +604,7 @@ export function createEditorStore() {
       rawProjectPhotos: {},
       rawDoc: null,
       projectMeta: { projectUuid: "", revision: 0, createdAt: "", updatedAt: "" },
+      unsaved: false,
 
       renderedPreviews: {},
       compareMode: "off",
@@ -915,6 +919,8 @@ export function createEditorStore() {
         set({ rawDoc: doc, rawProjectPhotos: rawPhotos });
       },
 
+      setUnsaved: (dirty) => set({ unsaved: dirty }),
+
       beginProjectLoad: (projectPath) => {
         const requestId = get().loadSession.requestId + 1;
         set({
@@ -998,6 +1004,8 @@ export function createEditorStore() {
           maskStatus: "idle",
           maskError: null,
           brushMode: "off",
+          // 刚从磁盘恢复的项目没有未保存修改。
+          unsaved: false,
         });
         devLog("params_restored", {
           requestId,
@@ -1053,6 +1061,7 @@ export function createEditorStore() {
           colorDirty: false,
           exportDirty: false,
           projectMeta: { projectUuid: "", revision: 0, createdAt: "", updatedAt: "" },
+          unsaved: false,
           loadSnapshot: null,
           loadSession: { ...IDLE_LOAD_SESSION, requestId, phase: "closing" },
           renderedPreviews: {},

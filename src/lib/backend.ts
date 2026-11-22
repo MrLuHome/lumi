@@ -205,6 +205,12 @@ export async function openProject(destination?: string): Promise<ProjectOpenResu
   return invoke<ProjectOpenResult>("open_project", { destination: destination ?? null });
 }
 
+/** 把“是否有未保存修改”同步给 Rust 窗口关闭保护。 */
+export async function setUnsavedChanges(dirty: boolean): Promise<void> {
+  if (!isDesktopRuntime()) return;
+  await invoke("set_unsaved_changes", { dirty });
+}
+
 export async function pickLut(): Promise<{ path: string; name: string } | null> {
   if (!isDesktopRuntime()) return null;
   return invoke("pick_lut");
