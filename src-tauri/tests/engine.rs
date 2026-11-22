@@ -172,7 +172,7 @@ fn export_writes_file_and_never_overwrites_original() {
     let image = fit_within(&decoded.image, 600);
     let settings = ExportSettings::default();
 
-    let overwrite = export::write(&source, &source, &image, settings, BitDepth::Eight, None);
+    let overwrite = export::write(&source, &source, &image, settings.clone(), BitDepth::Eight, None);
     assert!(overwrite.is_err(), "导出到原图路径必须被拒绝");
 
     let target = dir.join("out.png");
@@ -218,6 +218,7 @@ fn project_roundtrip_keeps_params_and_masks() {
             source: None,
             raw: None,
             color: None,
+            extra: Default::default(),
         }],
         0,
         ExportSettings::default(),
@@ -226,7 +227,17 @@ fn project_roundtrip_keeps_params_and_masks() {
     doc.photos[0].sync_subject_records();
     project::save(&path, &doc).unwrap();
     let loaded = project::load(&path).unwrap();
-    assert_eq!(loaded, doc);
+    // ROUND 9.1：保存会写入项目身份/代数/更新时间，这三项不在“数据等价”范围内，
+    // 其余内容必须逐字段一致。
+    assert!(!loaded.project_uuid.is_empty());
+    assert_eq!(loaded.revision, 1);
+    assert!(!loaded.updated_at.is_empty());
+    assert_eq!(loaded.version, doc.version);
+    assert_eq!(loaded.created_at, doc.created_at);
+    assert_eq!(loaded.active_index, doc.active_index);
+    assert_eq!(loaded.export, doc.export);
+    assert_eq!(loaded.compute, doc.compute);
+    assert_eq!(loaded.photos, doc.photos);
     assert_eq!(loaded.photos[0].params.exposure, 42.0);
     assert_eq!(loaded.photos[0].params.hsl.red.hue, -25.0);
     std::fs::remove_dir_all(&dir).ok();

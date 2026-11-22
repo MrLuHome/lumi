@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -55,12 +56,15 @@ impl ExportFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExportSettings {
     pub format: ExportFormat,
     /// JPEG 质量 40..100。
     pub quality: u8,
+    /// 旧/新版本写入的未知字段：保存时必须原样带回，不能因反序列化丢掉。
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for ExportSettings {
@@ -68,6 +72,7 @@ impl Default for ExportSettings {
         Self {
             format: ExportFormat::Jpeg,
             quality: 92,
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -84,6 +89,7 @@ impl ExportSettings {
             Some(format) => Self {
                 format,
                 quality: self.quality,
+                extra: self.extra,
             },
             None => self,
         }

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -112,12 +114,18 @@ pub struct ProjectRaw {
     pub params: crate::image_engine::raw::RawDevelopParams,
     /// 解码器版本；变化时提示可能需要重新渲染。
     pub decoder_version: String,
+    /// 旧/新版本写入的未知字段：加载后必须原样带回。
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectColor {
     pub output: crate::color_management::ColorOutputSettings,
+    /// 旧/新版本写入的未知字段：加载后必须原样带回。
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -150,6 +158,9 @@ pub struct ProjectPhoto {
     pub raw: Option<ProjectRaw>,
     /// 第七轮：色彩输出设置。
     pub color: Option<ProjectColor>,
+    /// 未识别的字段原样保留：旧客户端保存新版本项目时不得静默丢弃未知数据。
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl ProjectPhoto {
@@ -173,13 +184,39 @@ impl ProjectPhoto {
             })
             .collect();
         let mask = &self.params.subject_mask;
+        let stroke_hash = mask.stroke_hash();
+        // 没有任何蒙版内容、也没有历史元数据的照片不凭空生成 maskMeta。
+        if self.mask_meta.is_none() && mask.strokes.is_empty() && self.subjects.is_empty() {
+            return;
+        }
+        // 覆盖率与 revision 是渲染侧回填的元数据，保存不能把它们重置。
+        // 只有笔触/形状真正变化时才递增 revision 并作废旧覆盖率。
+        let previous = self.mask_meta.as_ref();
+        let unchanged = previous
+            .map(|meta| {
+                meta.stroke_hash == stroke_hash
+                    && meta.source == mask.source
+                    && meta.model_version == mask.model_version
+            })
+            .unwrap_or(false);
         self.mask_meta = Some(MaskMeta {
             source: mask.source.clone(),
-            model_id: "manual-alpha".into(),
+            model_id: previous
+                .map(|meta| meta.model_id.clone())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "manual-alpha".into()),
             model_version: mask.model_version.clone(),
-            coverage: 0.0,
-            stroke_hash: mask.stroke_hash(),
-            revision: 1,
+            coverage: if unchanged {
+                previous.map(|meta| meta.coverage).unwrap_or(0.0)
+            } else {
+                0.0
+            },
+            stroke_hash,
+            revision: if unchanged {
+                previous.map(|meta| meta.revision).unwrap_or(1)
+            } else {
+                previous.map(|meta| meta.revision + 1).unwrap_or(1)
+            },
         });
     }
 }
@@ -197,6 +234,18 @@ pub struct ProjectDoc {
     #[serde(default)]
     pub compute: Option<ProjectCompute>,
     pub photos: Vec<ProjectPhoto>,
+    /// 项目身份：用于防止 A 项目的保存结果覆盖 B 项目。
+    #[serde(default)]
+    pub project_uuid: String,
+    /// 保存代数：每次成功保存 +1，旧快照不得覆盖更新的磁盘内容。
+    #[serde(default)]
+    pub revision: u64,
+    /// 最近一次成功保存时间（ISO 8601）。`createdAt` 必须保持不变。
+    #[serde(default)]
+    pub updated_at: String,
+    /// 未识别的字段原样保留，不因一次保存而丢失。
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl ProjectDoc {
@@ -208,6 +257,10 @@ impl ProjectDoc {
             export,
             compute: None,
             photos,
+            project_uuid: String::new(),
+            revision: 0,
+            updated_at: String::new(),
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -221,9 +274,71 @@ fn now_label() -> String {
     format!("{seconds}")
 }
 
+fn iso_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    // 仅用于“上次保存时间”展示，精确到秒的 Unix 秒与 ISO 前缀均可；
+    // 这里保持与前端 createdAt 一致的 ISO 形式。
+    let days = seconds / 86_400;
+    let time = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days as i64);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        time / 3600,
+        (time % 3600) / 60,
+        time % 60
+    )
+}
+
+/// Howard Hinnant 的 days -> civil 转换，避免为时间戳引入新依赖。
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
+/// 保存结果：前端用它更新项目身份与保存代数。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveOutcome {
+    pub project_uuid: String,
+    pub revision: u64,
+}
+
+/// 读取磁盘上已有项目的身份信息；损坏或不存在时返回 None。
+/// 只解析需要的字段，不因未知/新增字段失败。
+fn read_existing_identity(path: &Path) -> Option<(String, u64)> {
+    let bytes = std::fs::read(path).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let uuid = value
+        .get("projectUuid")
+        .and_then(|entry| entry.as_str())
+        .unwrap_or("")
+        .to_string();
+    let revision = value.get("revision").and_then(|entry| entry.as_u64()).unwrap_or(0);
+    Some((uuid, revision))
+}
+
 /// 项目文件是纯 JSON（参数 + 蒙版 + 导出设置），不包含预览图。
-/// 写入使用同目录临时文件 + rename，避免保存中断损坏已有项目。
+///
+/// 写入流程是“单文件事务”：临时文件 → 写入 → fsync → 回读校验 → 备份 →
+/// 原子 rename → 目录 fsync。任一步失败都不会留下被误认为有效的半成品，
+/// 原项目文件保持可读。
 pub fn save(path: &Path, project: &ProjectDoc) -> AppResult<()> {
+    save_with_meta(path, project).map(|_| ())
+}
+
+pub fn save_with_meta(path: &Path, project: &ProjectDoc) -> AppResult<SaveOutcome> {
     if project.version > PROJECT_VERSION {
         return Err(AppError::Unsupported(format!(
             "项目版本 {} 高于当前支持的 {}",
@@ -231,6 +346,47 @@ pub fn save(path: &Path, project: &ProjectDoc) -> AppResult<()> {
         )));
     }
     let mut project = project.clone();
+
+    // 并发保护：同一路径同时只允许一个保存事务，避免两个写入交错。
+    static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = SAVE_LOCK
+        .lock()
+        .map_err(|_| AppError::Task("项目保存锁已损坏".into()))?;
+
+    let existing = read_existing_identity(path);
+    if project.project_uuid.is_empty() {
+        project.project_uuid = match &existing {
+            Some((uuid, _)) if !uuid.is_empty() => uuid.clone(),
+            _ => crate::ai_engine::face_frame::new_face_uuid(),
+        };
+    } else if let Some((uuid, _)) = &existing {
+        if !uuid.is_empty() && *uuid != project.project_uuid {
+            return Err(AppError::Task(
+                "目标文件属于另一个项目，已拒绝覆盖以免数据错配".into(),
+            ));
+        }
+    }
+    // 旧快照不得覆盖磁盘上更新的保存结果。`revision == 0` 表示调用方
+    // 没有携带保存代数（旧客户端/新项目），此时不做代数比较但仍递增写盘。
+    if project.revision > 0 {
+        if let Some((uuid, disk_revision)) = &existing {
+            let same_project = uuid.is_empty() || *uuid == project.project_uuid;
+            if same_project && *disk_revision > project.revision {
+                return Err(AppError::Task(format!(
+                    "项目已在别处更新（磁盘 revision {}，本次 revision {}），请重新打开后再保存",
+                    disk_revision, project.revision
+                )));
+            }
+        }
+    }
+    project.revision = existing
+        .as_ref()
+        .map(|(_, revision)| *revision)
+        .unwrap_or(0)
+        .max(project.revision)
+        + 1;
+    project.updated_at = iso_now();
+
     for photo in project.photos.iter_mut() {
         photo.sync_subject_records();
     }
@@ -240,16 +396,46 @@ pub fn save(path: &Path, project: &ProjectDoc) -> AppResult<()> {
         std::fs::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("lumi.tmp");
-    // 覆盖已有项目前保留一份备份；写入失败时原文件仍在。
+    let outcome = SaveOutcome {
+        project_uuid: project.project_uuid.clone(),
+        revision: project.revision,
+    };
+
+    let write_result = write_atomically(path, &temporary, &json);
+    if write_result.is_err() {
+        // 失败时清理临时文件，避免留下看起来像项目文件的半成品。
+        let _ = std::fs::remove_file(&temporary);
+    }
+    write_result.map(|_| outcome)
+}
+
+fn write_atomically(path: &Path, temporary: &Path, json: &[u8]) -> AppResult<()> {
+    {
+        let mut file = std::fs::File::create(temporary)?;
+        file.write_all(json)?;
+        // fsync：确认数据真正落盘后再替换，崩溃时不会得到空/截断文件。
+        file.sync_all()?;
+    }
+    let written = std::fs::read(temporary)?;
+    if written != json {
+        return Err(AppError::Task("项目写入校验失败".into()));
+    }
+    // 覆盖已有项目前保留一份备份；备份失败时中止，不冒险覆盖唯一副本。
     if path.exists() {
         let backup = path.with_extension("lumi.bak");
-        std::fs::copy(path, backup)?;
+        std::fs::copy(path, &backup)?;
     }
-    std::fs::write(&temporary, &json)?;
-    std::fs::rename(&temporary, path)?;
-    // 回读校验：确认落盘内容与序列化结果一致，避免半写入被当成成功。
-    let written = std::fs::read(path)?;
-    if written != json {
+    std::fs::rename(temporary, path)?;
+    // 目录 fsync：确保 rename 本身持久化（部分平台不支持则忽略）。
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+    // 回读校验：确认最终文件与序列化结果一致。
+    let final_bytes = std::fs::read(path)?;
+    if final_bytes != json {
         return Err(AppError::Task("项目写入校验失败".into()));
     }
     Ok(())
@@ -323,6 +509,7 @@ mod tests {
                 source: None,
                 raw: None,
                 color: None,
+                extra: BTreeMap::new(),
             }],
             0,
             ExportSettings::default(),
@@ -366,12 +553,14 @@ mod tests {
                 ..Default::default()
             },
             decoder_version: RAW_DECODER_VERSION.into(),
+            extra: BTreeMap::new(),
         });
         photo.color = Some(ProjectColor {
             output: crate::color_management::ColorOutputSettings {
                 profile: crate::color_management::ProfileKind::AdobeRgb,
                 ..Default::default()
             },
+            extra: BTreeMap::new(),
         });
         let mut project = ProjectDoc::new(vec![photo], 0, ExportSettings::default());
         project.compute = Some(ProjectCompute {
@@ -451,6 +640,7 @@ mod tests {
             mask_ref: None,
             dense: None,
             level3: None,
+            extra: BTreeMap::new(),
         };
         let project = ProjectDoc::new(
             vec![ProjectPhoto {
@@ -465,6 +655,7 @@ mod tests {
                 source: None,
                 raw: None,
                 color: None,
+                extra: BTreeMap::new(),
             }],
             0,
             ExportSettings::default(),

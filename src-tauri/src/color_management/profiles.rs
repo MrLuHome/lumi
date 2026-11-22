@@ -4,6 +4,7 @@
 //! 所有内置 Profile 都由 Little CMS 按标准原色与传递函数生成，
 //! 不是“写个名字”的假 Profile。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use lcms2::{CIExyY, CIExyYTRIPLE, Intent, Profile, ToneCurve};
@@ -88,6 +89,9 @@ pub struct ColorOutputSettings {
     pub black_point_compensation: bool,
     /// 是否把 Profile 嵌入输出文件。
     pub embed: bool,
+    /// 旧/新版本写入的未知字段：加载后必须原样带回。
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for ColorOutputSettings {
@@ -98,6 +102,7 @@ impl Default for ColorOutputSettings {
             intent: RenderingIntent::Relative,
             black_point_compensation: true,
             embed: true,
+            extra: BTreeMap::new(),
         }
     }
 }

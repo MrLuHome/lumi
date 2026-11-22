@@ -181,7 +181,7 @@ export async function setComputeBackend(preference: ComputeBackend): Promise<Gpu
 export async function saveProject(
   project: ProjectDoc,
   destination?: string,
-): Promise<{ path: string; bytes: number }> {
+): Promise<{ path: string; bytes: number; projectUuid: string; revision: number }> {
   if (!isDesktopRuntime()) throw new Error("保存项目需要在桌面端运行");
   return invoke("save_project", { project, destination: destination ?? null });
 }

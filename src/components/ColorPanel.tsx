@@ -68,8 +68,6 @@ export function ColorPanel() {
     try {
       const value = await colorStatus();
       setStatus(value);
-      // 首次进入时把后端默认值同步到面板，避免 UI 与引擎不一致。
-      if (!status) setSettings(value.output);
     } catch (cause) {
       setError(toMessage(cause));
     } finally {
@@ -83,7 +81,9 @@ export function ColorPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const current = status?.output ?? settings ?? DEFAULT_COLOR_SETTINGS;
+  // 项目里保存的输出设置是事实来源；后端 status 只用于能力/警告展示，
+  // 否则重开项目时会把用户保存的配置显示成引擎默认值。
+  const current = settings ?? status?.output ?? DEFAULT_COLOR_SETTINGS;
 
   const handleCustomCheck = async () => {
     if (!customPath.trim()) return;

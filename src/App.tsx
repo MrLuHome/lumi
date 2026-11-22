@@ -131,6 +131,13 @@ export default function App() {
       const doc = buildProjectDoc(state);
       const saved = await saveProject(doc, state.projectPath ?? undefined);
       useEditorStore.getState().setProjectPath(saved.path);
+      // 回写项目身份与保存代数：防止下一次保存用旧快照覆盖更新的磁盘内容。
+      useEditorStore.getState().setProjectSaved({
+        projectUuid: saved.projectUuid,
+        revision: saved.revision,
+        createdAt: state.projectMeta.createdAt || doc.createdAt,
+        updatedAt: new Date().toISOString(),
+      });
       devLog("save_completed", {
         projectId: state.loadSession.projectId,
         bytes: saved.bytes,

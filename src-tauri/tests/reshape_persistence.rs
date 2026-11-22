@@ -129,6 +129,7 @@ fn three_face_project_reopens_with_params_on_correct_people() {
             source: None,
             raw: None,
             color: None,
+            extra: Default::default(),
         }],
         0,
         ExportSettings::default(),

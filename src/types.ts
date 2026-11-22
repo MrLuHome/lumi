@@ -423,6 +423,8 @@ export interface ProjectPhoto {
   source?: ProjectSource | null;
   raw?: { params: RawDevelopParams; decoderVersion: string } | null;
   color?: { output: ColorOutputSettings } | null;
+  /** 未识别字段原样保留，保存时不得丢弃。 */
+  [key: string]: unknown;
 }
 
 export interface ProjectSource {
@@ -440,6 +442,14 @@ export interface ProjectDoc {
   /** 第七轮：计算后端偏好。 */
   compute?: { preference: ComputeBackend } | null;
   photos: ProjectPhoto[];
+  /** 项目身份：防止 A 项目保存结果覆盖 B 项目。 */
+  projectUuid?: string;
+  /** 保存代数：旧快照不得覆盖更新的磁盘内容。 */
+  revision?: number;
+  /** 最近一次成功保存时间（ISO 8601）。 */
+  updatedAt?: string;
+  /** 未识别字段原样保留，保存时不得丢弃。 */
+  [key: string]: unknown;
 }
 
 export interface ProjectOpenResult {

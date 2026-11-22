@@ -919,6 +919,9 @@ pub struct EditParams {
     pub hsl: HslParams,
     pub curves: CurveSet,
     pub lut: Option<LutSettings>,
+    /// 未识别字段原样保留：旧客户端保存新版本项目时不得静默丢弃未知参数。
+    #[serde(flatten, default)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for EditParams {
@@ -949,6 +952,7 @@ impl Default for EditParams {
             hsl: HslParams::default(),
             curves: CurveSet::default(),
             lut: None,
+            extra: std::collections::BTreeMap::new(),
         }
     }
 }

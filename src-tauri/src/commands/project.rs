@@ -15,6 +15,9 @@ use crate::state::{FaceRepository, ImageCache};
 pub struct ProjectSaved {
     pub path: String,
     pub bytes: u64,
+    /// 项目身份与保存代数：前端保存后必须回写，供下一次并发检查使用。
+    pub project_uuid: String,
+    pub revision: u64,
 }
 
 #[derive(Serialize)]
@@ -42,6 +45,11 @@ fn merge_saved_faces(previous: &[ProjectFace], live: &[FaceFrame]) -> Vec<Projec
         let mut record = ProjectFace::from_frame(face, identity::MATCH_MODEL_VERSION);
         record.ensure_uuid();
         if let Some(old) = by_uuid.get(record.uuid.as_str()) {
+            // 未知字段、蒙版引用属于“本次没有编辑”的数据，必须原样保留。
+            record.extra = old.extra.clone();
+            if record.mask_ref.is_none() {
+                record.mask_ref = old.mask_ref.clone();
+            }
             if record.dense.is_none() {
                 // 稠密结论与门控是一对：只补 dense 不补 level3 会造出
                 // “旧 Provider 的稠密点 + 新 Provider 的锁定结论”这种自相矛盾的记录。
@@ -56,10 +64,30 @@ fn merge_saved_faces(previous: &[ProjectFace], live: &[FaceFrame]) -> Vec<Projec
     }
     for record in previous {
         if record.uuid.is_empty() || !live_uuids.contains(&record.uuid) {
+            // 旧项目可能有人脸记录没有 UUID。若同一保存流程重复运行，
+            // 不能每次保存都追加一条相同记录（否则文件会随保存次数膨胀）。
+            if record.uuid.is_empty()
+                && merged.iter().any(|entry| structurally_equal(entry, record))
+            {
+                continue;
+            }
             merged.push(record.clone());
         }
     }
     merged
+}
+
+/// 无 UUID 的旧记录只能按内容判重：框、关键点、分数与模型版本完全一致
+/// 才视为同一条记录。
+fn structurally_equal(a: &ProjectFace, b: &ProjectFace) -> bool {
+    a.uuid.is_empty()
+        && b.uuid.is_empty()
+        && a.bbox == b.bbox
+        && a.landmarks == b.landmarks
+        && a.score.to_bits() == b.score.to_bits()
+        && a.model == b.model
+        && a.dense == b.dense
+        && a.level3 == b.level3
 }
 
 /// 保存非破坏性项目：只写参数、蒙版、导出设置，不写预览图。
@@ -108,13 +136,15 @@ pub async fn save_project(
                 }
             }
         };
-        project::save(&target, &project)?;
+        let outcome = project::save_with_meta(&target, &project)?;
         let bytes = std::fs::metadata(&target)
             .map(|meta| meta.len())
             .unwrap_or(0);
         Ok(ProjectSaved {
             path: target.to_string_lossy().into_owned(),
             bytes,
+            project_uuid: outcome.project_uuid,
+            revision: outcome.revision,
         })
     })
     .await
@@ -298,6 +328,52 @@ mod tests {
         let merged = merge_saved_faces(&[], &[frame("uuid-new", None)]);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].uuid, "uuid-new");
+    }
+
+    #[test]
+    fn save_preserves_mask_ref_unknown_fields_and_topology() {
+        let mut previous =
+            ProjectFace::from_frame(&frame("uuid-a", Some(dense("apple-vision"))), "yunet-5");
+        previous.mask_ref = Some("mask-1".into());
+        previous
+            .extra
+            .insert("futureFaceField".into(), serde_json::json!({ "note": "preserve" }));
+        let mut live = frame("uuid-a", None);
+        live.landmarks = previous.landmarks.clone();
+        let merged = merge_saved_faces(&[previous], &[live]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].mask_ref.as_deref(), Some("mask-1"));
+        assert_eq!(
+            merged[0].extra.get("futureFaceField"),
+            Some(&serde_json::json!({ "note": "preserve" }))
+        );
+        assert_eq!(
+            merged[0].dense.as_ref().unwrap().topology_id,
+            "face-68"
+        );
+        assert_eq!(merged[0].landmarks.len(), 5, "五点拓扑不得变化");
+    }
+
+    #[test]
+    fn save_does_not_duplicate_records_without_uuid() {
+        let mut legacy = ProjectFace::from_frame(&frame("", None), "yunet-5");
+        legacy.uuid.clear();
+        let merged = merge_saved_faces(std::slice::from_ref(&legacy), &[]);
+        assert_eq!(merged.len(), 1);
+        // 再保存一次（同一份无 UUID 记录）不得追加第二条。
+        let merged_again = merge_saved_faces(&merged, &[]);
+        assert_eq!(merged_again.len(), 1);
+    }
+
+    #[test]
+    fn save_keeps_multiple_faces_with_distinct_uuids() {
+        let a = ProjectFace::from_frame(&frame("uuid-a", Some(dense("apple-vision"))), "yunet-5");
+        let b = ProjectFace::from_frame(&frame("uuid-b", Some(dense("apple-vision"))), "yunet-5");
+        let merged = merge_saved_faces(&[a, b], &[frame("uuid-a", None), frame("uuid-b", None)]);
+        let mut uuids: Vec<&str> = merged.iter().map(|record| record.uuid.as_str()).collect();
+        uuids.sort();
+        assert_eq!(uuids, vec!["uuid-a", "uuid-b"]);
+        assert!(merged.iter().all(|record| record.dense.is_some()));
     }
 }
 

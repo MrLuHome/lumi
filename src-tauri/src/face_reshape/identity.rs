@@ -62,6 +62,9 @@ pub struct ProjectFace {
     pub dense: Option<DenseFace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level3: Option<Level3Gate>,
+    /// 未识别字段原样保留，避免保存时静默删除新版人脸数据。
+    #[serde(flatten, default)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl ProjectFace {
@@ -85,6 +88,7 @@ impl ProjectFace {
             mask_ref: None,
             dense: frame.dense.clone(),
             level3: frame.level3.clone(),
+            extra: std::collections::BTreeMap::new(),
         }
     }
 

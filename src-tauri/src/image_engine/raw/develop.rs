@@ -4,6 +4,8 @@
 //! `Image16`（0..65535）。所有参数都在线性空间生效，参数化、非破坏性，
 //! 不修改任何原图文件。
 
+use std::collections::BTreeMap;
+
 use image::ImageBuffer;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -45,6 +47,9 @@ pub struct RawDevelopParams {
     pub demosaic: DemosaicMode,
     /// 预览长边上限；导出时传 `None`。
     pub max_edge: Option<u32>,
+    /// 旧/新版本写入的未知字段：加载后必须原样带回。
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for RawDevelopParams {
@@ -58,6 +63,7 @@ impl Default for RawDevelopParams {
             tint: 0.0,
             demosaic: DemosaicMode::Mhc,
             max_edge: None,
+            extra: BTreeMap::new(),
         }
     }
 }

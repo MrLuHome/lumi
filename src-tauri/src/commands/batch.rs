@@ -573,7 +573,7 @@ impl BatchEngine {
         let (settings, naming, conflict, overwrite_confirmed, output_dir, color) = {
             let state = self.inner.lock().map_err(|_| lock_error())?;
             (
-                state.settings,
+                state.settings.clone(),
                 state.naming.clone(),
                 state.conflict,
                 state.overwrite_confirmed,
@@ -936,6 +936,7 @@ mod tests {
             ExportSettings {
                 format: ExportFormat::Jpeg,
                 quality: 90,
+                extra: Default::default(),
             },
             loaded.depth,
             None,
@@ -957,6 +958,7 @@ mod tests {
             ExportSettings {
                 format: ExportFormat::Jpeg,
                 quality: 88,
+                extra: Default::default(),
             },
             loaded.depth,
             None,
@@ -1003,6 +1005,7 @@ mod tests {
             settings: ExportSettings {
                 format: ExportFormat::Jpeg,
                 quality: 90,
+                extra: Default::default(),
             },
             output_dir: output.to_string_lossy().into_owned(),
             naming: "{name}-out".into(),
@@ -1263,6 +1266,7 @@ mod tests {
             ExportSettings {
                 format: ExportFormat::Jpeg,
                 quality: 90,
+                extra: Default::default(),
             },
             loaded.depth,
             Some(&color),

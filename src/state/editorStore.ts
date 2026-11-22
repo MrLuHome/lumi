@@ -28,6 +28,7 @@ import type {
   PhotoAsset,
   ProjectDoc,
   ProjectFaceRecord,
+  ProjectPhoto,
   RawDevelopParams,
   RenderProgress,
   RetouchMode,
@@ -82,7 +83,7 @@ import {
   undoHistory,
   type HistoryStack,
 } from "./history";
-import { buildProjectSnapshot, type ProjectSnapshot } from "./project";
+import { buildProjectSnapshot, type ProjectMeta, type ProjectSnapshot } from "./project";
 import { devLog } from "../lib/diagnostics";
 
 export const COALESCE_WINDOW_MS = 600;
@@ -160,6 +161,12 @@ export interface EditorState {
   /** 项目载入时保存的原始人脸记录与源图哈希，用于重开匹配。 */
   projectFaceRecords: Record<string, ProjectFaceRecord[]>;
   projectSourceHashes: Record<string, string>;
+  /** 打开时磁盘上的照片原始记录：保存时用于保留蒙版、元数据与未知字段。 */
+  rawProjectPhotos: Record<string, ProjectPhoto>;
+  /** 打开时磁盘上的完整文档：保存时用于保留文档级未知字段与计算设置。 */
+  rawDoc: ProjectDoc | null;
+  /** 项目身份与保存代数。 */
+  projectMeta: ProjectMeta;
 
   renderedPreviews: Record<string, RenderedPreview>;
   compareMode: CompareMode;
@@ -261,6 +268,9 @@ export interface EditorState {
   setRawError: (message: string | null) => void;
   resetRawParams: (photoId: string) => void;
   colorSettings: ColorOutputSettings;
+  /** 本次会话是否显式改过色彩/导出设置；未改时必须原样保留磁盘上每张照片的记录。 */
+  colorDirty: boolean;
+  exportDirty: boolean;
   colorStatus: ColorStatus | null;
   setColorSettings: (settings: ColorOutputSettings) => void;
   setColorStatus: (status: ColorStatus | null) => void;
@@ -330,6 +340,8 @@ export interface EditorState {
   finishProjectLoad: (requestId: number) => void;
   failProjectLoad: (requestId: number, code: string, message: string) => void;
   closeProject: () => void;
+  /** 保存成功后回写项目身份与保存代数，供下一次并发检查使用。 */
+  setProjectSaved: (meta: Partial<ProjectMeta>) => void;
   /** 项目恢复期只更新检测结果，不触碰 params.faces。 */
   setDetectedFaces: (photoId: string, result: FaceDetectionResult, requestId?: number) => void;
 
@@ -584,6 +596,9 @@ export function createEditorStore() {
       loadSnapshot: null,
       projectFaceRecords: {},
       projectSourceHashes: {},
+      rawProjectPhotos: {},
+      rawDoc: null,
+      projectMeta: { projectUuid: "", revision: 0, createdAt: "", updatedAt: "" },
 
       renderedPreviews: {},
       compareMode: "off",
@@ -686,8 +701,10 @@ export function createEditorStore() {
           return { rawByPhoto: next, rawDirty: false, rawError: null };
         }),
       colorSettings: DEFAULT_COLOR_SETTINGS,
+      colorDirty: false,
+      exportDirty: false,
       colorStatus: null,
-      setColorSettings: (colorSettings) => set({ colorSettings }),
+      setColorSettings: (colorSettings) => set({ colorSettings, colorDirty: true }),
       setColorStatus: (colorStatus) => set({ colorStatus }),
       computePreference: "auto",
       setComputePreference: (computePreference) => set({ computePreference }),
@@ -843,7 +860,16 @@ export function createEditorStore() {
       setActive: (id) => {
         const state = get();
         if (state.activeId === id || !state.photos.some((photo) => photo.id === id)) return;
+        // 切换照片时，若本次会话尚未改过色彩/导出设置，就显示该照片自己的记录；
+        // 保存时未改动的照片会继续原样保留磁盘数据。
+        const raw = state.rawProjectPhotos[id];
+        const syncColor = !state.colorDirty && raw?.color?.output;
+        const syncExport = !state.exportDirty;
         set({
+          ...(syncColor ? { colorSettings: raw!.color!.output } : {}),
+          ...(syncExport
+            ? { exportSettings: raw?.export ?? state.rawDoc?.export ?? state.exportSettings }
+            : {}),
           activeId: id,
           autoFit: true,
           pan: { x: 0, y: 0 },
@@ -871,6 +897,11 @@ export function createEditorStore() {
       },
 
       setProjectPath: (path) => set({ projectPath: path }),
+
+      setProjectSaved: (meta) => {
+        const state = get();
+        set({ projectMeta: { ...state.projectMeta, ...meta } });
+      },
 
       beginProjectLoad: (projectPath) => {
         const requestId = get().loadSession.requestId + 1;
@@ -918,9 +949,14 @@ export function createEditorStore() {
           rawError: null,
           rawDirty: false,
           ...(snapshot.color ? { colorSettings: snapshot.color } : {}),
+          colorDirty: false,
+          exportDirty: false,
           computePreference: snapshot.computePreference,
           projectFaceRecords: snapshot.projectFaceRecords,
           projectSourceHashes: snapshot.projectSourceHashes,
+          rawProjectPhotos: snapshot.rawPhotos,
+          rawDoc: snapshot.rawDoc,
+          projectMeta: snapshot.projectMeta,
           // 恢复期以快照为唯一事实来源；任何合并都不得写入默认参数。
           loadSnapshot: snapshot.params,
           loadSession: {
@@ -1000,6 +1036,11 @@ export function createEditorStore() {
           projectPath: null,
           projectFaceRecords: {},
           projectSourceHashes: {},
+          rawProjectPhotos: {},
+          rawDoc: null,
+          colorDirty: false,
+          exportDirty: false,
+          projectMeta: { projectUuid: "", revision: 0, createdAt: "", updatedAt: "" },
           loadSnapshot: null,
           loadSession: { ...IDLE_LOAD_SESSION, requestId, phase: "closing" },
           renderedPreviews: {},
@@ -1061,7 +1102,7 @@ export function createEditorStore() {
       },
 
       setExportSettings: (settings) => {
-        set({ exportSettings: { ...settings } });
+        set({ exportSettings: { ...settings }, exportDirty: true });
       },
 
       resetGroup: (groupId) => {
