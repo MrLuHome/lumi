@@ -600,7 +600,7 @@ QA 结论是 `ff91cee` 通过、无 FAIL，但指出**我自己写坏了 4 条�
 | 1 | `ff91cee6114d162c532da87082926715737faa2f` | `feat(r11): 统一模型注册表与推理准入链`（29 files, +7181 / -116） |
 | 2 | `945bd46` | `docs(r11): 回填本轮代码提交 SHA` |
 | 3 | `96c716d4a3e35bf66a1ed62828a37fc9415f38d0` | `feat(r11): 补 InferenceBackend::inspect 与 TensorSpec 动态形状`（设计更新的三条更正 + §14 复核项） |
-| 4 | 见 `git log -1` | `fix(r11): 收紧空转测试与只读探测契约`（QA 验收后的 4 条空转测试 + 3 处强证据 + 零维守卫 + 命令层契约测试；**QA 请以此为最终验收对象**） |
+| 4 | `16f64a125b30fcfbbf079c75b169a89a58181e65` | `fix(r11): 收紧空转测试与只读探测契约`（QA 验收后的 4 条空转测试 + 3 处强证据 + 零维守卫 + 命令层契约测试；**QA 请以此为最终验收对象**） |
 - 提交范围（**未用 `git add -A`**）：
   `src-tauri/src`、`src-tauri/tests`、`src/lib`、`src/types.ts`、
   `docs/R11_AUDIT_AND_DESIGN.md`、`docs/MODEL_LICENSE_REGISTER.md`、`docs/R11_ROUND_REPORT.md`
