@@ -5,6 +5,7 @@
 //! 2) 把 tract 的 `TValue` 与统一张量描述互转；
 //! 3) 用 `catch_unwind` 把算子级 panic 隔离成 `E_INFER`，而不是让整个进程挂掉。
 
+use std::borrow::Cow;
 use std::path::Path;
 use std::time::Instant;
 
@@ -13,9 +14,11 @@ use tract_onnx::prelude::*;
 use crate::ai_engine::model_registry::spec::ModelSpec;
 use crate::image_engine::cancel::CancelToken;
 
-use super::backend::{BackendCapabilities, InferenceBackend, LoadedPlan, PlanHandle, RunOptions};
+use super::backend::{
+    BackendCapabilities, InferenceBackend, LoadedPlan, ModelIntrospection, PlanHandle, RunOptions,
+};
 use super::error::InferenceError;
-use super::tensor::{Dtype, TensorBatch, TensorSpec, ValueRange};
+use super::tensor::{ChannelOrder, Dtype, TensorBatch, TensorSpec, ValueRange};
 
 /// 只读契约快照：描述一个 ONNX 文件**实际**声明的输入输出形状。
 ///
@@ -24,8 +27,6 @@ use super::tensor::{Dtype, TensorBatch, TensorSpec, ValueRange};
 pub struct ContractSnapshot {
     pub inputs: Vec<Vec<usize>>,
     pub outputs: Vec<Vec<usize>>,
-    /// 输入张量的数据类型（`DatumType` 的调试名），仅用于诊断。
-    pub dtype: Option<String>,
 }
 
 /// 只解析、不优化、不编译地读出模型契约。
@@ -33,8 +34,29 @@ pub struct ContractSnapshot {
 /// 这是准入判定链第 ④ 步「契约」的实现：成本是纯解析（232 KB 的 YuNet 在毫秒级），
 /// 与第 ⑥ 步「解析」的区别是不做常量折叠与算子替换。
 pub fn inspect_contract(path: &Path, model_id: &str) -> Result<ContractSnapshot, InferenceError> {
-    let typed = parse_typed(path, model_id)?;
-    snapshot_of(&typed, model_id)
+    let backend = CpuTractBackend::new();
+    let introspection = backend
+        .inspect(path, &CancelToken::default())
+        .map_err(|error| attach_model_id(error, model_id))?;
+    Ok(ContractSnapshot {
+        inputs: introspection.input_shapes(),
+        outputs: introspection.output_shapes(),
+    })
+}
+
+/// `inspect()` 不知道模型 ID（它可以被用在任意文件上），准入链需要一个带 ID 的错误。
+fn attach_model_id(error: InferenceError, model_id: &str) -> InferenceError {
+    match error {
+        InferenceError::ModelLoadFailed { detail, .. } => InferenceError::ModelLoadFailed {
+            model_id: model_id.to_string(),
+            detail,
+        },
+        InferenceError::ContractMismatch { detail, .. } => InferenceError::ContractMismatch {
+            model_id: model_id.to_string(),
+            detail,
+        },
+        other => other,
+    }
 }
 
 /// 比对实际契约与登记契约。
@@ -49,10 +71,10 @@ pub fn check_contract(
             actual: format!("{} 个输入张量", snapshot.inputs.len()),
         });
     }
-    if !shape_matches(&snapshot.inputs[0], spec.input.shape) {
+    if !shape_matches(&snapshot.inputs[0], &spec.input.shape) {
         return Err(InferenceError::ModelVersionMismatch {
             model_id: spec.id.to_string(),
-            expected: format_shape(spec.input.shape),
+            expected: format_shape(&spec.input.shape),
             actual: format_shape(&snapshot.inputs[0]),
         });
     }
@@ -118,47 +140,68 @@ fn parse_typed(path: &Path, model_id: &str) -> Result<TypedModel, InferenceError
         })
 }
 
-fn snapshot_of(
-    typed: &TypedModel,
-    model_id: &str,
-) -> Result<ContractSnapshot, InferenceError> {
-    let mut inputs = Vec::with_capacity(typed.inputs.len());
-    for outlet in &typed.inputs {
+/// 把 tract 的类型推导结果转成 `ModelIntrospection`（不含 ir_version / opset，
+/// 那两项来自 proto 解析，见 `inspect()`）。
+fn introspect_typed(typed: &TypedModel, model_id: &str) -> Result<ModelIntrospection, InferenceError> {
+    let mut introspection = ModelIntrospection::empty();
+    for (index, outlet) in typed.inputs.iter().enumerate() {
         let fact = typed
             .outlet_fact(*outlet)
             .map_err(|error| InferenceError::ModelLoadFailed {
                 model_id: model_id.to_string(),
                 detail: format!("读取输入契约失败：{error}"),
             })?;
-        inputs.push(shape_of(fact));
+        push_io(&mut introspection, fact, "input", index, true);
     }
-    let mut outputs = Vec::with_capacity(typed.outputs.len());
-    for outlet in &typed.outputs {
+    for (index, outlet) in typed.outputs.iter().enumerate() {
         let fact = typed
             .outlet_fact(*outlet)
             .map_err(|error| InferenceError::ModelLoadFailed {
                 model_id: model_id.to_string(),
                 detail: format!("读取输出契约失败：{error}"),
             })?;
-        outputs.push(shape_of(fact));
+        push_io(&mut introspection, fact, "output", index, false);
     }
-    let dtype = typed
-        .inputs
-        .first()
-        .and_then(|outlet| typed.outlet_fact(*outlet).ok())
-        .map(|fact| format!("{:?}", fact.datum_type));
-    Ok(ContractSnapshot {
-        inputs,
-        outputs,
-        dtype,
-    })
+    Ok(introspection)
 }
 
-fn shape_of(fact: &TypedFact) -> Vec<usize> {
+/// ONNX 不声明"值域 / 通道顺序"（那是训练侧约定），因此 `inspect()` 只能给中性占位，
+/// 并把它显式记进 `declarations`，绝不假装知道。
+fn push_io(
+    introspection: &mut ModelIntrospection,
+    fact: &TypedFact,
+    role: &str,
+    index: usize,
+    is_input: bool,
+) {
+    let (shape, declaration) = describe_shape(fact);
+    if fact.datum_type != DatumType::F32 {
+        introspection.declarations.push(format!(
+            "{role}[{index}] {declaration}：dtype {:?} 不是 F32，TensorSpec 只支持 F32",
+            fact.datum_type
+        ));
+        return;
+    }
+    introspection.declarations.push(format!(
+        "{role}[{index}] {declaration}：值域与通道顺序未由 ONNX 声明，需模型卡补充"
+    ));
+    let spec = TensorSpec::observed(shape, ValueRange::ZeroOne, ChannelOrder::Rgb);
+    if is_input {
+        introspection.inputs.push(spec);
+    } else {
+        introspection.outputs.push(spec);
+    }
+}
+
+/// 返回 (形状, 人可读描述)。符号维记为 `0` 并在描述里显示 `?`。
+fn describe_shape(fact: &TypedFact) -> (Vec<usize>, String) {
     match fact.shape.as_concrete() {
-        Some(dims) => dims.to_vec(),
-        // 动态维：用 0 占位，比对时当通配符。
-        None => vec![0; fact.shape.rank()],
+        Some(dims) => (dims.to_vec(), format_shape(dims)),
+        None => {
+            // 符号维：内部用 0 通配，描述里保留符号信息（`?` / `-1` / 名称）。
+            let rank = fact.shape.rank();
+            (vec![0; rank], format!("{:?}（含符号维）", fact.shape))
+        }
     }
 }
 
@@ -178,7 +221,7 @@ impl CpuTractBackend {
             .map(|head| TensorSpec {
                 dtype: Dtype::F32,
                 layout: spec.input.layout,
-                shape: head.shape,
+                shape: Cow::Borrowed(head.shape),
                 // 输出 head 是概率 / 偏移量，值域不做强制校验，这里只作声明。
                 value_range: ValueRange::ZeroOne,
                 channel_order: spec.input.channel_order,
@@ -202,6 +245,39 @@ impl InferenceBackend for CpuTractBackend {
         }
     }
 
+    fn inspect(
+        &self,
+        path: &Path,
+        cancel: &CancelToken,
+    ) -> Result<ModelIntrospection, InferenceError> {
+        cancel.check().map_err(|_| InferenceError::Cancelled)?;
+        // 第一段：proto 解析（只读结构，不建图、不编译）—— 与
+        // `model_hub/validator.rs:87` 的 `proto_model_for_path` 同一 API。
+        let proto = tract_onnx::onnx()
+            .proto_model_for_path(path)
+            .map_err(|error| InferenceError::ModelLoadFailed {
+                model_id: String::new(),
+                detail: format!("ONNX 解析失败（文件可能损坏或不是 ONNX）：{error}"),
+            })?;
+        let ir_version = Some(proto.ir_version).filter(|version| *version != 0);
+        let opset = proto.opset_import.iter().map(|entry| entry.version).max();
+        let operator_count = proto.graph.as_ref().map(|graph| graph.node.len()).unwrap_or(0);
+        cancel.check().map_err(|_| InferenceError::Cancelled)?;
+
+        // 第二段：类型推导拿形状。符号维记为 0 并保留可读描述。
+        let typed = parse_typed(path, "")?;
+        let shapes = introspect_typed(&typed, "")?;
+
+        Ok(ModelIntrospection {
+            ir_version,
+            opset,
+            inputs: shapes.inputs,
+            outputs: shapes.outputs,
+            operator_count,
+            declarations: shapes.declarations,
+        })
+    }
+
     fn load(
         &self,
         spec: &ModelSpec,
@@ -211,8 +287,14 @@ impl InferenceBackend for CpuTractBackend {
         cancel.check().map_err(|_| InferenceError::Cancelled)?;
         let typed = parse_typed(path, spec.id)?;
         // 契约在第 ⑥ 步再验一次：即使调用方跳过了准入链，也不能拿错模型硬跑。
-        let snapshot = snapshot_of(&typed, spec.id)?;
-        check_contract(spec, &snapshot)?;
+        let introspection = introspect_typed(&typed, spec.id)?;
+        check_contract(
+            spec,
+            &ContractSnapshot {
+                inputs: introspection.input_shapes(),
+                outputs: introspection.output_shapes(),
+            },
+        )?;
         cancel.check().map_err(|_| InferenceError::Cancelled)?;
 
         let runnable = typed
@@ -231,7 +313,7 @@ impl InferenceBackend for CpuTractBackend {
             model_id: spec.id.to_string(),
             sha256: spec.sha256.to_string(),
             backend: <Self as InferenceBackend>::id(self),
-            input_spec: spec.input,
+            input_spec: spec.input.clone(),
             output_spec: Self::output_specs(spec),
             handle: PlanHandle::Tract(runnable),
         })
@@ -265,7 +347,7 @@ impl InferenceBackend for CpuTractBackend {
         };
 
         let array = tract_ndarray::ArrayD::from_shape_vec(
-            tract_ndarray::IxDyn(input.spec.shape),
+            tract_ndarray::IxDyn(&input.spec.shape),
             input.data.clone(),
         )
         .map_err(|error| InferenceError::ContractMismatch {
@@ -315,19 +397,19 @@ impl InferenceBackend for CpuTractBackend {
                     detail: format!("输出 {index} 解析失败：{error}"),
                 })?;
             let actual: Vec<usize> = view.shape().to_vec();
-            let declared = plan.output_spec[index].shape;
-            if !shape_matches(&actual, declared) {
+            let declared = &plan.output_spec[index];
+            if !shape_matches(&actual, &declared.shape) {
                 return Err(InferenceError::ContractMismatch {
                     model_id: plan.model_id.clone(),
                     detail: format!(
                         "输出 {index} 实际形状 {} 与契约 {} 不符",
                         format_shape(&actual),
-                        format_shape(declared)
+                        format_shape(&declared.shape)
                     ),
                 });
             }
             batches.push(TensorBatch {
-                spec: plan.output_spec[index],
+                spec: declared.clone(),
                 data: view.iter().copied().collect::<Vec<f32>>(),
             });
         }
@@ -365,12 +447,53 @@ mod tests {
     }
 
     #[test]
+    fn inspect_reports_ir_version_opset_and_io_without_compiling() {
+        // 设计 §8.6 验收点 ⑨：inspect() 必须能对真实 YuNet 给出
+        // ir_version / opset / inputs / outputs，证明 trait 覆盖
+        // model_hub/validator.rs 的「只读结构」语义（不编译 runnable）。
+        let backend = CpuTractBackend::new();
+        let introspection = backend
+            .inspect(&model_path(), &CancelToken::default())
+            .unwrap();
+        assert!(introspection.ir_version.unwrap_or(0) > 0, "{introspection:?}");
+        assert!(introspection.opset.unwrap_or(0) > 0, "{introspection:?}");
+        assert_eq!(introspection.input_shapes(), vec![vec![1, 3, 640, 640]]);
+        assert_eq!(introspection.outputs.len(), 12);
+        assert_eq!(introspection.outputs[0].shape.as_ref(), &[1, 6400, 1]);
+        assert!(introspection.operator_count > 0);
+        assert!(
+            !introspection.declarations.is_empty(),
+            "值域/通道顺序未由 ONNX 声明，必须显式登记为待补充"
+        );
+    }
+
+    #[test]
+    fn inspect_is_cancellable() {
+        let backend = CpuTractBackend::new();
+        let cancel = CancelToken::new(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+        let error = backend.inspect(&model_path(), &cancel).unwrap_err();
+        assert_eq!(error.code(), "E_CANCELLED");
+    }
+
+    #[test]
+    fn inspect_rejects_a_non_onnx_file() {
+        let backend = CpuTractBackend::new();
+        let dir = std::env::temp_dir().join(format!("lumi-inspect-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("not-onnx.onnx");
+        std::fs::write(&path, b"definitely not a protobuf onnx model").unwrap();
+        let error = backend.inspect(&path, &CancelToken::default()).unwrap_err();
+        assert_eq!(error.code(), "E_MODEL_LOAD");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn contract_mismatch_is_reported_as_version_error() {
         let path = model_path();
         let snapshot = inspect_contract(&path, builtin::YUNET.id).unwrap();
         let wrong = crate::ai_engine::model_registry::spec::ModelSpec {
             input: TensorSpec {
-                shape: &[1, 3, 320, 320],
+                shape: Cow::Borrowed(&[1, 3, 320, 320]),
                 ..builtin::YUNET.input
             },
             ..builtin::YUNET
@@ -413,12 +536,13 @@ mod tests {
             .load(&builtin::YUNET, &model_path(), &CancelToken::default())
             .unwrap();
         let wrong_spec = TensorSpec {
-            shape: &[1, 3, 320, 320],
+            shape: Cow::Borrowed(&[1, 3, 320, 320]),
             ..builtin::YUNET.input
         };
+        let element_count = wrong_spec.element_count();
         let input = TensorBatch {
             spec: wrong_spec,
-            data: vec![0.0; wrong_spec.element_count()],
+            data: vec![0.0; element_count],
         };
         let error = backend
             .run(

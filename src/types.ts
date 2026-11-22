@@ -1198,6 +1198,12 @@ export interface ImportFaceModelInput {
 // 与 Rust `ai_engine::inference::InferenceError::code()` 一一对应。
 // 新增错误码必须同时改两侧（`src-tauri/src/ai_engine/inference/error.rs` 的
 // `ERROR_CODES` 与下面的联合类型），否则前端 `switch` 会漏分支。
+//
+// 处置约定（架构师复核 D6 的条件 ②）：
+// `E_MODEL_CORRUPT` 与 `E_MODEL_VERSION` **必须同处置**（提示"模型不可信，请重新安装/重新校验"）。
+// 原因：热路径把「契约」判定推迟到解析之后，同一个"内容不符"的制品可能先报
+// `E_MODEL_VERSION` 也可能先报 `E_MODEL_CORRUPT`；两者对用户的含义都是
+// "这个权重不能被信任"，因此不得只处理其中一个。
 export type ModelErrorCode =
   | "E_MODEL_LICENSE"
   | "E_MODEL_MISSING"

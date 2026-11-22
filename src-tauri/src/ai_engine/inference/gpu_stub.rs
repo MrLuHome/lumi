@@ -13,7 +13,9 @@ use std::path::Path;
 use crate::ai_engine::model_registry::spec::ModelSpec;
 use crate::image_engine::cancel::CancelToken;
 
-use super::backend::{BackendCapabilities, InferenceBackend, LoadedPlan, RunOptions};
+use super::backend::{
+    BackendCapabilities, InferenceBackend, LoadedPlan, ModelIntrospection, RunOptions,
+};
 use super::error::InferenceError;
 use super::tensor::{Dtype, TensorBatch};
 
@@ -45,6 +47,14 @@ impl InferenceBackend for GpuBackend {
             max_batch: 1,
             gpu: true,
         }
+    }
+
+    fn inspect(
+        &self,
+        _path: &Path,
+        _cancel: &CancelToken,
+    ) -> Result<ModelIntrospection, InferenceError> {
+        Err(InferenceError::BackendUnsupported(Self::reason()))
     }
 
     fn load(
@@ -86,6 +96,14 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("benchmark"));
+    }
+
+    #[test]
+    fn gpu_backend_rejects_inspect_with_backend_code() {
+        let error = GpuBackend::new()
+            .inspect(Path::new("/nonexistent.onnx"), &CancelToken::default())
+            .unwrap_err();
+        assert_eq!(error.code(), "E_BACKEND");
     }
 
     #[test]

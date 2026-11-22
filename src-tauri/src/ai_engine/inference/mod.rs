@@ -1,6 +1,7 @@
 //! 统一推理抽象层。
 //!
 //! 边界铁律：本模块**不依赖 Tauri**，也不做任何网络访问。
+//! - 只读探测：[`InferenceBackend::inspect`]（不编译 runnable）
 //! - 加载接口：[`InferenceBackend::load`]
 //! - 统一张量 IO：[`TensorBatch`] / [`TensorSpec`]
 //! - 统一错误类型：[`InferenceError`]（11 个稳定错误码）
@@ -15,7 +16,8 @@ pub mod gpu_stub;
 pub mod tensor;
 
 pub use backend::{
-    BackendCapabilities, InferenceBackend, LoadedPlan, PlanHandle, RunOptions,
+    BackendCapabilities, InferenceBackend, LoadedPlan, ModelIntrospection, PlanHandle,
+    RunOptions,
 };
 pub use cpu_tract::{check_contract, inspect_contract, ContractSnapshot, CpuTractBackend};
 pub use error::{InferenceError, ERROR_CODES};

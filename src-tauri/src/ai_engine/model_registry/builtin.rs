@@ -10,34 +10,51 @@
 //! ⚠️ **新增随包权重必须同步 `src-tauri/tauri.conf.json` 的 `resources` 列表**，
 //! 否则开发机能跑、打包后 `locate()` 永远返回 `None`（历史风险 R8）。
 
-use crate::ai_engine::inference::tensor::{ChannelOrder, Dtype, Layout, TensorSpec, ValueRange};
+use crate::ai_engine::inference::tensor::{ChannelOrder, TensorSpec, ValueRange};
 
 use super::license::{LicenseEvidence, LicenseEvidenceKind, LicenseRecord, Verdict3};
 use super::spec::{ModelFormat, ModelOrigin, ModelSpec, ModelTask, OutputHead, Provenance};
 
+/// 字面量集中在此定义，`ModelSpec` 与 `ai/model.rs` 的 `MODEL_*` 常量都引用它们。
+///
+/// 为什么不直接写 `pub const MODEL_FILE: &str = YUNET.file_name;`：
+/// `TensorSpec.shape` 是 `Cow`（需要 drop），对非 `Copy` 的 const 项做字段读取会
+/// 产生一个"需要在常量求值期 drop 的临时量"，编译器报
+/// `E0493: destructor of ModelSpec cannot be evaluated at compile-time`。
+/// 把字面量提成独立 `const`，就既保住「单一真相」又保住 const 链。
+pub const YUNET_ID: &str = "face-detect-yunet-2023mar";
+pub const YUNET_NAME: &str = "YuNet 2023mar";
+pub const YUNET_VERSION: &str = "2023mar";
+pub const YUNET_FILE: &str = "face_detection_yunet_2023mar.onnx";
+/// 实测 232,589 B（2026-11-22）。
+pub const YUNET_SIZE_BYTES: u64 = 232_589;
+pub const YUNET_SHA256: &str =
+    "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4";
+/// SPDX 标识。未核实时应为 `None`，不留空串。
+pub const YUNET_LICENSE_SPDX: &str = "MIT";
+pub const YUNET_DIR: &str = "models/yunet";
+pub const YUNET_WEIGHTS_URL: &str =
+    "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet";
+pub const YUNET_LICENSE_URL: &str =
+    "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet/LICENSE";
+pub const YUNET_BUNDLED_LICENSE_FILE: &str = "src-tauri/resources/models/yunet/LICENSE";
+
 /// 内置 YuNet 2023mar 人脸检测模型。
 pub const YUNET: ModelSpec = ModelSpec {
-    id: "face-detect-yunet-2023mar",
-    display_name: "YuNet 2023mar",
-    version: "2023mar",
+    id: YUNET_ID,
+    display_name: YUNET_NAME,
+    version: YUNET_VERSION,
     task: ModelTask::FaceDetect,
     format: ModelFormat::Onnx,
     origin: ModelOrigin::Builtin,
-    dir: "models/yunet",
-    file_name: "face_detection_yunet_2023mar.onnx",
-    // 实测 232,589 B（2026-11-22）。
-    size_bytes: 232_589,
-    sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
-    input: TensorSpec {
-        dtype: Dtype::F32,
-        layout: Layout::Nchw,
-        shape: &[1, 3, 640, 640],
-        // 注意：`ai/face.rs` 的预处理是 `u16 像素 / 257.0`，16 位内部表示
-        // （0..65535）压回 0..255，因此**实际口径是 0..255**。
-        // 这不是 0..1：若声明成 ZeroOne，未来按契约实现的预处理会差 255 倍。
-        value_range: ValueRange::Raw255,
-        channel_order: ChannelOrder::Bgr,
-    },
+    dir: YUNET_DIR,
+    file_name: YUNET_FILE,
+    size_bytes: YUNET_SIZE_BYTES,
+    sha256: YUNET_SHA256,
+    // 注意：`ai/face.rs` 的预处理是 `u16 像素 / 257.0`，16 位内部表示
+    // （0..65535）压回 0..255，因此**实际口径是 0..255**。
+    // 这不是 0..1：若声明成 ZeroOne，未来按契约实现的预处理会差 255 倍。
+    input: TensorSpec::declared(&[1, 3, 640, 640], ValueRange::Raw255, ChannelOrder::Bgr),
     outputs: &[
         OutputHead {
             name: "cls_8",
@@ -107,17 +124,17 @@ pub const YUNET: ModelSpec = ModelSpec {
         },
         commercial_use: Verdict3::Allowed,
         redistribution: Verdict3::Allowed,
-        spdx: Some("MIT"),
+        spdx: Some(YUNET_LICENSE_SPDX),
         evidence: &[
             LicenseEvidence {
                 kind: LicenseEvidenceKind::OfficialPage,
-                url: "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet",
+                url: YUNET_WEIGHTS_URL,
                 quote: "All files in this directory are licensed under MIT License.",
                 accessed_at: "2026-11-22",
             },
             LicenseEvidence {
                 kind: LicenseEvidenceKind::BundledLicenseFile,
-                url: "src-tauri/resources/models/yunet/LICENSE",
+                url: YUNET_BUNDLED_LICENSE_FILE,
                 quote: "MIT License / Copyright (c) 2020 Shiqi Yu <shiqi.yu@gmail.com>",
                 accessed_at: "2026-11-22",
             },
@@ -125,9 +142,9 @@ pub const YUNET: ModelSpec = ModelSpec {
         note: "权重许可 MIT 已核对官方发布页与随包 LICENSE 原文，可商用、可再分发；训练数据许可未核实，上游权重仓（ShiqiYu/libfacedetection.train）许可亦未核实，需在法务文档登记。",
     },
     provenance: Provenance {
-        weights_url: "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet",
-        license_url: "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet/LICENSE",
-        bundled_license_file: Some("src-tauri/resources/models/yunet/LICENSE"),
+        weights_url: YUNET_WEIGHTS_URL,
+        license_url: YUNET_LICENSE_URL,
+        bundled_license_file: Some(YUNET_BUNDLED_LICENSE_FILE),
         verified_at: "2026-11-22",
         verified_by: "高见远（人工核对官方页面与随包 LICENSE 原文）",
     },

@@ -145,7 +145,7 @@ impl Registry {
     /// 走完整准入链（可选是否做契约校验），并记录结果。
     pub fn check(
         &self,
-        spec: &'static ModelSpec,
+        spec: &ModelSpec,
         base_dirs: &[PathBuf],
         include_contract: bool,
     ) -> ModelHealth {
@@ -155,14 +155,14 @@ impl Registry {
     }
 
     /// 校验一个已知路径（热路径用，跳过契约校验，由后端在解析后补上）。
-    pub fn check_at(&self, spec: &'static ModelSpec, path: &Path) -> ModelHealth {
+    pub fn check_at(&self, spec: &ModelSpec, path: &Path) -> ModelHealth {
         let health = verify::check_at(spec, path, false);
         self.record(&health, spec.id);
         health
     }
 
     /// 浅检查（许可 → 存在 → 体积/格式头，不读全文件）：供同步命令使用。
-    pub fn check_shallow(&self, spec: &'static ModelSpec, base_dirs: &[PathBuf]) -> ModelHealth {
+    pub fn check_shallow(&self, spec: &ModelSpec, base_dirs: &[PathBuf]) -> ModelHealth {
         let health = match locate::locate(base_dirs, spec.dir, spec.file_name) {
             Some(path) => verify::check_shallow(spec, &path),
             None => {

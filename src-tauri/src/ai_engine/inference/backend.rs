@@ -9,6 +9,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Serialize;
+
 use tract_onnx::prelude::TypedRunnableModel;
 
 use crate::ai_engine::model_registry::spec::ModelSpec;
@@ -57,6 +59,54 @@ pub enum PlanHandle {
     Gpu(Box<dyn Any + Send + Sync>),
 }
 
+/// 只读结构视图。**不编译 runnable**，只报告 ONNX 文件声明的结构。
+///
+/// 为什么要有 `inspect()` 而不是只靠 `load()`：
+/// `face_intelligence/model_hub/validator.rs:87` 用 `proto_model_for_path`
+/// （只读 ir_version / opset / 形状，不编译），`:100` 才用 `model_for_path`，
+/// 是两个不同 API。`load()` 覆盖不了前者（它一定会编译 runnable，
+/// 对"只想看一眼这个文件长什么样"的导入校验是过度开销，也不能容忍编译失败）。
+/// 把 `inspect()` 放进 trait，未来把 Model Hub 校验迁到统一后端时不用改 trait 形状。
+///
+/// 符号维（动态维）在 `inputs/outputs[].shape` 里记为 `0`（通配），
+/// 原始可读描述保存在 `declarations` 里，避免"零维标量"与"未知维"被混为一谈。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelIntrospection {
+    pub ir_version: Option<i64>,
+    pub opset: Option<i64>,
+    pub inputs: Vec<TensorSpec>,
+    pub outputs: Vec<TensorSpec>,
+    pub operator_count: usize,
+    /// 未能表达成 `TensorSpec` 的原始描述（符号维、非 F32 dtype、未知值域等）。
+    pub declarations: Vec<String>,
+}
+
+impl ModelIntrospection {
+    /// 空视图（解析失败前的占位）。
+    pub fn empty() -> Self {
+        Self {
+            ir_version: None,
+            opset: None,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            operator_count: 0,
+            declarations: Vec::new(),
+        }
+    }
+
+    pub fn input_shapes(&self) -> Vec<Vec<usize>> {
+        self.inputs.iter().map(|spec| spec.shape.to_vec()).collect()
+    }
+
+    pub fn output_shapes(&self) -> Vec<Vec<usize>> {
+        self.outputs
+            .iter()
+            .map(|spec| spec.shape.to_vec())
+            .collect()
+    }
+}
+
 /// 后端能力声明。
 #[derive(Debug, Clone)]
 pub struct BackendCapabilities {
@@ -94,6 +144,14 @@ pub trait InferenceBackend: Send + Sync {
     fn id(&self) -> &'static str;
 
     fn capabilities(&self) -> BackendCapabilities;
+
+    /// 只读结构探测：不编译 runnable，只返回 ir_version / opset / 输入输出形状。
+    /// 对应 `model_hub/validator.rs` 的 `proto_model_for_path` 语义。
+    fn inspect(
+        &self,
+        path: &Path,
+        cancel: &CancelToken,
+    ) -> Result<ModelIntrospection, InferenceError>;
 
     /// 解析 + 优化 + 编译。返回值里的 `handle` 可直接并发 `&self` 调用。
     fn load(

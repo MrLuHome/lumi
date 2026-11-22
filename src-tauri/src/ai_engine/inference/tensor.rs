@@ -11,6 +11,8 @@
 //! 就会差 255 倍，YuNet 分数全部低于 0.01，表现为“AI 突然检测不到人脸”。
 //! 因此这里把量纲升级为枚举，并在 [`TensorBatch::new`] 中强制校验。
 
+use std::borrow::Cow;
+
 use serde::Serialize;
 
 use super::error::InferenceError;
@@ -110,21 +112,78 @@ impl ValueRange {
     }
 }
 
-/// 张量契约。所有字段都是 `const` 可构造的，因此可以安全地放进静态登记表。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// 张量契约。
+///
+/// `shape` 用 `Cow<'static, [usize]>` 而不是 `Vec<usize>`：
+/// - 登记表里必须是 **`const` 可构造**（`Cow::Borrowed(&[..])` 零堆分配，
+///   且 `const YUNET` 能被 `const ALL: &[&ModelSpec] = &[&YUNET]` 取引用）；
+/// - 而 `InferenceBackend::inspect()` 必须能表达**任意 ONNX 文件**的实际形状
+///   （可能含符号维），这需要拥有所有权的 `Cow::Owned(Vec<..>)`。
+///
+/// 两者共用一个类型，避免"声明契约"与"观测契约"变成两套结构。
+/// 符号维（动态维）统一记为 `0`，比对时充当通配符。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TensorSpec {
     pub dtype: Dtype,
     pub layout: Layout,
-    pub shape: &'static [usize],
+    pub shape: Cow<'static, [usize]>,
     pub value_range: ValueRange,
     pub channel_order: ChannelOrder,
 }
 
+fn format_shape(shape: &[usize]) -> String {
+    if shape.is_empty() {
+        "标量".to_string()
+    } else {
+        shape
+            .iter()
+            .map(|dim| dim.to_string())
+            .collect::<Vec<_>>()
+            .join("×")
+    }
+}
+
 impl TensorSpec {
+    /// `const` 可用的静态契约构造器（无堆分配）。
+    pub const fn declared(
+        shape: &'static [usize],
+        value_range: ValueRange,
+        channel_order: ChannelOrder,
+    ) -> Self {
+        Self {
+            dtype: Dtype::F32,
+            layout: Layout::Nchw,
+            shape: Cow::Borrowed(shape),
+            value_range,
+            channel_order,
+        }
+    }
+
+    /// 观测到的契约（`inspect()` 用，形状可能来自任意 ONNX 文件）。
+    pub fn observed(shape: Vec<usize>, value_range: ValueRange, channel_order: ChannelOrder) -> Self {
+        Self {
+            dtype: Dtype::F32,
+            layout: Layout::Nchw,
+            shape: Cow::Owned(shape),
+            value_range,
+            channel_order,
+        }
+    }
+
     /// 元素总数。符号维（0）在登记表里不会出现。
     pub fn element_count(&self) -> usize {
         self.shape.iter().product()
+    }
+
+    /// 是否是**占位契约**：形状全为 0（或空形状），没有真实描述任何张量。
+    ///
+    /// 为什么需要它：用户自备模型的 IO 契约由它自己的 manifest 描述，登记表里
+    /// 只能用全 0 形状占位。如果这份占位契约被喂进 `TensorBatch`，`element_count() == 0`
+    /// 会让"空数据"通过元素数校验，形成一个静默通过的口子。
+    /// 因此 `validate()` 显式拒绝占位契约，而不是靠"调用方不会这么用"。
+    pub fn is_placeholder(&self) -> bool {
+        self.shape.iter().all(|dim| *dim == 0)
     }
 
     /// 结构化的人可读描述，用于替代旧版自由字符串常量。
@@ -147,13 +206,22 @@ impl TensorSpec {
     pub fn same_as(&self, other: &TensorSpec) -> bool {
         self.dtype == other.dtype
             && self.layout == other.layout
-            && self.shape == other.shape
+            && self.shape.as_ref() == other.shape.as_ref()
             && self.value_range == other.value_range
             && self.channel_order == other.channel_order
     }
 
     /// 校验一个具体张量是否符合该契约。
     pub fn validate(&self, data: &[f32]) -> Result<(), InferenceError> {
+        if self.is_placeholder() {
+            return Err(InferenceError::ContractMismatch {
+                model_id: String::new(),
+                detail: format!(
+                    "契约形状 {} 是占位值（全 0），未真实描述张量，拒绝推理",
+                    format_shape(self.shape.as_ref())
+                ),
+            });
+        }
         let expected = self.element_count();
         if data.len() != expected {
             return Err(InferenceError::ContractMismatch {
@@ -223,13 +291,8 @@ impl TensorBatch {
 mod tests {
     use super::*;
 
-    const UNIT: TensorSpec = TensorSpec {
-        dtype: Dtype::F32,
-        layout: Layout::Nchw,
-        shape: &[1, 3, 2, 2],
-        value_range: ValueRange::ZeroOne,
-        channel_order: ChannelOrder::Rgb,
-    };
+    const UNIT: TensorSpec =
+        TensorSpec::declared(&[1, 3, 2, 2], ValueRange::ZeroOne, ChannelOrder::Rgb);
 
     #[test]
     fn element_count_multiplies_shape() {
@@ -287,12 +350,26 @@ mod tests {
     #[test]
     fn format_human_is_structured_not_free_text() {
         let spec = TensorSpec {
-            shape: &[1, 3, 640, 640],
+            shape: Cow::Borrowed(&[1, 3, 640, 640]),
             value_range: ValueRange::Raw255,
             channel_order: ChannelOrder::Bgr,
             ..UNIT
         };
         assert_eq!(spec.format_human(), "1×3×640×640 float32（BGR，0..255）");
+    }
+
+    #[test]
+    fn placeholder_shape_is_rejected_instead_of_silently_passing() {
+        // 全 0 形状的 element_count() == 0，若不显式拒绝，"空数据"会通过校验。
+        let placeholder =
+            TensorSpec::observed(vec![0, 0, 0, 0], ValueRange::ZeroOne, ChannelOrder::Rgb);
+        assert!(placeholder.is_placeholder());
+        assert_eq!(placeholder.element_count(), 0);
+        let error = TensorBatch::new(placeholder, Vec::new()).unwrap_err();
+        assert_eq!(error.code(), "E_MODEL_CONTRACT");
+        assert!(error.to_string().contains("占位"));
+        // 真实契约不是占位。
+        assert!(!UNIT.is_placeholder());
     }
 
     #[test]
@@ -302,5 +379,8 @@ mod tests {
             channel_order: ChannelOrder::Bgr,
             ..UNIT
         }));
+        // 同一个形状，一份静态 / 一份拥有所有权：契约必须判等。
+        let owned = TensorSpec::observed(vec![1, 3, 2, 2], ValueRange::ZeroOne, ChannelOrder::Rgb);
+        assert!(UNIT.same_as(&owned));
     }
 }

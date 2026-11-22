@@ -60,6 +60,14 @@ impl ModelFormat {
 }
 
 /// 模型来源。用户自备模型**不进入**正式注册清单。
+///
+/// 为什么不带 `UserImported { manifest_id: String }` 这样的 payload：
+/// 真实理由是**没有信息可丢** —— 用户模型的 ID 直接取自 `manifest.json`
+/// （`Registry::user_models()` → `UserModelSnapshot.id` → `ModelEntryView.id`），
+/// 不必在来源枚举里再存一份，否则同一个 ID 会有两个真相、还要考虑不一致时以谁为准。
+///
+/// 注意：**不要**把这个理由写成"带 payload 的枚举无法进 const"——那是错的，
+/// `Builtin` 变体照样能在 `const` 中构造，只有带 `String` 的那一档不行。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ModelOrigin {
@@ -108,7 +116,11 @@ pub struct Provenance {
 }
 
 /// 一条模型登记记录。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 不是 `Copy`：`TensorSpec.shape` 是 `Cow<'static, [usize]>`（见该类型的说明），
+/// 但 `Cow::Borrowed` 分支让本类型仍可用 `const` 构造，
+/// 因此 `pub const YUNET: ModelSpec = …` 与 `const ALL: &[&ModelSpec] = &[&YUNET]` 都成立。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelSpec {
     /// `<task>-<family>-<version>`，全小写，只允许 `[a-z0-9-]`，长度 ≤48。
     pub id: &'static str,

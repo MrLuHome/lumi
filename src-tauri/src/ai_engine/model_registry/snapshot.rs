@@ -149,7 +149,7 @@ impl ModelEntryView {
             size_bytes: spec.size_bytes,
             size_on_disk_bytes,
             sha256: spec.sha256.to_string(),
-            input: spec.input,
+            input: spec.input.clone(),
             outputs: spec.outputs.to_vec(),
             license: LicenseView::from_record(spec.origin, &spec.license),
             state: state.as_str(),
@@ -188,8 +188,10 @@ impl UserModelSnapshot {
         let input = crate::ai_engine::inference::TensorSpec {
             dtype: crate::ai_engine::inference::Dtype::F32,
             layout: crate::ai_engine::inference::Layout::Nchw,
-            // 用户模型的输入契约由它自己的 manifest 描述，这里不给假形状。
-            shape: &[0, 0, 0, 0],
+            // 用户模型的 IO 契约由它自己的 manifest 描述，登记表只能给**占位**形状。
+            // 这不是"真实形状"，因此 `TensorSpec::is_placeholder()` 会判定为占位，
+            // `TensorBatch::validate()` 显式拒绝它 —— 占位值不会被当成零元素张量跑推理。
+            shape: std::borrow::Cow::Borrowed(&[0, 0, 0, 0]),
             value_range: crate::ai_engine::inference::ValueRange::ZeroOne,
             channel_order: crate::ai_engine::inference::ChannelOrder::Rgb,
         };
@@ -466,6 +468,8 @@ mod tests {
         assert_eq!(view.origin, ModelOrigin::UserImported);
         assert_eq!(view.license.state, LicenseState::UserUnverified);
         assert_eq!(view.license.unverified_fields.len(), 4);
+        // 用户模型的形状是**占位**，不允许被当成零元素张量喂进推理。
+        assert!(view.input.is_placeholder());
 
         let snapshot = RegistrySnapshot::new(
             1,

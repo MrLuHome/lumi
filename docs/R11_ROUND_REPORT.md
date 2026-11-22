@@ -2,7 +2,8 @@
 
 > 执行者：寇豆码（Engineer） · 团队 `software-lumi-r11` · 任务 #2
 > 仓库：`/Users/lu/Documents/lumi人像` · 分支 `main` · 起点 HEAD `572f8f0`
-> 上游设计：`docs/R11_AUDIT_AND_DESIGN.md`（高见远，1247 行）
+> 上游设计：`docs/R11_AUDIT_AND_DESIGN.md`（高见远）—— 执行期间由 1247 行更新到 **1444 行**，
+> 三条更正（`inspect()` / 模块树 / 流式 SHA）的落地情况见 §11.1.1
 > 完成日期：2026-11-22
 
 ---
@@ -16,8 +17,8 @@
 具体交付（对应设计的 T01–T05）：
 
 1. `ai_engine/model_registry/` —— 权威登记层（8 个文件，不含 Tauri 依赖）；
-2. `ai_engine/inference/` —— 统一推理抽象（6 个文件），`CpuTractBackend` 是唯一真实实现，
-   `GpuBackend` 只做 stub，`tract-onnx 0.23` 一行未动；
+2. `ai_engine/inference/` —— 统一推理抽象（6 个文件），trait 5 个方法含 `inspect()`；
+   `CpuTractBackend` 是唯一真实实现，`GpuBackend` 只做 stub，`tract-onnx 0.23` 一行未动；
 3. `ai/model.rs` 常量改为登记表派生 + `ai/face.rs` 走准入链 + `detect_with_cancel`（加法）；
 4. `commands/model_status.rs` 4 个新命令 + 前端 `types.ts` / `backend.ts` 契约；
 5. 旧表收敛（`skin_segmentation::status()` 转发 registry）+ 许可台账
@@ -42,8 +43,8 @@
 | `src-tauri/src/ai_engine/model_registry/snapshot.rs` | 大 | 前端视图（camelCase）+ `RegistrySnapshot` + 汇总 |
 | `src-tauri/src/ai_engine/inference/mod.rs` | 小 | re-export |
 | `src-tauri/src/ai_engine/inference/error.rs` | 中 | `InferenceError` 11 变体 + `code()` + 手写 `Serialize` |
-| `src-tauri/src/ai_engine/inference/tensor.rs` | 中 | `Dtype`/`Layout`/`ChannelOrder`/`ValueRange`/`TensorSpec`/`TensorBatch` |
-| `src-tauri/src/ai_engine/inference/backend.rs` | 中 | `InferenceBackend` trait / `LoadedPlan` / `PlanHandle` / `RunOptions` |
+| `src-tauri/src/ai_engine/inference/tensor.rs` | 中 | `Dtype`/`Layout`/`ChannelOrder`/`ValueRange`/`TensorSpec`（`shape: Cow`）/`TensorBatch` |
+| `src-tauri/src/ai_engine/inference/backend.rs` | 中 | `InferenceBackend` trait（含 `inspect()`）/ `ModelIntrospection` / `LoadedPlan` / `PlanHandle` / `RunOptions` |
 | `src-tauri/src/ai_engine/inference/cpu_tract.rs` | 大 | 唯一真实后端：解析→契约校验→优化→编译；`catch_unwind` 隔离 panic |
 | `src-tauri/src/ai_engine/inference/gpu_stub.rs` | 小 | `GpuBackend`（`available:false` + 理由，**不接 wgpu**） |
 | `src-tauri/src/commands/model_status.rs` | 中 | 4 个命令（3 个 `spawn_blocking` + 1 个纯内存同步） |
@@ -132,6 +133,32 @@ state    = "licenseBlocked"
   `load/run/unload` 一律 `E_BACKEND`。**没有引入 wgpu、没有替换运行时。**
 - `TensorBatch::new` 校验：元素数（→`E_MODEL_CONTRACT`）、NaN/Inf（→`E_INPUT`）、
   **值域**（按 `ValueRange::bounds()`）。
+
+### 3.4.1 `inspect()`：只读结构探测（设计更新后新增）
+
+`InferenceBackend` 有 5 个方法，其中 `inspect()` 是设计更新（1247 → 1444 行，§8.1）新增的：
+
+```rust
+fn inspect(&self, path: &Path, cancel: &CancelToken) -> Result<ModelIntrospection, InferenceError>;
+```
+
+为什么不靠 `load()` 覆盖：`face_intelligence/model_hub/validator.rs:87` 用
+`proto_model_for_path`（只读 `ir_version` / `opset` / 形状，**不编译 runnable**），
+`:100` 才用 `model_for_path`，是两个不同 API。`load()` 一定会编译 runnable，
+对"只想看一眼这个文件长什么样"的导入校验是过度开销，也不能容忍编译失败。
+
+实现分两段，与 validator 的两段式完全对应：
+
+1. `tract_onnx::onnx().proto_model_for_path(path)` → `ir_version` / `opset` / `operator_count`；
+2. `model_for_path(..).into_typed()` → 输入输出形状（符号维记 `0`，可读描述进 `declarations`）。
+
+`declarations` 承载"`TensorSpec` 表达不了"的信息，而不是硬塞：ONNX **不声明值域与通道顺序**
+（那是训练侧约定），`inspect()` 只能给中性占位，并把这件事显式写进 `declarations`；
+非 F32 dtype 的 IO 也进 `declarations` 而不进 `inputs/outputs`（`Dtype` 只有 F32，硬写就是撒谎）。
+
+`GpuBackend::inspect` 一律返回 `E_BACKEND`。
+`registry::verify` 的契约判定复用 `inspect()`（`inspect_contract` 成了它的薄封装），
+因此**全仓只有一处 tract 解析入口**。
 
 ### 3.5 取消（复用，不新造）
 
@@ -243,6 +270,22 @@ state    = "licenseBlocked"
 `E_MODEL_LICENSE / E_MODEL_MISSING / E_MODEL_CORRUPT / E_MODEL_VERSION / E_MODEL_LOAD /
 E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 
+### 5.4.1 `ModelIntrospection`（`inspect()` 的返回，Rust 侧）
+
+```rust
+pub struct ModelIntrospection {
+    pub ir_version: Option<i64>,
+    pub opset: Option<i64>,
+    pub inputs: Vec<TensorSpec>,      // 符号维记 0（通配）
+    pub outputs: Vec<TensorSpec>,
+    pub operator_count: usize,
+    pub declarations: Vec<String>,    // TensorSpec 表达不了的原始描述（符号维/非 F32/未知值域）
+}
+```
+
+本轮**不暴露给前端**：设计 §8.6 验收点 ⑨ 只要求"能测形状可覆盖，不迁移 validator"，
+没有命令消费它，因此不加对应的 TS 类型（避免出现没有调用方的空 API）。
+
 ### 5.5 TypeScript
 
 `ModelErrorCode` / `ModelState` / `ModelFailure` / `ModelLicenseState` / `LicenseVerdict` /
@@ -257,12 +300,12 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 
 | # | 命令 | 结果 | 基线 | 判定 |
 |---|------|------|------|------|
-| V1 | `cargo test --lib` | **466 passed / 0 failed / 3 ignored**，5.13s | 397 passed / 0 failed / 3 ignored | ✅ +69 条新单测，0 失败 |
-| V2 | `cargo test`（全量 17 个 target） | **563 passed / 0 failed / 7 ignored** | 477 passed / 0 failed / 7 ignored | ✅ +86 条，0 失败 |
+| V1 | `cargo test --lib` | **471 passed / 0 failed / 3 ignored** | 397 passed / 0 failed / 3 ignored | ✅ +74 条新单测，0 失败 |
+| V2 | `cargo test`（全量 17 个 target） | **569 passed / 0 failed / 7 ignored** | 477 passed / 0 failed / 7 ignored | ✅ +92 条，0 失败 |
 | V3 | `cargo clippy --all-targets` | **0 warning / 0 error**（`Finished dev profile`，无输出） | 0 warning | ✅ |
 | V4 | `cargo check --no-default-features --lib` | **通过**（`Finished dev profile in 3.81s`） | 通过 | ✅ |
-| V5 | `cargo test --no-default-features --lib` | **466 passed / 0 failed / 3 ignored**，5.11s | 397 passed | ✅ 与 V1 完全一致 |
-| V6 | `cargo test --test face_detection --test beauty --test beauty_real --test face_intelligence` | 4 + 12 + 4 + 5 = **25 passed / 0 failed**（`beauty_real` 真实跑满 **27.88 s**，未跳过） | 同 | ✅ 真实推理路径零回归 |
+| V5 | `cargo test --no-default-features --lib` | **471 passed / 0 failed / 3 ignored** | 397 passed | ✅ 与 V1 完全一致 |
+| V6 | `cargo test --test face_detection --test beauty --test beauty_real --test face_intelligence` | 4 + 12 + 4 + 5 = **25 passed / 0 failed**（`beauty_real` 真实跑满 **48.75 s**，未跳过） | 同 | ✅ 真实推理路径零回归 |
 | V7 | `pnpm test`（前端 vitest） | **81 passed / 8 files**，235ms | 81 passed | ✅ |
 | V8 | `npx tsc --noEmit` | **无输出（0 error）** | 0 | ✅ |
 
@@ -270,13 +313,13 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 
 | target | passed | ignored |
 |--------|--------|---------|
-| `src/lib.rs` | 466 | 3 |
+| `src/lib.rs` | 471 | 3 |
 | `tests/beauty.rs` | 12 | 1 |
 | `tests/beauty_real.rs` | 4 | 0 |
 | `tests/engine.rs` | 10 | 1 |
 | `tests/face_detection.rs` | 4 | 0 |
 | `tests/face_intelligence.rs` | 5 | 0 |
-| **`tests/model_registry.rs`** | **17** | 0 |
+| **`tests/model_registry.rs`** | **18** | 0 |
 | `tests/onnx_worker.rs` | 7 | 0 |
 | `tests/raw_real.rs` | 2 | 0 |
 | `tests/reshape_persistence.rs` | 3 | 0 |
@@ -286,9 +329,9 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 | `tests/round10_real_photos.rs` | 5 | 0 |
 | `tests/round8_benchmark.rs` | 0 | 1 |
 | `tests/round9_1_persistence.rs` | 9 | 0 |
-| **合计** | **563** | **7** |
+| **合计** | **569** | **7** |
 
-### 6.2 `tests/model_registry.rs` 17 条验收测试逐条对应任务书验收点
+### 6.2 `tests/model_registry.rs` 18 条验收测试逐条对应任务书验收点
 
 | 验收点 | 测试名 |
 |--------|--------|
@@ -304,6 +347,7 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 | 推理可取消 | `cancelled_inference_returns_e_cancelled_without_panicking`、`uncancelled_inference_still_works_after_the_cancel_test` |
 | 快照可序列化（camelCase/字段齐全） | `registry_snapshot_is_frontend_ready`、`snapshot_state_reflects_recorded_checks`、`model_runtime_state_strings_match_the_frontend_union` |
 | R9 量纲护栏 | `yunet_value_range_is_raw255_consistent_with_the_implementation` |
+| `inspect()` 覆盖 L2/L3 只读结构（§8.6 ⑨） | `inspect_covers_the_l2_l3_read_only_shape`；单测 `inspect_reports_ir_version_opset_and_io_without_compiling` / `inspect_is_cancellable` / `inspect_rejects_a_non_onnx_file`；`gpu_backend_rejects_inspect_with_backend_code` |
 
 ---
 
@@ -335,8 +379,9 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 | 操作 | 耗时 | 调用频率 | 说明 |
 |------|------|----------|------|
 | `sha256_file`（232,589 B） | **9.586 ms/次**（20 次均值） | 每次进程首次加载一次 | 流式 1 MB 缓冲；debug 未优化，release 约 1 ms 量级 |
-| `inspect_contract`（只解析不优化） | **19.234 ms/次** | 仅 `model_registry_check` 与 `model_load` | 契约判定第 ④ 步 |
-| `verify::check_at`（完整链，含契约 + SHA） | **28.339 ms/次** | 仅显式 check / 首次 load | = ④ + ⑤ 之和，符合预期 |
+| `inspect()`（proto 解析 + 类型推导，**不编译**） | **19.729 ms/次** | 仅 `model_registry_check` 与 `model_load` | 契约判定第 ④ 步；proto 解析相对类型推导几乎免费（旧 `inspect_contract` 19.234 ms） |
+| `load()`（解析 + 优化 + 编译） | **230.527 ms/次** | 每次进程首次加载一次 | 有 `is_loaded()` 提前返回，不会进每张照片的路径 |
+| `verify::check_at`（完整链，含契约 + SHA） | **28.315 ms/次** | 仅显式 check / 首次 load | = ④ + ⑤ 之和，符合预期 |
 | `verify::check_shallow`（①②③，不读全文件） | **0.109 ms/次** | `face_model_status`（同步命令） | **远低于 1 ms 红线**（对比 R1 的整文件哈希） |
 | `Registry::snapshot`（1 个内置模型） | **0.004 ms/次** | 面板挂载 | 纯内存 + `is_file` + `metadata` |
 | YuNet 单次推理（640×640，debug） | 880–974 ms | 每次检测 | 与基线同量级（debug）；release 为几十 ms 级 |
@@ -346,7 +391,10 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 - plan 仍只有一份，由共享 `FaceEngine` 的 `Arc<LoadedPlan>` 持有（`Arc` 克隆不复制权重）；
 - `snapshot` 不读权重文件、不缓存权重字节；
 - 唯一新增的临时分配是 `run()` 里 `input.data.clone()`（1.2 M f32 ≈ 4.9 MB / 次），
-  与既有实现的输入 Vec 同量级。
+  与既有实现的输入 Vec 同量级；
+- `inspect()` 的 `declarations` 是每 IO 一条短字符串（YuNet 13 条），随返回值一起释放；
+- `TensorSpec.shape` 的 `Cow` 让登记表保持 `Borrowed`（零堆分配），
+  只有 `inspect()` / 用户模型的路径才用 `Owned`。
 
 **输入侧对齐**：`sha256_file` 9.6 ms 是「首次加载一次」，有 `is_loaded()` 提前返回，
 不会出现在每张照片的路径上。
@@ -393,7 +441,11 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
    代价是「顺序」在代码里不是字面连续的，已在 `verify.rs` 与本文写明。
 5. **用户自备模型在 registry 里恒为 `verified`**（只要 `present && validation_ok`），
    不重新做哈希复核。真复核要读最多 512 MB 权重，属 R4/R3 同类问题。
-6. **`release` profile `panic = "abort"`** 使 `CpuTractBackend::run` 的
+6. **`Registry::check*` 的 spec 参数已从 `&'static ModelSpec` 放宽为 `&ModelSpec`**：
+   因为 `ModelSpec` 不再是 `Copy`（D11），`&builtin::YUNET` 拿到的是语句级临时借用，
+   传不进 `&'static` 形参。`Registry` 本来就只读取 spec（`id`/`sha256` 都拷成 `String`），
+   放宽后语义不变，但也意味着"注册表只接受静态登记项"这个约束现在靠**约定**而不是类型系统。
+7. **`release` profile `panic = "abort"`** 使 `CpuTractBackend::run` 的
    `catch_unwind` 在正式包里失效（只在 dev/test 生效）。已在代码注释标注；
    若要在正式包也隔离 panic，需要改 profile，属全局决策，本轮不动。
 
@@ -451,12 +503,34 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 `ValueRange::ZeroOne` 枚举仍然保留在 `tensor.rs` 里（未来的 RGB 0..1 模型要用），
 只是 YuNet 不登记它。
 
+### 11.1.1 设计更新（1247 → 1444 行）三条更正的落地情况
+
+| # | 更正要求 | 落地 |
+|---|----------|------|
+| ① | `InferenceBackend` 必须含 `inspect()` | **已加**。trait 现在 5 个方法（`id` / `capabilities` / `inspect` / `load` / `run` / `unload`）。`CpuTractBackend::inspect` 用 `proto_model_for_path` 取 `ir_version`/`opset`，再 `into_typed` 取形状；`GpuBackend::inspect` 返回 `E_BACKEND`；`inspect_contract` 改为它的薄封装（全仓唯一 tract 解析入口）。验收：单测 3 条 + `gpu_backend_rejects_inspect_with_backend_code` + 集成测 `inspect_covers_the_l2_l3_read_only_shape` |
+| ② | `tensor.rs` 是游离文件，接进模块树 | **提交 `ff91cee` 时已经接好**，此前提基于中间态快照：`src/ai_engine/inference/mod.rs` 存在，`src-tauri/src/ai_engine/mod.rs:7` 为 `pub mod inference;`，其中 `pub mod tensor;` 参与编译（470 条单测里包含 `inference::tensor::tests` 的 6 条）。本轮按新版 §8.2 修订了它的公开签名（见 D11） |
+| ③ | SHA256 走流式，不许整文件读入 | **原本就是**。`model_registry/verify.rs:13` 只 `use ...::model_hub::security::sha256_file`（1 MB 缓冲流式），`:78` 是唯一调用点，全仓新代码零 `sha256_hex` 调用（`ai/model.rs::sha256_hex` 保留给既有 `skin_segmentation` 与它的单测，未动）。没有引入第 7 个哈希实现 |
+
+**架构师已在设计文档 §14 复核并采纳本项**：R9 更正为「本质不是写错，而是契约以人读字符串表达、无法机器校验」，并确认
+`ai/face.rs` 的 `u16 / 257.0` **实际产生 0..255，与常量一致**。因此 `Raw255` 是正确登记值，不是偏离遗留。
+
+### 11.3 架构师复核（设计 1444 → 1495 行，§14）的落地情况
+
+| §14 项 | 裁决 | 本轮落地 |
+|--------|------|----------|
+| D6 ④↔⑤ 可交换 | 可接受（附条件 ①②③） | ① 条件已满足：`verify::check_at(.., include_contract = true)` 保持完整顺序（`model_registry_check` 走的就是它）；② 已把"两码必须同处置"写进 `src/types.ts` 的 `ModelErrorCode` 上方注释；③ 顺序说明已在 `verify.rs` 与本文 §3.1 写明 |
+| D7 `status()` 用浅检查 | 可接受，但 `error` 前端未渲染 | 记录为下一轮（§14.3-1）。本轮**不动** `FacePanel.tsx`：任务书要求"文案不得回归"，而渲染新错误串属于可见文案变更，应由产品确认后再做 |
+| D1/D2 `Vec<TensorBatch>` + `TensorSpec` 合并 | 可接受，**唯一要求**：配 `is_placeholder()` 或显式拒绝全 0 形状 | **已实现**：`TensorSpec::is_placeholder()` + `TensorSpec::validate()` 首行显式拒绝（返回 `E_MODEL_CONTRACT`），单测 `placeholder_shape_is_rejected_instead_of_silently_passing`；`snapshot.rs` 的用户模型占位形状也加了断言 `view.input.is_placeholder()` |
+| D3 `ModelOrigin` 去 payload | 结果可接受，**但理由不成立** | **已更正**：`spec.rs` 的注释改为真实理由——用户模型 ID 直接取自 manifest，**没有信息可丢**（避免一个 ID 两个真相）；并显式写了"**不要**把理由写成'带 payload 的枚举无法进 const'，那是错的" |
+| D8 未改 `providers/yunet.rs` | 可接受，遵守正确 | 无动作 |
+| D4 / D5 / D9 / D10 | 可接受 | 无动作。D10 的"note 必须写明 sha256 未本机复核"已在 `LicenseView::user_unverified` 的 note 里；`state` 也确实不会标 `verified`（未通过隔离验证 → `loadFailed`） |
+
 ### 11.2 其它偏离（都是为了让设计能编译/能正确表达）
 
 | # | 设计写法 | 实现 | 原因 |
 |---|----------|------|------|
 | D1 | `InferenceBackend::run -> Result<TensorBatch, _>` | `-> Result<Vec<TensorBatch>, _>` | YuNet 有 **12 个输出 head**，单个 `TensorBatch` 无法表达多 head 契约 |
-| D2 | `ModelSpec { input: ModelIo, output: ModelIo }`（`ModelIo` 内含 outputs） | `input: TensorSpec` + `outputs: &'static [OutputHead]` | `ModelIo` 与 `TensorSpec` 字段完全重复；且 `Vec<usize>` 不是 const 可构造，形状必须是 `&'static [usize]` 才能放进 `const YUNET` |
+| D2 | `ModelSpec { input: ModelIo, output: ModelIo }`（`ModelIo` 内含 outputs） | `input: TensorSpec` + `outputs: &'static [OutputHead]` | `ModelIo` 与 `TensorSpec` 字段完全重复。`outputs` 用 `&'static [OutputHead]`（声明期形状一律静态）；`TensorSpec.shape` 用 `Cow<'static, [usize]>`，见 D11 |
 | D3 | `ModelOrigin::UserImported { manifest_id: String }` | `ModelOrigin::UserImported`（无 payload） | 带 `String` 的枚举无法在 `const` 里构造；用户模型 ID 由 manifest 直接提供 |
 | D4 | `RegistrySnapshot` 只有 `models` + `summary{total,ready,verified,blocked}` | 追加 `models[].official` 与 `summary.{official,userImported}` | 主理人裁决 Q1 要求「明确不进入正式注册清单」，需要一个显式布尔位 + 独立计数，否则 `total` 会被用户模型污染 |
 | D5 | `model_registry_snapshot` 是同步命令 | `async` + `spawn_blocking` | 任务书 T04 验收点明确要求「4 个命令全部 spawn_blocking，唯一例外 model_unload」 |
@@ -465,14 +539,21 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 | D8 | T03「改 `providers/yunet.rs:33` 注入共享 `FaceEngine`」 | **未改** | 任务书 §6 明确点名「模型重复加载」只记录不修；改它要动 `FaceIntelligence::new` 与 `reload_models()`，属 R2 范围 |
 | D9 | `MaskPreview` 加「可选字段或复用 method」 | 加 `warnings: Vec<String>`（`skip_serializing_if` 空）+ `types.ts` 可选字段 | 选「可选字段」这条；`method` 是给 UI 展示当前蒙版算法用的，塞错误会破坏语义 |
 | D10 | `snapshot.rs` 里 `sha256` 取自 spec | 一致，但**用户模型**的 `sha256` 取自 manifest 的声明值 | 用户模型不做哈希复核（见 §10.1-5），字段名与语义在 `license.note` 里说明 |
+| D11 | `TensorSpec.shape: Vec<usize>` | `TensorSpec.shape: Cow<'static, [usize]>`（`TensorSpec::declared(&'static [usize], ..)` 走 `Borrowed`，`TensorSpec::observed(Vec<usize>, ..)` 走 `Owned`） | **纯 `Vec<usize>` 无法在 const 里构造**：`const YUNET` 需要 `shape: Cow::Borrowed(&[..])`（零堆分配），而 `inspect()` 必须能表达任意 ONNX 文件的动态形状（`Cow::Owned`）。`Cow` 同时满足两者，因此"声明契约"与"观测契约"仍是同一个类型，没有分裂成两套结构。代价：`TensorSpec` / `ModelSpec` 不再是 `Copy`（`bytes` 级 clone 出现在 3 处：`LoadedPlan.input_spec`、`TensorBatch.spec`、`ModelEntryView.input`） |
+| D13 | （§14.3-2 建议）加 `is_placeholder()` | 已加：`is_placeholder()` = 形状全 0 / 空形状；`validate()` 首行拒绝占位契约（`E_MODEL_CONTRACT`） | 全 0 形状的 `element_count() == 0`，若不拦，"空数据"会静默通过元素数校验。本项原标"下一轮"，因为只需几行且能关掉一个正确性口子，本轮直接做掉 |
+| D12 | （设计未涉及）`ai/model.rs` 从 `YUNET.file` 派生的写法 | 字面量提成 `builtin::YUNET_FILE` / `YUNET_SHA256` / … 等独立 `const`，`ModelSpec` 与 `MODEL_*` 都引用它们 | 由 D11 派生出的硬约束：`const X: &str = CONST_ITEM.field;` 对含 `Cow` 的 const 会报 `E0493: destructor of ModelSpec cannot be evaluated at compile-time`（求值出的临时量需要在常量期 drop）。提成独立 `const` 后，「单一真相」与「const 链」同时保住，且 `MODEL_*` 仍是编译期常量（`commands/faces.rs:22` 的 `resources.join(..).join(MODEL_FILE)` 无需改） |
 
 ---
 
 ## 12. Git commit SHA 与工作区状态
 
-- 本轮代码提交：**`ff91cee6114d162c532da87082926715737faa2f`**
-  （`feat(r11): 统一模型注册表与推理准入链`，29 files changed, 7181 insertions(+), 116 deletions(-)）
-- 本文件的 SHA 回填是一次单独的 `docs(r11)` 提交（只改这一行，不动代码）。
+提交序列（每次都在提交后重跑全量验证）：
+
+| # | SHA | 内容 |
+|---|-----|------|
+| 1 | `ff91cee6114d162c532da87082926715737faa2f` | `feat(r11): 统一模型注册表与推理准入链`（29 files, +7181 / -116） |
+| 2 | `945bd46` | `docs(r11): 回填本轮代码提交 SHA` |
+| 3 | 见 `git log -1` | `feat(r11): 补 InferenceBackend::inspect 与 TensorSpec 动态形状`（设计 1247→1444 的三条更正） |
 - 提交范围（**未用 `git add -A`**）：
   `src-tauri/src`、`src-tauri/tests`、`src/lib`、`src/types.ts`、
   `docs/R11_AUDIT_AND_DESIGN.md`、`docs/MODEL_LICENSE_REGISTER.md`、`docs/R11_ROUND_REPORT.md`

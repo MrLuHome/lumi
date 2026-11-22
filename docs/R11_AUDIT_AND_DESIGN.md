@@ -297,7 +297,7 @@ flowchart TB
 | 12 | **tract 解析 + 优化 + 编译** | `model_for_path().into_optimized().into_runnable()` | `ai/face.rs:121-127` | 阻塞线程 | 约几十~几百 ms，一次 |
 | 13 | 存 plan | `*guard = Some(Arc::new(LoadedModel{plan}))` | `ai/face.rs:129-134` | 阻塞线程 | `Arc<Mutex<Option<...>>>` |
 | 14 | 预处理：缩放到 640 | `imageops::resize(..., 640, 640, Triangle)` | `ai/face.rs:160-161` | 阻塞线程 | |
-| 15 | 组装 NCHW f32 | 手工三重循环，`pixel/N` ÷ **257.0** | `ai/face.rs:162-170` | 阻塞线程 | ⚠️ 与 `MODEL_INPUT` 常量"0..255"矛盾（R9） |
+| 15 | 组装 NCHW f32 | 手工三重循环，`value as f32 / 257.0`（`PIXEL_SCALE`） | `ai/face.rs:162-170`；常量 `:32` | 阻塞线程 | u16 0..65535 ÷ 257 → **0..255**，与 `MODEL_INPUT` 一致（详见 §6 R9 更正） |
 | 16 | **tensor 推理** | `plan.run(tvec!(tensor.into_tvalue()))` | `ai/face.rs:181-184` | 阻塞线程，**不可中断** | 无 `CancelToken`（R12） |
 | 17 | 输出展平 | `to_plain_array_view::<f32>()` × 12 个输出 | `ai/face.rs:188-194` | 阻塞线程 | |
 | 18 | 后处理解码 + NMS | `postprocess::decode_all(vectors, 0.6, 0.3)` | `ai/postprocess.rs`；调用 `face.rs:196` | 阻塞线程 | |
@@ -490,7 +490,7 @@ src-tauri/tests/model_registry.rs           ← 集成测试（缺失/损坏/版
 | **R6** | **错误被吞 / 不可判别**（4 处） | ① `AppError` Serialize 成裸字符串（`error.rs:43-45`）→ 前端只能显示，无法 `switch(code)`；② `FaceModelStatus.error` 恒为 `None`（`ai/face.rs:96`）→ 无法区分"文件缺失"与"SHA 不符"；③ `skin_model_status` 无 `Result`，永远 200；④ `preview_skin_mask` 用 `if let Ok(mask)` 静默丢弃失败脸（`beauty.rs:179`） | 前端无法做"缺失 → 引导重装 / 损坏 → 引导重新导入 / 未授权 → 灰按钮+说明"的分支；用户只看到"没效果" | 高 |
 | **R7** | **错误文案错配**：`AppError::Unsupported` 的 `Display` 前缀是"不支持的图片格式："，但 AI 层大量用它表达模型问题 | `error.rs:9-10`；使用点 `ai/face.rs:116-118`（SHA 失败）、`beauty.rs:221-223`（模型缺失）、`skin_segmentation/model.rs:111-129` | 用户看到"不支持的图片格式：人脸模型 SHA256 校验失败" → 会去换图片。**这是现网可复现的误导** | 中 |
 | **R8** | `resources/models/skin/**`、`resources/models/segmentation/**` 不在打包资源列表 | `tauri.conf.json:50-53` vs `skin_segmentation/model.rs:97-105` | 将来放入权重文件后，`locate()` 在安装包内仍返回 `None`，静默回退几何蒙版。开发机能跑、打包后失效 | 中（潜伏） |
-| **R9** | 常量与实现量纲不一致 | `ai/model.rs:7` 写 `"1×3×640×640 float32（BGR，0..255）"`；`ai/face.rs:167-169` 实际 `/257.0` → **实际是 BGR 0..1** | 若 R11 的通用 preprocess 按常量字符串实现 `Raw255` 归一化，输入量纲差 255 倍 → YuNet 输出全空（分数 <0.01），表现为"AI 突然检测不到人脸" | **高（若照抄字符串）** |
+| **R9** | **契约是自由字符串，没有结构化量纲**（注：初版曾误判为"常量与实现量纲不一致"，见下方「R9 更正」） | `ai/model.rs:7` 的 `MODEL_INPUT` 是 `"1×3×640×640 float32（BGR，0..255）"` 这样一段**人读字符串**，机器无法校验；`ai/face.rs:277-279` 的 `value[2] as f32 / PIXEL_SCALE`（`PIXEL_SCALE = 257.0`，`u16::MAX/257.0 == 255.0`）实际产生 **0..255**，与常量**一致** | 风险不在"写错"，在"**无法机器校验**"：任何新模型/新预处理都必须靠人读字符串理解量纲，抄错（例如把 u16 当 u8 再除一次 257）不会有任何编译期或测试期提示。这是"未来误抄"风险，不是现存 bug | **中**。R11 已用 `TensorSpec.value_range` 结构化根治，并由单测把常量与结构化 spec 锁死 |
 | **R10** | 模型身份未进项目文件 | `image_engine/project.rs`（`ProjectFaceRecord`）只存 face uuid/点位；`commands/project.rs` 无 model id/version 字段 | 项目在 YuNet 下保存、换 Provider 后打开，旧稠密点被当作当前模型输出。已有 `clear_analyses`（`state.rs:241`）缓解 Provider 切换，但**重启后无记录** | 中 |
 | **R11** | 撤销/重做粒度：一键美肤一次性把所有脸的 `beauty` 写入 params | `BeautyPanel.tsx:178-192` 单次 `updateParams(..., "一键美肤")` | 人像修图用户常想"只重做第 2 张脸"。当前粒度不可拆。**记录，不在 R11 修** | 低 |
 | **R12** | `FaceEngine::detect` 不可取消 | `ai/face.rs:146-153` 只有 `progress` 回调，无 `CancelToken`；对比 `providers/yunet.rs:131,156` 有检查 | 640×640 推理约几十 ms，影响小；但未来接入分割模型（单图数百 ms~秒级）会成为问题。R11 顺手预留方法签名 | 低 |
@@ -498,6 +498,19 @@ src-tauri/tests/model_registry.rs           ← 集成测试（缺失/损坏/版
 | **R14** | **`model_hub` 的"用户自导入即可用"与 R11"不得加载未审核权重"字面冲突** | `model_hub/mod.rs:119-208`（导入 → probe 通过即可安装）；`registry.rs:171-179`（装了就成为 Provider 候选）；`model_hub/mod.rs:245-248`（`license_state` 恒 `UserUnverified`）；`capability.rs:184-193`（`UserUnverified.is_usable_locally() == true`） | ① 法务：用户导入 GPL/研究限定权重后在本机使用，LUMI 是否为"帮助侵权"存在解释空间；② 产品：用户模型可能被误认为"官方能力"；③ 技术：用户模型无 `topology` 校验时可产出假稠密点 | **高（合规）**。处置见 §7.5.3：同一闸门 + `UserLocal` 档 + 不进正式清单 + 不参与默认路径 |
 | **R15** | **SHA-256 实现 6 处、其中 2 处功能等价**（详见 §2.4.1） | `ai/model.rs:13`（`{:02x}`）vs `model_hub/security.rs:40`（`{:x}`）；另有 3 处内联 | 输出等价故当前无 bug，但**"用哪份哈希登记"没有权威答案**；未来若某处改成大写或带前缀，登记值会静默失效。且 `sha256_hex`/`sha256_bytes` 都是**全内存**版，用于 512MB 上限的权重有 OOM 风险 | 中（债） |
 | **R16** | **ONNX 加载点 5 处、plan 复用策略各不相同**（详见 §2.4.2） | `ai/face.rs:121`（缓存，✓）；`model_hub/inference.rs:84`（不缓存，= R3）；`probe.rs:252`（子进程内一次性）；`validator.rs:87,100`（只读结构） | 5 处错误语义、超时、panic 隔离策略各不相同（只有 `probe.rs:250` 和 `model_hub/inference.rs:95` 用 `catch_unwind`），统一推理层必须先能覆盖这 5 种形态才谈迁移 | 中 |
+
+#### ⚠️ R9 更正（初版判断错误，已撤销）
+
+> **本文件初版把 R9 描述为"常量写 0..255、实现是 0..1"——该判断不成立，现撤销。** 依据两条独立证据：
+>
+> 1. **类型证据**：`image_engine/buffer.rs:10` `pub type Image16 = ImageBuffer<Rgba<u16>, Vec<u16>>` —— 像素是 **u16（0..65535）**，不是 u8。`ai/face.rs:167-169` 的 `/257.0` 因此是 `0..65535 / 257 → 0..255`（`u16::MAX / 257.0 == 255.0`，因 `257 × 255 = 65535`）。**只有像素是 u8 时 `/257` 才会得到 0..1。**
+> 2. **行为反证**：若真把 0..1 喂给要求 0..255 的模型，`tests/face_detection.rs` 的 `assert!(score > 0.6)` 必然崩溃；该测试本轮前后**都通过**（`portrait.jpg` 1 张脸、`group.jpg` 4 张脸）。
+>
+> **结论**：`ai/model.rs:7` 的「BGR 0..255」**本来就是对的**；`MODEL_INPUT` 与实现一致，不存在量纲漂移。
+>
+> **修正后的真实风险表述**：R9 的本质不是"写错"，而是"**契约以人读字符串表达、无法机器校验**"。真正要防的是**未来误抄**（例如新增一个模型时把 u16 当 u8、或对已经是 0..255 的数据再乘 255）。这也正是为什么本轮必须引入 `TensorSpec.value_range` 结构化表达，而不是继续用字符串。
+>
+> **由此产生的设计更正**：`builtin::YUNET.input.value_range` 必须是 **`ValueRange::Raw255`**，**不是** `ZeroOne`。若按初版登记 `ZeroOne`，任何"照契约做通用预处理"的代码都会对已经是 0..255 的输入再归一化一次，**恰好制造初版想避免的那个 255 倍误差**。
 
 ### 6.1 与 `--no-default-features` 的兼容性核查（已实测）
 
@@ -560,12 +573,12 @@ pub enum ModelTask { FaceDetect, FaceLandmark, SkinParse, FaceParse, SubjectSegm
 pub enum ModelFormat { Onnx }
 pub enum ModelOrigin { Builtin, UserImported { manifest_id: String } }
 
-/// 结构化 IO 契约，替代 ai/model.rs:7-8 的自由字符串（规避 R9）
+/// 结构化 IO 契约，替代 ai/model.rs:7-8 的自由字符串（目标：让量纲可机器校验，见 R9）
 pub struct ModelIo {
     pub dtype: Dtype,          // F32
     pub layout: Layout,        // Nchw
     pub shape: Vec<usize>,     // [1,3,640,640]
-    pub value_range: ValueRange, // ZeroOne（YuNet 实际口径，见 R9）
+    pub value_range: ValueRange, // YuNet = Raw255（u16÷257 得 0..255，见 §6 R9 更正）
     pub channel_order: ChannelOrder, // Bgr
     pub outputs: Vec<OutputHead>, // name + shape + 语义
 }
@@ -707,6 +720,13 @@ stateDiagram-v2
 
 **为什么还要 `findings` 全量**：顺序判定会让 `Missing` 掩盖 `Corrupt`。运维排查时需要一次看到"许可未核实 + 文件也不存在"。所以 `check()` 走完整流程收集 `findings`，`blocking` 取顺序上第一个。
 
+**④ 与 ⑤ 的顺序对「SHA 已钉死的内置模型」是可交换的**（实施回看后补充，见 §14 D6）：
+- 内置权重的 `sha256` 是编译期常量。任何内容与登记值不同的文件，无论叫"损坏"还是"版本不符"，**都不得加载**——两者在阻断力上完全等价。
+- 交换的唯一后果是**报码差异**：`④` 先跑 → 报 `E_MODEL_VERSION`；`⑤` 先跑 → 报 `E_MODEL_CORRUPT`。对钉死 SHA 的内置权重，`CORRUPT` 其实是更准确的描述（"这个路径上的文件不是我们登记的那个制品"）。
+- `E_MODEL_VERSION` 只在**未钉 SHA** 的模型上才有独立语义，而那条路走 `model_hub::validator`（L2/L3），不经本热路径。
+- **硬约束**：`model_registry_check`（诊断命令）必须保持 `include_contract = true` 的完整顺序 ①②③④⑤，让用户显式查询时能拿到最准确的码；热路径可省 ④ 以避免 232KB 权重解析两遍。前端对 `E_MODEL_CORRUPT` 与 `E_MODEL_VERSION` **必须给同一个处置动作**（重新校验 / 重装），不得让用户以为"换个版本就能好"。
+- **不可交换的是 ① 与 ③**：许可永远第一（法务 + 成本），体积/格式头永远在哈希之前（避免对 512MB 垃圾文件做哈希）。这两条任何情况下都不许调换。
+
 ### 7.4 对现有 YuNet 的接入方式（含许可证据链）
 
 `builtin.rs` 只登记一条：
@@ -722,7 +742,7 @@ pub const YUNET: ModelSpec = ModelSpec {
     file_name: "face_detection_yunet_2023mar.onnx",
     size_bytes: 232_589,
     sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
-    input: /* [1,3,640,640] F32 NCHW BGR ZeroOne —— 注意是 0..1，不是常量里写的 0..255 */,
+    input: /* [1,3,640,640] F32 NCHW BGR Raw255 —— 与 ai/face.rs:277-279 的 u16/257 一致，见 §6 R9 更正 */,
     output: /* 12 个 head：cls/obj/bbox/kps × stride 8/16/32 */,
     license: LicenseRecord {
         weights: Verdict3::Allowed,
@@ -769,7 +789,7 @@ pub const YUNET: ModelSpec = ModelSpec {
 
 | 位置 | 改造 |
 |------|------|
-| `ai/model.rs:1-11` | 常量值改为 `builtin::YUNET.{display_name, version, sha256, spdx}` 派生；`MODEL_INPUT` 改为 `builtin::YUNET.input.format_human()`（**修正 R9 的 0..255 → 0..1**） |
+| `ai/model.rs:1-11` | 常量值改为 `builtin::YUNET.{display_name, version, sha256, spdx}` 派生；`MODEL_INPUT` 改为 `builtin::YUNET.input.format_human()`，**并用单测强制 `MODEL_INPUT == format_human()`**，让任何量纲漂移立刻变红（常量本身的「0..255」是正确的，见 §6 R9 更正） |
 | `ai/face.rs:100-135` | `load()` 首行插入 `let spec = registry::require("face-detect-yunet-2023mar")?;` + `registry::gate(&spec)?`，SHA 比对改为 `spec.sha256` 而非常量 |
 | `ai/face.rs:79-98` | `status()` 改为从 `registry::snapshot()` 取 `ModelRuntimeState`，**并把 `error` 字段真正填上**（修 R6-②） |
 
@@ -948,11 +968,11 @@ pub enum Dtype { F32 /* 只支持这一种，显式拒绝 F16/I8/U8 */ }
 pub enum Layout { Nchw /* 只支持这一种 */ }
 pub enum ChannelOrder { Bgr, Rgb }
 pub enum ValueRange {
-    /// 0..1（YuNet 实际口径）
+    /// 0..1（未来的 RGB 0..1 模型用；**YuNet 不用这一档**）
     ZeroOne,
     /// -1..1
     MinusOneToOne,
-    /// 0..255（YuNet 常量里**错写**的口径，保留以便显式表达）
+    /// 0..255。**YuNet 用这一档**：u16 像素 ÷ 257 恰好得 0..255（`u16::MAX/257.0 == 255.0`）
     Raw255,
     /// ImageNet mean/std
     Imagenet,
@@ -1340,7 +1360,7 @@ export async function modelUnload(modelId: string): Promise<ModelRuntimeStatus>;
 
 | 项 | 内容 |
 |----|------|
-| **涉及文件** | 新建 `ai_engine/inference/{mod.rs, error.rs, tensor.rs, backend.rs, cpu_tract.rs, gpu_stub.rs}`；改 `ai/face.rs`（`load` 走闸门 + `detect_with_cancel` + `status` 填 `error`）；改 `ai/model.rs`（常量转发 + 修 R9 的 0..255→0..1）；改 `face_intelligence/providers/yunet.rs:33`（注入共享 `FaceEngine`） |
+| **涉及文件** | 新建 `ai_engine/inference/{mod.rs, error.rs, tensor.rs, backend.rs, cpu_tract.rs, gpu_stub.rs}`；改 `ai/face.rs`（`load` 走闸门 + `detect_with_cancel` + `status` 填 `error`）；改 `ai/model.rs`（常量转发 + 用单测锁死 `MODEL_INPUT == format_human()`，见 §6 R9 更正）；改 `face_intelligence/providers/yunet.rs:33`（注入共享 `FaceEngine`） |
 | **依赖** | T01（需要 `ModelSpec` 与 `gate`） |
 | **验收点** | ① `InferenceError::code()` 11 个分支全覆盖单测；② `TensorBatch::new` 对元素数不符/NaN/Inf 返回 `E_INPUT`；③ `CpuTractBackend::load` 对 232589B 的真实 YuNet 成功返回 `LoadedPlan`；④ **`tests/face_detection.rs` 与 `tests/beauty_real.rs` 必须仍全绿**（这是本轮最关键回归）；⑤ `detect()` 旧签名行为不变（单测断言两者输出 struct 相等）；⑥ `GpuBackend::capabilities().available == false` 且 `run` 返回 `E_BACKEND`；⑦ `plan.run` 用 `catch_unwind` 包裹（复用 `probe.rs:250` / `model_hub/inference.rs:95` 先例）；⑧ 双特性编译通过；⑨ `inspect()` 能对真实 YuNet 返回 `ir_version/opset/inputs/outputs`，证明 trait 覆盖 §2.4.2 的 L2/L3 形态（**只测形状可覆盖，不迁移 validator**） |
 | **明确不做** | 不替换 tract、不接 wgpu。**5 个 ONNX 加载点（§2.4.2）本轮只迁 L1（`ai/face.rs:121`）**；L2/L3（`validator.rs:87,100`）、L4（`probe.rs:252`）、L5（`model_hub/inference.rs:84`）**全部标注"后续迁移"并在模块注释里列出编号**，不改它们的代码（R3 留到 R12） |
@@ -1427,7 +1447,7 @@ graph TD
 | **Q1** | **用户导入模型（`model_hub`）的准入严格度怎么定？** 现语义：`UserUnverified` 可本地加载、装了就能当 Provider 用（`capability.rs:184-193`、`registry.rs:171-179`） | 高：法务（R14）+ 已发布的第八轮功能 | **采纳主理人倾向**：同一闸门 + 新增 `AdmissionState::UserLocal` —— 拦 `NotAllowed`，`Unverified` 放行但标 `userLocal`/`userUnverified`，**不进正式清单、不参与默认美肤/默认精修/批量默认推导**，须用户在 `ModelHubPanel` 手动选中才生效。详见 §7.5.3。若要求更严（Unverified 也一律拒绝），需同步给导入 UI 加许可确认勾选，属产品决策 |
 | **Q2** | **`skin_model_status` 的返回结构是否保留 `SkinModelStatus`？** 新增 `RegistrySnapshot` 后有两套模型状态视图 | 中：`BeautyPanel.tsx:114`、`types.ts:277` 依赖 | **保留**。`skin_model_status` 改为从 registry 取数但**输出形状不变**，避免动前端 |
 | **Q3** | **`resources/models/skin/**` 是否加入 `tauri.conf.json` 打包列表？** 当前不在（R8） | 中：决定未来皮肤模型能否随包分发 | 本轮**不加**（无权重可打包），但在 `docs/MODEL_LICENSE_REGISTER.md` 写明"新增随包权重必须同步改 `tauri.conf.json:50-53`" |
-| **Q4** | **`ai/model.rs` 的常量是否允许改为 registry 派生？** 这会修改既有文件（`ai/face.rs:10` 引用） | 中：属"修改现有代码"，需授权 | **允许**（仅改常量值来源，签名不变）。若不授权，T03 只能复制一份常量，会留下 R9 的双份真相 |
+| **Q4** | **`ai/model.rs` 的常量是否允许改为 registry 派生？** 这会修改既有文件（`ai/face.rs:10` 引用） | 中：属"修改现有代码"，需授权 | **允许**（仅改常量值来源，签名不变）。若不授权，T03 只能复制一份常量，会留下"字符串契约"的双份真相（R9） |
 | **Q5** | **Windows 的 `resource_dir` 相对路径本轮是否验证？** `commands/faces.rs:16` 与 `beauty.rs:21` 都写了双候选 `["resources/models/yunet", "models/yunet"]`，但 Windows 未构建过 | 低（当前）→ 高（R11 后上 Windows 时） | 本轮**不验证**，但 `locate()` 设计成接受候选列表，上 Windows 时只改命令层一行 |
 
 ---
@@ -1442,3 +1462,34 @@ graph TD
 - 不新增依赖、不替换 tract、不接 wgpu 推理。
 - 不修改 `tauri.conf.json`。
 - 不提交工作区已有的 3 个未跟踪文件（`docs/REVIEW_PERF_SECURITY.md`、`docs/UX_EXPERIENCE_AUDIT_2026-11-22.md`、`.workbuddy/`）。
+
+---
+
+## 14. 交付后复核：对工程师偏离的裁决（R11 实施回看）
+
+> 本节由架构师在工程师交付（`docs/R11_ROUND_REPORT.md` §11）后补写。**只做裁决，不改代码。**
+
+### 14.1 五条带架构风险的偏离
+
+| 偏离 | 判断 | 理由 |
+|------|------|------|
+| **D6** 热路径把第 ④ 步（契约）推迟到 `CpuTractBackend::load`，`model_registry_check` 就地做（省一次 232KB 解析，实测 parse-only 19.2 ms） | **可接受（附条件）** | **不破坏"许可先于一切"**（① 仍第一），也**不破坏"体积/格式先于哈希"**（③ 仍在 ⑤ 前），这两条是不可交换的硬约束。④↔⑤ 之所以可交换：内置权重 SHA 是编译期钉死的，任何内容不符的文件都不得加载，`E_MODEL_CORRUPT` 与 `E_MODEL_VERSION` 在**阻断力上等价**，且对钉死制品 `CORRUPT` 更准确。条件：① `model_registry_check` 必须保留 `include_contract=true` 的完整顺序（实测 `verify.rs:28-107` 已是如此）；② 前端对两个码必须同处置；③ 已在 §7.3 补"④⑤ 可交换"说明，防止后人误以为顺序无关 |
+| **D7** `FaceModelStatus.error` 用 `check_shallow`（①②③，实测 0.109 ms）现算，不走完整 `snapshot()` | **可接受，但"假象"需显式处置** | 方向**正确**：`face_model_status` 是**同步命令**，把 232KB（今天）/ 50MB（未来皮肤权重）的哈希搬进主线程正是 R1 那个定时炸弹。假象窗口存在但有界且**自愈**：SHA 不符时真正加载会返回 `E_MODEL_CORRUPT`，前端能拿到码。条件：**前端文案不得出现"已验证/已校验"**（实测 `FacePanel.tsx:75-82` 只说"模型就绪/模型缺失"，未过度承诺 ✓，但 `error` 字段后端已填、前端**尚未渲染**——见 §14.3 第 1 条）。建议下一轮加 `checkDepth: "shallow" \| "full"` |
+| **D1 + D2** `run -> Result<Vec<TensorBatch>, _>`（原单个）；`ModelSpec.input: TensorSpec` + `outputs: &'static [OutputHead]`（原 `ModelIo`） | **可接受，且属对设计的必要修正** | ① YuNet 有 **12 个 head**，单个 `TensorBatch` 表达不了多 head 契约——**这是我设计时的疏漏**。② `Vec<usize>` 不是 const 可构造，形状必须是 `&'static [usize]` 才能放进 `const YUNET`——同理是设计疏漏。③ `ModelIo` 与 `TensorSpec` 字段完全重复，合并是正确去重。**唯一要求**：`TensorSpec` 的 `shape: &'static [usize]` 要配一个 `is_placeholder()` 或对全 0 形状显式拒绝（见 §14.3 第 2 条） |
+| **D3** `ModelOrigin::UserImported { manifest_id: String }` → `ModelOrigin::UserImported`（去 payload） | **结果可接受，但给出的理由不成立** | 枚举带 payload **不防碍** `Builtin` 变体在 `const` 中构造（只要不构造带 payload 的那一档），所以"无法在 const 里构造"作为理由站不住。**结果可接受**的真实依据是：用户模型的 `id` 直接取自 manifest（实测 `snapshot.rs:167-186` 的 `UserModelSnapshot.id` → `ModelEntryView.id`），**没有信息丢失**。要求：纠正 `spec.rs` 的注释理由，避免后人误以为"带 payload 的枚举不能进 const" |
+| **D8** 未改 `providers/yunet.rs:33`（未注入共享 `FaceEngine`） | **可接受，且遵守正确** | 任务书 §6 明确点名"模型重复加载（R2）**只记录不修**"。改它要动 `FaceIntelligence::new` 与 `reload_models()`，属 R2 范围，越界才是错的。R2 继续登记在案，等专项轮处理 |
+
+### 14.2 其余四条（无争议，一并附注）
+
+| 偏离 | 判断 | 备注 |
+|------|------|------|
+| **D4** `RegistrySnapshot` 追加 `models[].official` + `summary.{official,userImported}` | **可接受，优于原设计** | 原设计把"用户本机"塞进 `state: "userLocal"`，会让状态机变成 7 态且与"失败态"混在一起。用**正交的 `official` 布尔位**表达更干净：状态机仍是 6 个运行态，`official` 单独表达"是否进正式清单"。符合 Q1 裁决 |
+| **D5** `model_registry_snapshot` 改为 `async` + `spawn_blocking` | **可接受** | 任务书 T04 验收点原文要求"4 个命令全部 `spawn_blocking`，唯一例外 `model_unload`"。我的 §9.1 写"同步"与任务书自相矛盾，**以任务书为准** |
+| **D9** `MaskPreview` 加 `warnings: Vec<String>`（`skip_serializing_if` 空）+ `types.ts` 可选字段 | **可接受** | 我给的选项就是"加可选字段 **或** 复用 `method`"。选前者正确：`method` 的语义是"当前蒙版算法"，塞错误会污染 UI 判读。`skip_serializing_if` 保证旧前端不受影响 |
+| **D10** 用户模型 `sha256` 取自 manifest 声明值、不做哈希复核 | **可接受（有条件）** | 不与"损坏禁止加载"冲突的前提是：用户模型真正加载前仍要过 `model_hub::probe` 的隔离冒烟（`probe.rs` 会重算 SHA 并与 manifest 比对，`storage.rs:102-110`）。**要求**：`license.note` 必须写明"sha256 为用户声明值，未在本机复核"，且 `state` 不得因此标成 `verified`——已核查当前实现把未验证的标 `loadFailed`，符合 |
+
+### 14.3 实施观察（下一轮处理，非阻塞）
+
+1. **`FaceModelStatus.error` 后端已填、前端未渲染。** `commands/faces.rs:47-49` → `ai/face.rs` 的 `status()` 现在会填 `error`，但 `components/FacePanel.tsx` 全文**没有任何地方渲染 `modelStatus.error`**（只按 `available` 显示"模型就绪/模型缺失"）。所以 D7 的"假象"在用户可见面上并没有被消除，只是从"没有错误信息"变成"有信息但没显示"。下一轮应渲染它，或加 `checkDepth` 字段让徽章区分"浅检通过"与"完整校验通过"。
+2. **用户模型视图用 `shape: &[0,0,0,0]` 作占位。** `snapshot.rs:188-196` 对用户模型给 `shape [0,0,0,0]` + `ZeroOne` + `Rgb`（注释写"不给假形状"，但 0 形状本身也是伪值）。当前只用于展示故无碍；但若未来 `TensorBatch::new_for` 对用户模型生效，`element_count() == 0` 会让"空数据"通过 `validate()`。建议加 `TensorSpec::is_placeholder()` 并在 `run` 前显式拒绝。
+3. **`ai/model.rs` 与结构化 spec 的锁定已到位，值得保留。** 实测 `MODEL_INPUT == YUNET.input.format_human()` 有单测强制（`model_input_matches_the_structured_spec`），且 `tests/model_registry.rs` 与 `tensor.rs` 双重锁 `u16::MAX/257.0 == 255.0`。这正是 R9 更正后应有的形态：**常量不是"真相"，结构化 spec 才是真相，常量只是它的渲染**。

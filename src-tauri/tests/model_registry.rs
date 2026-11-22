@@ -14,7 +14,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use lumi_retouch_lib::ai::FaceEngine;
-use lumi_retouch_lib::ai_engine::inference::{InferenceError, TensorSpec, ValueRange};
+use lumi_retouch_lib::ai_engine::inference::{
+    CpuTractBackend, InferenceBackend, InferenceError, TensorSpec, ValueRange,
+};
 use lumi_retouch_lib::ai_engine::model_registry::builtin;
 use lumi_retouch_lib::ai_engine::model_registry::license::{LicenseRecord, Verdict3};
 use lumi_retouch_lib::ai_engine::model_registry::spec::{ModelOrigin, ModelSpec};
@@ -48,8 +50,10 @@ fn copy_real_model(dir: &Path) -> PathBuf {
     target
 }
 
-fn leak_shape(shape: Vec<usize>) -> &'static [usize] {
-    Box::leak(shape.into_boxed_slice())
+/// 形如 `ModelSpec { input: TensorSpec { shape: Cow::Owned(..) } }` 的测试夹具：
+/// 形状来自运行时（模拟"换了一个不同契约的权重"）。
+fn owned_shape(shape: Vec<usize>) -> std::borrow::Cow<'static, [usize]> {
+    std::borrow::Cow::Owned(shape)
 }
 
 fn spec_with_license(weights: Verdict3, commercial: Verdict3, redistribution: Verdict3) -> ModelSpec {
@@ -137,7 +141,7 @@ fn engine_missing_model_surfaces_a_structured_error() {
 fn wrong_input_shape_is_a_version_mismatch() {
     let spec = ModelSpec {
         input: TensorSpec {
-            shape: leak_shape(vec![1, 3, 320, 320]),
+            shape: owned_shape(vec![1, 3, 320, 320]),
             ..builtin::YUNET.input
         },
         ..builtin::YUNET
@@ -154,7 +158,7 @@ fn contract_is_checked_before_sha256() {
     // 因此结果是「版本不符」而不是「损坏」。
     let spec = ModelSpec {
         input: TensorSpec {
-            shape: leak_shape(vec![1, 3, 320, 320]),
+            shape: owned_shape(vec![1, 3, 320, 320]),
             ..builtin::YUNET.input
         },
         sha256: "0000000000000000000000000000000000000000000000000000000000000000",
@@ -423,6 +427,21 @@ fn model_runtime_state_strings_match_the_frontend_union() {
     assert_eq!(states[0].as_str(), expected[0]);
     assert_eq!(states[1].as_str(), expected[1]);
     assert_eq!(expected.len(), 7);
+}
+
+#[test]
+fn inspect_covers_the_l2_l3_read_only_shape() {
+    // 设计 §8.6 验收点 ⑨：trait 必须能表达 model_hub/validator.rs 的
+    // 「只读结构」形态（ir_version / opset / inputs / outputs），且不需要编译 runnable。
+    let backend = CpuTractBackend::new();
+    let introspection = backend
+        .inspect(&model_path(), &CancelToken::default())
+        .unwrap();
+    assert_eq!(introspection.input_shapes(), vec![vec![1, 3, 640, 640]]);
+    assert_eq!(introspection.outputs.len(), 12);
+    assert!(introspection.ir_version.unwrap_or(0) > 0);
+    assert!(introspection.opset.unwrap_or(0) > 0);
+    assert!(introspection.operator_count > 0);
 }
 
 #[test]
