@@ -553,7 +553,7 @@ pub struct ModelIntrospection {
 |---|-----|------|
 | 1 | `ff91cee6114d162c532da87082926715737faa2f` | `feat(r11): 统一模型注册表与推理准入链`（29 files, +7181 / -116） |
 | 2 | `945bd46` | `docs(r11): 回填本轮代码提交 SHA` |
-| 3 | `96c716df` | `feat(r11): 补 InferenceBackend::inspect 与 TensorSpec 动态形状`（设计更新的三条更正 + §14 复核项） |
+| 3 | `96c716d4a3e35bf66a1ed62828a37fc9415f38d0` | `feat(r11): 补 InferenceBackend::inspect 与 TensorSpec 动态形状`（设计更新的三条更正 + §14 复核项） |
 - 提交范围（**未用 `git add -A`**）：
   `src-tauri/src`、`src-tauri/tests`、`src/lib`、`src/types.ts`、
   `docs/R11_AUDIT_AND_DESIGN.md`、`docs/MODEL_LICENSE_REGISTER.md`、`docs/R11_ROUND_REPORT.md`
