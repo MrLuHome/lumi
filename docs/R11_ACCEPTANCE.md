@@ -67,7 +67,7 @@ $ git status --short          # 验收开始时（21:38）：干净，仅 3 个�
 | 前端复跑 | **一致**（vitest 81 passed、tsc 0 error） |
 | 10 条验收条件 | **9 PASS / 1 部分通过 / 0 FAIL**（A8 的命令层仍无端到端测试，但已补 4 条契约测试，见 §12.3） |
 | 对外契约（`96c716d`） | **零变化**（`RegistrySnapshot` 字段、`types.ts` 仅加注释、`ModelSpec` 去 `Copy` 无调用点损坏） |
-| 弱测试 / 假绿 | **0 条**（§5 初查的 4 条已在 `16f64a1` 全部改造成「真能失败」，§12.3 逐条核） |
+| 弱测试 / 假绿 | **空转 0 条**（§5 初查的 4 条已在 `16f64a1` 全部改造成"真能失败"，§12.3 逐条核；W2 跨语言锁仍留「Rust→TS」单边缺口，记为 N7） |
 | 缺陷 | 阻断 0 / 严重 1（S2：R13 前置地雷 `skin_segmentation::status()` 仍会算 SHA）/ 一般 4（N1/N3/N6 已关闭，N2/N4/N5 保留） |
 | 离线与依赖红线 | **通过**（零网络调用、`Cargo.toml`/`Cargo.lock` 零改动） |
 | 主线程阻塞 R1 | **本轮合规**（`snapshot` 实测 0.0097 ms，浅检查 0.0711 ms），但**未根治**（＝ S2） |
@@ -569,7 +569,14 @@ R11 的功能正确性**不依赖**这 4 条测试 —— 真正的护栏是 `te
 `git show --stat 16f64a1`：10 files / +523 / −54，含 `ai/face.rs`(+49)、`verify.rs`(+78)、
 `commands/model_status.rs`(+132)、`spec.rs`(+54)、`mod.rs`(+45)、`tests/model_registry.rs`(+101)、
 `tensor.rs`(+37)、`builtin.rs`(+8)、`snapshot.rs`(+8)、`ROUND_REPORT.md`。
-`src/types.ts` 不在本提交中 —— **正常**：W2 只是**读取**它（`include_str!`），联合类型本身无需改动。
+`src/types.ts` 不在本提交中 —— **正常**：W2 只是**读取**它（`include_str!`），联合类型本身无需改动
+（它已在 `96c716d` 提交，仅 6 行注释）。
+
+**签收后追加**：`fb5079a test(r11): 补快照键集契约测试并归档验收报告` 在 `commands/model_status.rs`
+的 `mod tests` 内追加了一条 `registry_snapshot_serializes_with_the_frontend_key_set`（前端快照键集 +
+断言**不含** `blocking` 字段 + 许可四字段/`unverifiedFields`/input 结构化契约），
+因此 `fb5079a` 上 `cargo test --lib` 实测为 **478 / 0 / 3**（`--test model_registry` 仍 18）。
+该提交同时把本报告归档，但归档的是**修订前版本**（§12.3 的 W2 结论与 §12.4 的 N7 条目在归档之后才写入）。
 
 ### 12.2 关键测试的执行证据
 
@@ -585,7 +592,7 @@ test ai::face::tests::detect_and_detect_with_cancel_are_equivalent_on_a_real_por
 | 编号 | 终版实现（`16f64a1`） | 能失败吗 | 判据 |
 |------|----------------------|----------|------|
 | W1 | `ai/face.rs:398` 改名为 `detect_and_detect_with_cancel_are_equivalent_on_a_real_portrait`；用 `tests/fixtures/images/portrait.jpg` + `decoder::decode` + `fit_within(…,1800)`；先 `assert!(!legacy.faces.is_empty(), "真实人像未检出人脸，本测试会退化成 0 == 0")`；再逐字段比 `id/uuid/score/x/y/width/height` + 每个 landmark 的 `x/y`（`close()` 按量级缩放的 epsilon） | ✅ **能** | 若把 `detect_with_cancel` 的 `width/height` 传错、或后处理坐标换算错、或关键点顺序错，逐字段比较必红；人脸数为 0 时前置断言先红 |
-| W2 | `tests/model_registry.rs:405` 函数体重写：**7 个变体全部构造**并逐一 `assert_eq!(state.as_str(), expected)`；再 `include_str!("../../src/types.ts")` 切出 `export type ModelState = …;` 段，**双向**比对（每个 Rust 状态必须出现在 TS union 里；TS union 里每个字面量必须出现在 Rust 已知状态里） | ✅ **能** | 在 `types.ts` 里删掉一个状态字面量 → 正向断言红；在 `types.ts` 里多加一个 → 反向断言红。**这正是我建议的跨语言锁，且比原建议更严** |
+| W2 | `tests/model_registry.rs:405` 函数体重写：**7 个变体全部构造**并逐一 `assert_eq!(state.as_str(), expected)`；再 `include_str!("../../src/types.ts")` 切出 `export type ModelState = …;` 段（`find("export type ModelState =")` 到第一个 `';'`，**不是整个文件**），**双向**比对 | ⚠️ **基本能，但缺一个方向**（见下） | TS→Rust：在 `types.ts` 删/改一个状态字面量 → 正向断言红 ✅；在 `types.ts` **多加**一个字面量 → 反向断言红 ✅。**但 Rust→TS 单边漂移抓不到**：若只给 `ModelRuntimeState` 加第 8 个变体、不动 `types.ts`，测试里 `states` 数组仍是硬编码 7 项，`assert_eq!(states.len(), 7)` 只是一条**手动提示**（文案已写"变了就必须同步"），不会变红。两边同时加才会被反向循环抓住 |
 | W3 | `spec.rs:185` 改名为 `every_registered_model_id_follows_the_naming_contract`；遍历 `builtin::ALL`，校验长度/字符集/首尾非 `-`/无 `--`/**任务前缀**（`task_prefix(spec.task)`）/版本尾段长度/**不重复**；开头 `assert!(!builtin::ALL.is_empty())` 防「空表空转」 | ✅ **能** | 往登记表加一条不合规或重复的 ID → 立刻红 |
 | W4 | `mod.rs:330` 改名为 `snapshot_does_not_hash_the_weight`；构造「拷真实权重 + **翻最后 1 字节、长度不变**」，登记目录指向该副本；断言 `snapshot` 仍报 `verified`（＝没算哈希）、`sha256` 来自登记表、`size_on_disk_bytes` 来自 `metadata`；**再加对照组** `verify::check_at(同一副本)` → `corrupt`，证明这份副本确实坏了 | ✅ **能** | 谁把 `snapshot()` 改成算 SHA，第一条断言立刻变 `corrupt` → 红；对照组保证实验不是「文件其实没问题」 |
 | N3 | `verify.rs:9-19` 注释重写，列出**三组**测试：两条 `tests/model_registry.rs` 的原文名 + 新增的 `verify::tests::license_block_never_reads_the_file`；后者**确实存在**（`verify.rs:386`） | ✅ 已修 | 注释里三个名字我都 `grep "fn <name>"` 核实存在 |
@@ -613,6 +620,11 @@ test ai::face::tests::detect_and_detect_with_cancel_are_equivalent_on_a_real_por
      `is_commercial_license` 只剩测试在用，`pub` 所以无 dead_code 警告）。
   5. **O1（观察）**：`trainingData` 仍是 `Unverified` 却随包分发（设计上"只披露不阻塞"），建议要法务签字。
   6. **O2（观察）**：`release` profile `panic = "abort"` 让 `catch_unwind` 失效，正式包不隔离算子 panic。
+  7. **N7（新增，一般）**：W2 跨语言锁只闭环了「TS → Rust」方向。若将来**只给 Rust 加第 8 个运行态、
+     不动 `types.ts`**，`model_runtime_state_strings_match_the_frontend_union` **不会变红**
+     （`states` 是硬编码 7 项，`assert_eq!(states.len(), 7)` 只是手动提示，见 §12.3-W2）。
+     补救很便宜：在测试里用一个**穷尽 `match`** 把变体映射成名字（编译器会强制新变体进 match），
+     再断言 `match` 覆盖的名字集合 == `types.ts` 的字面量集合。建议排进 R12。
 
 ---
 

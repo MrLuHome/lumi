@@ -23,7 +23,7 @@
 4. `commands/model_status.rs` 4 个新命令 + 前端 `types.ts` / `backend.ts` 契约；
 5. 旧表收敛（`skin_segmentation::status()` 转发 registry）+ 许可台账
    `docs/MODEL_LICENSE_REGISTER.md`；
-6. `tests/model_registry.rs` 18 条验收测试；QA 验收后又收紧了 4 条空转测试（§11.4）。
+6. `tests/model_registry.rs` 18 条验收测试；QA 验收后又收紧了 4 条空转测试（§11.2）。
 
 ---
 
@@ -459,7 +459,7 @@ pub struct ModelIntrospection {
    导致前端拿不到"实际摘要"（`ModelFailure.actual` 为空）。本轮不修（要改签名才能传回实际值），
    已在 `failure_of_maps_every_code_to_a_matching_kind` 里**如实记录现状**，
    一旦回填该测试就会提示同步更新。**R12 修。**
-9. **本轮有 4 条测试一度是空转的**（QA 指出，已全修，见 §11.4）。教训写在这里而不是删掉：
+9. **本轮有 4 条测试一度是空转的**（QA 指出，已全修，见 §11.2）。教训写在这里而不是删掉：
    "在真实素材上断言 `0 == 0`"、"只比 2 个却声明 7 个"、"校验硬编码字面量"、
    "断言现算与不现算同值"，这四种都属于**看起来在测、实际永远绿**。
    今后 R12+ 写"等价性/不变量"类测试时，必须先问一句"什么改动会让它变红"。
@@ -541,7 +541,7 @@ pub struct ModelIntrospection {
 **架构师已在设计文档 §14 复核并采纳本项**：R9 更正为「本质不是写错，而是契约以人读字符串表达、无法机器校验」，并确认
 `ai/face.rs` 的 `u16 / 257.0` **实际产生 0..255，与常量一致**。因此 `Raw255` 是正确登记值，不是偏离遗留。
 
-### 11.4 QA 验收（`docs/R11_ACCEPTANCE.md`）之后的收紧
+### 11.2 QA 验收（`docs/R11_ACCEPTANCE.md`）之后的收紧
 
 QA 结论是 `ff91cee` 通过、无 FAIL，但指出**我自己写坏了 4 条测试**（永远绿、实际空转）。
 这 4 条已全部改成真测试（详见 §6.2），另补 3 处能真正证伪的护栏：
@@ -571,7 +571,7 @@ QA 结论是 `ff91cee` 通过、无 FAIL，但指出**我自己写坏了 4 条�
 | D8 未改 `providers/yunet.rs` | 可接受，遵守正确 | 无动作 |
 | D4 / D5 / D9 / D10 | 可接受 | 无动作。D10 的"note 必须写明 sha256 未本机复核"已在 `LicenseView::user_unverified` 的 note 里；`state` 也确实不会标 `verified`（未通过隔离验证 → `loadFailed`） |
 
-### 11.2 其它偏离（都是为了让设计能编译/能正确表达）
+### 11.4 其它偏离（都是为了让设计能编译/能正确表达）
 
 | # | 设计写法 | 实现 | 原因 |
 |---|----------|------|------|
@@ -600,7 +600,9 @@ QA 结论是 `ff91cee` 通过、无 FAIL，但指出**我自己写坏了 4 条�
 | 1 | `ff91cee6114d162c532da87082926715737faa2f` | `feat(r11): 统一模型注册表与推理准入链`（29 files, +7181 / -116） |
 | 2 | `945bd46` | `docs(r11): 回填本轮代码提交 SHA` |
 | 3 | `96c716d4a3e35bf66a1ed62828a37fc9415f38d0` | `feat(r11): 补 InferenceBackend::inspect 与 TensorSpec 动态形状`（设计更新的三条更正 + §14 复核项） |
-| 4 | `16f64a125b30fcfbbf079c75b169a89a58181e65` | `fix(r11): 收紧空转测试与只读探测契约`（QA 验收后的 4 条空转测试 + 3 处强证据 + 零维守卫 + 命令层契约测试；**QA 请以此为最终验收对象**） |
+| 4 | `16f64a125b30fcfbbf079c75b169a89a58181e65` | `fix(r11): 收紧空转测试与只读探测契约`（QA 验收后的 4 条空转测试 + 3 处强证据 + 零维守卫 + 命令层契约测试；`6c4bb48` 为该 SHA 的回填提交；**QA 的最终验收对象**） |
+| 5 | `fb5079a` | `test(r11): 补快照键集契约测试并归档验收报告`（主理人收口：`registry_snapshot_serializes_with_the_frontend_key_set` + `docs/R11_ACCEPTANCE.md`；`cargo test --lib` 477 → **478**） |
+
 - 提交范围（**未用 `git add -A`**）：
   `src-tauri/src`、`src-tauri/tests`、`src/lib`、`src/types.ts`、
   `docs/R11_AUDIT_AND_DESIGN.md`、`docs/MODEL_LICENSE_REGISTER.md`、`docs/R11_ROUND_REPORT.md`
