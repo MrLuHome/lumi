@@ -470,7 +470,9 @@ E_MODEL_CONTRACT / E_INPUT / E_INFER / E_TIMEOUT / E_CANCELLED / E_BACKEND`
 
 ## 12. Git commit SHA 与工作区状态
 
-- 本轮代码提交：`见下（提交后回填）`
+- 本轮代码提交：**`ff91cee6114d162c532da87082926715737faa2f`**
+  （`feat(r11): 统一模型注册表与推理准入链`，29 files changed, 7181 insertions(+), 116 deletions(-)）
+- 本文件的 SHA 回填是一次单独的 `docs(r11)` 提交（只改这一行，不动代码）。
 - 提交范围（**未用 `git add -A`**）：
   `src-tauri/src`、`src-tauri/tests`、`src/lib`、`src/types.ts`、
   `docs/R11_AUDIT_AND_DESIGN.md`、`docs/MODEL_LICENSE_REGISTER.md`、`docs/R11_ROUND_REPORT.md`
