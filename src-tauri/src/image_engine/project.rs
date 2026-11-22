@@ -274,7 +274,7 @@ fn now_label() -> String {
     format!("{seconds}")
 }
 
-fn iso_now() -> String {
+pub(crate) fn iso_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -348,10 +348,7 @@ pub fn save_with_meta(path: &Path, project: &ProjectDoc) -> AppResult<SaveOutcom
     let mut project = project.clone();
 
     // 并发保护：同一路径同时只允许一个保存事务，避免两个写入交错。
-    static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = SAVE_LOCK
-        .lock()
-        .map_err(|_| AppError::Task("项目保存锁已损坏".into()))?;
+    let _guard = lock_saves()?;
 
     let existing = read_existing_identity(path);
     if project.project_uuid.is_empty() {
@@ -401,7 +398,7 @@ pub fn save_with_meta(path: &Path, project: &ProjectDoc) -> AppResult<SaveOutcom
         revision: project.revision,
     };
 
-    let write_result = write_atomically(path, &temporary, &json);
+    let write_result = write_atomically(path, &json);
     if write_result.is_err() {
         // 失败时清理临时文件，避免留下看起来像项目文件的半成品。
         let _ = std::fs::remove_file(&temporary);
@@ -409,7 +406,26 @@ pub fn save_with_meta(path: &Path, project: &ProjectDoc) -> AppResult<SaveOutcom
     write_result.map(|_| outcome)
 }
 
-fn write_atomically(path: &Path, temporary: &Path, json: &[u8]) -> AppResult<()> {
+/// 保存事务锁。整包保存与 ChangeSet 保存共用，防止两条路径交错写入。
+pub(crate) fn lock_saves() -> AppResult<std::sync::MutexGuard<'static, ()>> {
+    static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SAVE_LOCK
+        .lock()
+        .map_err(|_| AppError::Task("项目保存锁已损坏".into()))
+}
+
+/// 原子写：临时文件 → fsync → 回读校验 → 备份 → rename → 目录 fsync → 回读校验。
+/// ChangeSet 提交复用同一实现，保证两条保存路径具有相同的持久化语义。
+pub(crate) fn write_atomically(path: &Path, json: &[u8]) -> AppResult<()> {
+    let temporary = path.with_extension("lumi.tmp");
+    let result = write_atomically_inner(path, &temporary, json);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn write_atomically_inner(path: &Path, temporary: &Path, json: &[u8]) -> AppResult<()> {
     {
         let mut file = std::fs::File::create(temporary)?;
         file.write_all(json)?;
@@ -442,12 +458,22 @@ fn write_atomically(path: &Path, temporary: &Path, json: &[u8]) -> AppResult<()>
 }
 
 pub fn load(path: &Path) -> AppResult<ProjectDoc> {
+    load_with_report(path).map(|(project, _)| project)
+}
+
+/// 加载项目并返回迁移日志。
+///
+/// 迁移只“补默认值”，从不删除字段：未知字段、稠密关键点、RAW 与 ICC 信息
+/// 全部原样保留。版本高于当前支持时直接拒绝。
+pub fn load_with_report(path: &Path) -> AppResult<(ProjectDoc, Vec<String>)> {
     let metadata = std::fs::metadata(path)?;
     if metadata.len() > 64 * 1024 * 1024 {
         return Err(AppError::Unsupported("项目文件超过 64MB".into()));
     }
     let bytes = std::fs::read(path)?;
-    let project: ProjectDoc = serde_json::from_slice(&bytes)
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| AppError::Decode(format!("项目文件格式错误：{error}")))?;
+    let project: ProjectDoc = serde_json::from_value(value.clone())
         .map_err(|error| AppError::Decode(format!("项目文件格式错误：{error}")))?;
     if project.version > PROJECT_VERSION {
         return Err(AppError::Unsupported(format!(
@@ -458,7 +484,70 @@ pub fn load(path: &Path) -> AppResult<ProjectDoc> {
     if project.photos.is_empty() {
         return Err(AppError::Decode("项目中没有照片".into()));
     }
-    Ok(project)
+    let mut report = Vec::new();
+    if project.version < PROJECT_VERSION {
+        let unknown = count_unknown_fields(&value);
+        report.push(format!(
+            "项目版本 v{} 已按 v{} 加载：缺失字段补默认值，保留未知字段 {} 个",
+            project.version, PROJECT_VERSION, unknown
+        ));
+        report.push(
+            "迁移未修改磁盘文件；人脸稠密关键点、RAW 显影参数与 ICC 设置均原样保留".to_string(),
+        );
+        append_migration_log(path, &report);
+    }
+    Ok((project, report))
+}
+
+/// 统计对象中出现、但当前类型不认识的顶层字段数量（只用于迁移日志）。
+fn count_unknown_fields(value: &serde_json::Value) -> usize {
+    let Some(object) = value.as_object() else {
+        return 0;
+    };
+    let known = [
+        "version",
+        "createdAt",
+        "activeIndex",
+        "export",
+        "compute",
+        "photos",
+        "projectUuid",
+        "revision",
+        "updatedAt",
+        "lumiAppliedRequests",
+    ];
+    object
+        .keys()
+        .filter(|key| !known.contains(&key.as_str()))
+        .count()
+}
+
+/// 追加迁移日志。日志失败绝不影响项目打开。
+fn append_migration_log(path: &Path, lines: &[String]) {
+    use std::io::Write;
+    let Some(home) = std::env::var_os("HOME") else {
+        for line in lines {
+            eprintln!("{line}");
+        }
+        return;
+    };
+    let dir = Path::new(&home).join("Library/Logs/LumiRetouch");
+    if std::fs::create_dir_all(&dir).is_err() {
+        for line in lines {
+            eprintln!("{line}");
+        }
+        return;
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("migration.log"))
+    {
+        let _ = writeln!(file, "[{}] {}", iso_now(), path.display());
+        for line in lines {
+            let _ = writeln!(file, "  {line}");
+        }
+    }
 }
 
 #[cfg(test)]

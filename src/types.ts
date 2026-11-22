@@ -455,6 +455,82 @@ export interface ProjectDoc {
 export interface ProjectOpenResult {
   path: string;
   project: ProjectDoc;
+  /** 旧版本项目的迁移说明；空/缺省表示无需迁移。 */
+  migrationLog?: string[];
+}
+
+export interface ProjectSaved {
+  path: string;
+  bytes: number;
+  projectUuid: string;
+  revision: number;
+  /** ChangeSet 的 requestId 之前已执行过，本次没有再次应用。 */
+  duplicate?: boolean;
+}
+
+/** ROUND 10：类型化保存协议。 */
+export interface ChangeSet {
+  projectId: string;
+  baseRevision: number;
+  requestId: string;
+  operations: ChangeOperation[];
+  createdAt: string;
+  /** 冲突时重新读取磁盘最新状态并重新合并增量（不使用旧快照覆盖）。 */
+  rebaseOnConflict?: boolean;
+}
+
+export type ChangeOperation =
+  | { type: "updateDocMeta"; patch: Record<string, unknown> }
+  | { type: "updatePhotoParams"; photo: string; patch: Record<string, unknown> }
+  | {
+      type: "updateFaceParams";
+      photo: string;
+      faceUuid: string;
+      patch: Record<string, unknown>;
+    }
+  | {
+      type: "updateReshapeParams";
+      photo: string;
+      faceUuid: string;
+      patch: Record<string, unknown>;
+    }
+  | { type: "updateSubjectMask"; photo: string; patch: Record<string, unknown> }
+  | { type: "updateManualMask"; photo: string; patch: Record<string, unknown> }
+  | { type: "updateBackground"; photo: string; patch: Record<string, unknown> }
+  | { type: "updateRawParams"; photo: string; patch: Record<string, unknown> }
+  | { type: "updateColorParams"; photo: string; patch: Record<string, unknown> }
+  | {
+      type: "updateExportParams";
+      photo?: string | null;
+      patch: Record<string, unknown>;
+    }
+  | { type: "addFace"; photo: string; face: Record<string, unknown> }
+  | { type: "removeFace"; photo: string; faceUuid: string }
+  | { type: "addMask"; photo: string; mask: Record<string, unknown> }
+  | {
+      type: "updateMask";
+      photo: string;
+      maskId: string;
+      patch: Record<string, unknown>;
+    }
+  | { type: "removeMask"; photo: string; maskId: string }
+  | { type: "upsertFaceRecord"; photo: string; record: Record<string, unknown> }
+  | { type: "removeFaceRecord"; photo: string; faceUuid: string }
+  | { type: "addPhoto"; photo: ProjectPhoto }
+  | { type: "updateSource"; photo: string; patch: Record<string, unknown> }
+  | { type: "updateBatchParams"; photos: string[]; patch: Record<string, unknown> };
+
+/** ChangeSet 失败响应：kind + message + 磁盘最新 revision。 */
+export interface ChangeSetFailure {
+  kind:
+    | "PROJECT_MISMATCH"
+    | "REVISION_CONFLICT"
+    | "INVALID_OPERATION"
+    | "TARGET_NOT_FOUND"
+    | "STORAGE_ERROR"
+    | "TASK_ERROR";
+  message: string;
+  currentRevision?: number | null;
 }
 
 export interface ExportResult {

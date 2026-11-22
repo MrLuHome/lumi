@@ -1,4 +1,6 @@
 import type {
+  ChangeOperation,
+  ChangeSet,
   ColorOutputSettings,
   ComputeBackend,
   ExportSettings,
@@ -23,8 +25,30 @@ export function isRawPath(path: string): boolean {
   return match ? RAW_EXTENSIONS.includes(match[1]!.toLowerCase()) : false;
 }
 
+/**
+ * `buildProjectDoc` 实际读取的状态子集。
+ * 收窄类型便于在测试中构造最小状态，也明确保存只依赖这些字段。
+ */
+export type ProjectDocSource = Pick<
+  EditorState,
+  | "photos"
+  | "activeId"
+  | "params"
+  | "exportSettings"
+  | "rawProjectPhotos"
+  | "rawDoc"
+  | "projectMeta"
+  | "projectFaceRecords"
+  | "projectSourceHashes"
+  | "colorSettings"
+  | "colorDirty"
+  | "exportDirty"
+  | "computePreference"
+  | "rawByPhoto"
+>;
+
 /** 从当前编辑状态构建可保存的项目文件。原图路径只读引用，不包含像素。 */
-export function buildProjectDoc(state: EditorState): ProjectDoc {
+export function buildProjectDoc(state: ProjectDocSource): ProjectDoc {
   const rawDoc = state.rawDoc ?? null;
   const rawByPath = new Map((rawDoc?.photos ?? []).map((photo) => [photo.path, photo]));
   const photos: ProjectPhoto[] = state.photos.map((photo) => {
@@ -108,6 +132,254 @@ function mergeUnknownKeys<T extends object>(live: T, raw: unknown): T {
 export function suggestedProjectName(state: EditorState): string {
   const first = state.photos[0];
   return first ? `${first.fileName.replace(/\.[^.]+$/, "")}.lumi` : "未命名项目.lumi";
+}
+
+/** 有独立操作类型的参数子树，不放进 updatePhotoParams 的整体补丁。 */
+const SPECIAL_PARAM_KEYS = new Set(["faces", "subjectMask", "manualMask", "background"]);
+
+/**
+ * 把“当前状态 vs 磁盘原始文档”的差异转换成类型化操作。
+ *
+ * 只产出真正变化的字段；未变化的字段、未知字段与派生字段（subjects）不会出现在
+ * 补丁里，因此后端不需要整包覆盖就能得到正确结果。
+ * 返回 `null` 表示没有可保存的增量（新项目首次保存仍走整包路径）。
+ */
+export function buildChangeSet(state: ProjectDocSource, requestId: string): ChangeSet | null {
+  const baseDoc = state.rawDoc;
+  if (!baseDoc || !baseDoc.projectUuid) return null;
+  const current = buildProjectDoc(state);
+  const operations: ChangeOperation[] = [];
+
+  const baseMeta = {
+    activeIndex: baseDoc.activeIndex ?? 0,
+    export: baseDoc.export ?? DEFAULT_EXPORT,
+    compute: baseDoc.compute ?? { preference: "auto" as const },
+  };
+  const nextMeta = {
+    activeIndex: current.activeIndex,
+    export: current.export ?? DEFAULT_EXPORT,
+    compute: current.compute ?? null,
+  };
+  const metaPatch = buildFieldPatch(baseMeta, nextMeta);
+  if (Object.keys(metaPatch).length > 0) {
+    operations.push({ type: "updateDocMeta", patch: metaPatch });
+  }
+
+  const baseByPath = new Map((baseDoc.photos ?? []).map((entry) => [entry.path, entry]));
+  for (const photo of current.photos) {
+    const prior = baseByPath.get(photo.path);
+    if (!prior) {
+      operations.push({ type: "addPhoto", photo });
+      continue;
+    }
+    pushPhotoOperations(operations, photo.path, prior, photo);
+  }
+
+  if (operations.length === 0) return null;
+  return {
+    projectId: baseDoc.projectUuid,
+    baseRevision: state.projectMeta.revision || baseDoc.revision || 0,
+    requestId,
+    operations,
+    createdAt: new Date().toISOString(),
+    // 增量操作可以在最新状态上重新套用；绝不会用旧快照覆盖其他字段。
+    rebaseOnConflict: true,
+  };
+}
+
+function pushPhotoOperations(
+  operations: ChangeOperation[],
+  photo: string,
+  prior: ProjectPhoto,
+  current: ProjectPhoto,
+): void {
+  // 基线必须使用“加载时会归一化后的参数”，否则 clamp 造成的差异会被误判为修改。
+  const priorParams = mergeUnknownKeys(clampParams(prior.params), prior.params);
+  const paramsPatch = buildFieldPatch(
+    omitKeys(priorParams, SPECIAL_PARAM_KEYS),
+    omitKeys(current.params, SPECIAL_PARAM_KEYS),
+  );
+  if (Object.keys(paramsPatch).length > 0) {
+    operations.push({ type: "updatePhotoParams", photo, patch: paramsPatch });
+  }
+
+  // 人脸美肤参数：按 faceUuid 精确匹配，新增/删除必须显式。
+  const priorFaces = asObjectArray(priorParams.faces);
+  const currentFaces = asObjectArray(current.params?.faces);
+  const facesByUuid = new Map(
+    priorFaces
+      .filter((face) => typeof face.faceUuid === "string" && face.faceUuid)
+      .map((face) => [face.faceUuid as string, face]),
+  );
+  for (const face of currentFaces) {
+    const uuid = typeof face.faceUuid === "string" ? face.faceUuid : "";
+    if (!uuid) continue;
+    const old = facesByUuid.get(uuid);
+    if (!old) {
+      operations.push({ type: "addFace", photo, face });
+    } else {
+      const patch = buildFieldPatch(old, face);
+      if (Object.keys(patch).length > 0) {
+        operations.push({ type: "updateFaceParams", photo, faceUuid: uuid, patch });
+      }
+    }
+    facesByUuid.delete(uuid);
+  }
+  for (const uuid of facesByUuid.keys()) {
+    operations.push({ type: "removeFace", photo, faceUuid: uuid });
+  }
+
+  pushPatch(operations, "updateSubjectMask", photo, priorParams.subjectMask, current.params?.subjectMask);
+  pushPatch(operations, "updateManualMask", photo, priorParams.manualMask, current.params?.manualMask);
+  pushPatch(operations, "updateBackground", photo, priorParams.background, current.params?.background);
+
+  if (prior.raw?.params && current.raw?.params) {
+    const patch = buildFieldPatch(prior.raw.params, current.raw.params);
+    if (Object.keys(patch).length > 0) {
+      operations.push({ type: "updateRawParams", photo, patch });
+    }
+  }
+  if (prior.color?.output && current.color?.output) {
+    const patch = buildFieldPatch(prior.color.output, current.color.output);
+    if (Object.keys(patch).length > 0) {
+      operations.push({ type: "updateColorParams", photo, patch });
+    }
+  }
+  if (prior.export && current.export) {
+    const patch = buildFieldPatch(prior.export, current.export);
+    if (Object.keys(patch).length > 0) {
+      operations.push({ type: "updateExportParams", photo, patch });
+    }
+  }
+
+  const sourcePatch = buildFieldPatch(prior.source ?? {}, current.source ?? {});
+  if (Object.keys(sourcePatch).length > 0) {
+    operations.push({ type: "updateSource", photo, patch: sourcePatch });
+  }
+
+  // 蒙版层：显式新增/更新/删除。
+  const masksById = new Map(
+    asObjectArray(prior.masks)
+      .filter((mask) => typeof mask.id === "string" && mask.id)
+      .map((mask) => [mask.id as string, mask]),
+  );
+  for (const mask of asObjectArray(current.masks)) {
+    const id = typeof mask.id === "string" ? mask.id : "";
+    if (!id) continue;
+    const old = masksById.get(id);
+    if (!old) {
+      operations.push({ type: "addMask", photo, mask });
+    } else {
+      const patch = buildFieldPatch(old, mask);
+      if (Object.keys(patch).length > 0) {
+        operations.push({ type: "updateMask", photo, maskId: id, patch });
+      }
+    }
+    masksById.delete(id);
+  }
+  for (const id of masksById.keys()) {
+    operations.push({ type: "removeMask", photo, maskId: id });
+  }
+
+  // 持久化人脸记录：按 UUID upsert，删除显式。
+  const recordsByUuid = new Map(
+    asObjectArray(prior.faces)
+      .filter((record) => typeof record.uuid === "string" && record.uuid)
+      .map((record) => [record.uuid as string, record]),
+  );
+  for (const record of asObjectArray(current.faces)) {
+    const uuid = typeof record.uuid === "string" ? record.uuid : "";
+    if (!uuid) continue;
+    const old = recordsByUuid.get(uuid);
+    if (!old || !jsonEqual(old, record)) {
+      operations.push({ type: "upsertFaceRecord", photo, record });
+    }
+    recordsByUuid.delete(uuid);
+  }
+  for (const uuid of recordsByUuid.keys()) {
+    operations.push({ type: "removeFaceRecord", photo, faceUuid: uuid });
+  }
+}
+
+function pushPatch(
+  operations: ChangeOperation[],
+  type: "updateSubjectMask" | "updateManualMask" | "updateBackground",
+  photo: string,
+  prior: unknown,
+  current: unknown,
+): void {
+  if (!isPlainObject(current)) return;
+  const patch = buildFieldPatch(isPlainObject(prior) ? prior : {}, current);
+  if (Object.keys(patch).length > 0) {
+    operations.push({ type, photo, patch });
+  }
+}
+
+/**
+ * 生成“只包含变化字段”的补丁：对象递归比较，数组/标量整体替换。
+ * 数字使用 1e-4 容差（参数在 Rust 侧是 f32），其余严格比较。
+ */
+export function buildFieldPatch(base: unknown, current: unknown): Record<string, unknown> {
+  if (!isPlainObject(current)) return {};
+  if (!isPlainObject(base)) return cloneJson(current);
+  const patch: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(current)) {
+    if (!(key in base)) {
+      patch[key] = cloneJson(value);
+      continue;
+    }
+    const previous = base[key];
+    if (isPlainObject(value) && isPlainObject(previous)) {
+      const nested = buildFieldPatch(previous, value);
+      if (Object.keys(nested).length > 0) patch[key] = nested;
+      continue;
+    }
+    if (!jsonEqual(previous, value)) patch[key] = cloneJson(value);
+  }
+  return patch;
+}
+
+function omitKeys(value: unknown, keys: Set<string>): Record<string, unknown> {
+  if (!isPlainObject(value)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!keys.has(key)) out[key] = entry;
+  }
+  return out;
+}
+
+function asObjectArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is Record<string, unknown> => isPlainObject(entry))
+    : [];
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (typeof a === "number" && typeof b === "number") {
+    return Math.abs(a - b) <= 1e-4;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((entry, index) => jsonEqual(entry, b[index]));
+  }
+  if (isPlainObject(a) || isPlainObject(b)) {
+    if (!isPlainObject(a) || !isPlainObject(b)) return false;
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const key of keys) {
+      if (!jsonEqual(a[key], b[key])) return false;
+    }
+    return true;
+  }
+  return a === b;
+}
+
+function cloneJson<T>(value: T): T {
+  if (value === undefined) return value;
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 /** 一次加载的完整快照。只有校验通过后才会原子提交到 store。 */

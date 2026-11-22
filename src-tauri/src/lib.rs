@@ -8,6 +8,8 @@
 //! - `commands`：Tauri 命令边界，只做参数校验、线程调度与序列化；
 //! - `state`：进程内图片缓存与人脸结果缓存。
 
+// 测试里用 `json!` 构造完整项目文档，默认 128 层展开不够。
+#![recursion_limit = "256"]
 // 图像处理与 Tauri 命令中，显式索引/多参数签名可读性更好；这些风格 lint
 // 由 Rust 1.95 的 clippy 新增，沿用既有代码约定，按 lint 名称显式放行。
 #![allow(
@@ -76,6 +78,7 @@ pub fn run() {
             commands::render::cancel_render,
             commands::render::export_image,
             commands::project::save_project,
+            commands::project::apply_project_changeset,
             commands::project::open_project,
             commands::project::pick_lut,
             commands::project::auto_white_balance,

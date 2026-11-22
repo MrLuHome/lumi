@@ -21,6 +21,7 @@ import {
   openProject,
   pickImages,
   restoreFaces,
+  applyProjectChangeset,
   saveProject,
   subscribeBeautyProgress,
   subscribeFaceProgress,
@@ -37,12 +38,25 @@ import {
   selectEffectUrl,
   useEditorStore,
 } from "./state/editorStore";
-import { buildProjectDoc, buildProjectSnapshot, computeProjectId } from "./state/project";
+import { buildChangeSet, buildProjectDoc, buildProjectSnapshot, computeProjectId } from "./state/project";
 
 function toMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
+  // ChangeSet 失败响应是 { kind, message, currentRevision }。
+  if (error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string") {
+    return (error as { message: string }).message;
+  }
   return "操作失败，请重试";
+}
+
+/** 保存幂等键：优先使用 crypto.randomUUID，旧 WebView 回退到时间+随机数。 */
+function newSaveRequestId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+  return `save-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function isCancelled(message: string): boolean {
@@ -128,14 +142,40 @@ export default function App() {
     const started = performance.now();
     devLog("save_started", { projectId: state.loadSession.projectId, photos: state.photos.length });
     try {
-      const doc = buildProjectDoc(state);
-      const saved = await saveProject(doc, state.projectPath ?? undefined);
+      const canUseChangeSet = Boolean(state.projectPath && state.projectMeta.projectUuid);
+      let saved;
+      if (canUseChangeSet) {
+        // 已有项目：只提交本次真正修改的字段，后端校验身份与 revision。
+        const changeset = buildChangeSet(state, newSaveRequestId());
+        if (!changeset) {
+          useEditorStore.getState().notify("info", "没有需要保存的修改");
+          return;
+        }
+        saved = await applyProjectChangeset(state.projectPath!, changeset);
+        devLog("changeset_saved", {
+          operations: changeset.operations.length,
+          revision: saved.revision,
+          duplicate: Boolean(saved.duplicate),
+        });
+      } else {
+        // 新项目首次保存：需要创建文件，仍使用整包写入。
+        const doc = buildProjectDoc(state);
+        saved = await saveProject(doc, state.projectPath ?? undefined);
+        const createdAt = state.projectMeta.createdAt || doc.createdAt;
+        useEditorStore.getState().setPersistenceBaseline({
+          ...doc,
+          projectUuid: saved.projectUuid,
+          revision: saved.revision,
+          createdAt,
+          updatedAt: new Date().toISOString(),
+        });
+      }
       useEditorStore.getState().setProjectPath(saved.path);
       // 回写项目身份与保存代数：防止下一次保存用旧快照覆盖更新的磁盘内容。
       useEditorStore.getState().setProjectSaved({
         projectUuid: saved.projectUuid,
         revision: saved.revision,
-        createdAt: state.projectMeta.createdAt || doc.createdAt,
+        createdAt: state.projectMeta.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
       devLog("save_completed", {
@@ -147,7 +187,9 @@ export default function App() {
         .getState()
         .notify(
           "success",
-          `项目已保存：${baseName(saved.path)} · ${formatFileSize(saved.bytes)}`,
+          saved.duplicate
+            ? `项目已保存（该次保存此前已完成）：${baseName(saved.path)}`
+            : `项目已保存：${baseName(saved.path)} · ${formatFileSize(saved.bytes)}`,
         );
     } catch (error) {
       const message = toMessage(error);
@@ -199,6 +241,11 @@ export default function App() {
       );
       if (snapshot.warnings.length > 0) {
         devLog("load_warnings", { requestId, count: snapshot.warnings.length });
+      }
+      if (opened.migrationLog && opened.migrationLog.length > 0) {
+        // 迁移日志来自后端（同时写入 ~/Library/Logs/LumiRetouch/migration.log）。
+        devLog("project_migrated", { requestId, lines: opened.migrationLog.length });
+        useEditorStore.getState().notify("info", opened.migrationLog.join("；"));
       }
 
       // 恢复到 ready 之前只更新检测结果与参数快照，不允许默认参数写回。

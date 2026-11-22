@@ -6,6 +6,7 @@
 pub mod analysis;
 pub mod buffer;
 pub mod cancel;
+pub mod changeset;
 pub mod color;
 pub mod decoder;
 pub mod encoder;

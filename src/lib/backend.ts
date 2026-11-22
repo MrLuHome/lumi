@@ -10,6 +10,7 @@ import type {
   BeautyProgress,
   BodyAnchorPreset,
   BodyCapability,
+  ChangeSet,
   ColorOutputSettings,
   ColorStatus,
   ComputeBackend,
@@ -34,6 +35,7 @@ import type {
   ProjectDoc,
   ProjectFaceRecord,
   ProjectOpenResult,
+  ProjectSaved,
   ProfileSummary,
   RawCapabilities,
   RawDevelopParams,
@@ -181,9 +183,21 @@ export async function setComputeBackend(preference: ComputeBackend): Promise<Gpu
 export async function saveProject(
   project: ProjectDoc,
   destination?: string,
-): Promise<{ path: string; bytes: number; projectUuid: string; revision: number }> {
+): Promise<ProjectSaved> {
   if (!isDesktopRuntime()) throw new Error("保存项目需要在桌面端运行");
-  return invoke("save_project", { project, destination: destination ?? null });
+  return invoke<ProjectSaved>("save_project", { project, destination: destination ?? null });
+}
+
+/**
+ * 应用类型化 ChangeSet：只提交明确修改的字段，后端整包原子提交。
+ * 失败时 reject 的对象带 `kind`，调用方据此区分冲突与真正的错误。
+ */
+export async function applyProjectChangeset(
+  path: string,
+  changeset: ChangeSet,
+): Promise<ProjectSaved> {
+  if (!isDesktopRuntime()) throw new Error("保存项目需要在桌面端运行");
+  return invoke<ProjectSaved>("apply_project_changeset", { path, changeset });
 }
 
 export async function openProject(destination?: string): Promise<ProjectOpenResult> {

@@ -6,6 +6,7 @@ use tauri::State;
 use crate::ai_engine::face_frame::FaceFrame;
 use crate::error::{AppError, AppResult};
 use crate::face_reshape::identity::{self, ProjectFace};
+use crate::image_engine::changeset::{self, ChangeSet, ChangeSetError};
 use crate::image_engine::operations::estimate_white_balance;
 use crate::image_engine::project::{self, ProjectDoc, PROJECT_EXTENSION};
 use crate::state::{FaceRepository, ImageCache};
@@ -18,6 +19,28 @@ pub struct ProjectSaved {
     /// 项目身份与保存代数：前端保存后必须回写，供下一次并发检查使用。
     pub project_uuid: String,
     pub revision: u64,
+    /// ChangeSet 的 `requestId` 之前已执行过，本次没有再次应用。
+    #[serde(default)]
+    pub duplicate: bool,
+}
+
+/// ChangeSet 失败响应：带可定位的错误类型与磁盘最新 revision。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeSetFailure {
+    pub kind: String,
+    pub message: String,
+    pub current_revision: Option<u64>,
+}
+
+impl From<ChangeSetError> for ChangeSetFailure {
+    fn from(error: ChangeSetError) -> Self {
+        Self {
+            kind: error.kind().to_string(),
+            message: error.to_string(),
+            current_revision: error.current_revision(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -25,6 +48,9 @@ pub struct ProjectSaved {
 pub struct ProjectOpened {
     pub path: String,
     pub project: ProjectDoc,
+    /// 旧版本项目的迁移说明；空数组表示无需迁移。
+    #[serde(default)]
+    pub migration_log: Vec<String>,
 }
 
 /// 合并「本次会话检测到的人脸」与「项目里已保存的人脸记录」。
@@ -145,10 +171,44 @@ pub async fn save_project(
             bytes,
             project_uuid: outcome.project_uuid,
             revision: outcome.revision,
+            duplicate: false,
         })
     })
     .await
     .map_err(|error| AppError::Task(error.to_string()))?
+}
+
+/// 应用类型化 ChangeSet：只修改明确声明的字段，整包原子提交。
+///
+/// 与整包保存的区别：
+/// - 必须携带 `projectId` 与 `baseRevision`，身份或代数不符直接拒绝；
+/// - 失败响应带 `kind`（PROJECT_MISMATCH / REVISION_CONFLICT / ...）；
+/// - 相同 `requestId` 重放不会重复执行破坏性操作。
+#[tauri::command]
+pub async fn apply_project_changeset(
+    path: String,
+    changeset: ChangeSet,
+) -> Result<ProjectSaved, ChangeSetFailure> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = PathBuf::from(&path);
+        let outcome = changeset::apply(&target, &changeset).map_err(ChangeSetFailure::from)?;
+        let bytes = std::fs::metadata(&target)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        Ok(ProjectSaved {
+            path,
+            bytes,
+            project_uuid: outcome.project_uuid,
+            revision: outcome.revision,
+            duplicate: outcome.duplicate,
+        })
+    })
+    .await
+    .map_err(|error| ChangeSetFailure {
+        kind: "TASK_ERROR".into(),
+        message: error.to_string(),
+        current_revision: None,
+    })?
 }
 
 /// 选择并读取项目文件。返回参数与路径，图片由前端调用 load_images 重新载入。
@@ -166,10 +226,11 @@ pub async fn open_project(destination: Option<String>) -> AppResult<ProjectOpene
                 None => return Err(AppError::Cancelled),
             },
         };
-        let project = project::load(&target)?;
+        let (project, migration_log) = project::load_with_report(&target)?;
         Ok(ProjectOpened {
             path: target.to_string_lossy().into_owned(),
             project,
+            migration_log,
         })
     })
     .await

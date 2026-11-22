@@ -342,6 +342,8 @@ export interface EditorState {
   closeProject: () => void;
   /** 保存成功后回写项目身份与保存代数，供下一次并发检查使用。 */
   setProjectSaved: (meta: Partial<ProjectMeta>) => void;
+  /** 首次整包保存后，把写盘结果当作后续增量保存的基线。 */
+  setPersistenceBaseline: (doc: ProjectDoc) => void;
   /** 项目恢复期只更新检测结果，不触碰 params.faces。 */
   setDetectedFaces: (photoId: string, result: FaceDetectionResult, requestId?: number) => void;
 
@@ -901,6 +903,16 @@ export function createEditorStore() {
       setProjectSaved: (meta) => {
         const state = get();
         set({ projectMeta: { ...state.projectMeta, ...meta } });
+      },
+
+      setPersistenceBaseline: (doc) => {
+        const state = get();
+        const rawPhotos: Record<string, (typeof doc.photos)[number]> = {};
+        for (const photo of state.photos) {
+          const entry = doc.photos.find((candidate) => candidate.path === photo.path);
+          if (entry) rawPhotos[photo.id] = entry;
+        }
+        set({ rawDoc: doc, rawProjectPhotos: rawPhotos });
       },
 
       beginProjectLoad: (projectPath) => {
