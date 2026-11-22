@@ -1,8 +1,9 @@
 import { useCallback, useEffect } from "react";
+import type { ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
 import { TopBar } from "./components/TopBar";
 import { LibraryRail } from "./components/LibraryRail";
 import { CanvasStage } from "./components/CanvasStage";
-import { Inspector } from "./components/Inspector";
 import { SmartPanel } from "./components/SmartPanel";
 import { PresetPanel } from "./components/PresetPanel";
 import { BatchWorkspace } from "./components/BatchWorkspace";
@@ -11,8 +12,11 @@ import { ColorPanel } from "./components/ColorPanel";
 import { PerformancePanel } from "./components/PerformancePanel";
 import { AiPortraitPanel } from "./components/AiPortraitPanel";
 import { ModelHubPanel } from "./components/ModelHubPanel";
+import { OneClickPanel } from "./components/slim/OneClickPanel";
+import { ManualPanel } from "./components/slim/ManualPanel";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/ui/Toast";
+import { LEGACY_PANELS_ENABLED } from "./components/slim/featureFlags";
 import { usePreviewRenderer } from "./hooks/usePreviewRenderer";
 import {
   detectFaces,
@@ -68,13 +72,43 @@ function baseName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
+/**
+ * 旧面板的临时宿主：能力保留、入口收进「文件」菜单，并给一条明确的返回路径。
+ * 这样老用户找得到批量/RAW，普通用户看不到。
+ */
+function LegacyHost({
+  label,
+  wide = false,
+  onBack,
+  children,
+}: {
+  label: string;
+  wide?: boolean;
+  onBack: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`legacy-host ${wide ? "is-wide" : "is-column"}`}>
+      <header className="legacy-bar">
+        <button type="button" className="btn" onClick={onBack}>
+          <ArrowLeft size={13} />
+          返回修图
+        </button>
+        <span className="legacy-label">{label}已移到「文件」菜单，这里只是临时打开</span>
+      </header>
+      <div className="legacy-body">{children}</div>
+    </section>
+  );
+}
+
 export default function App() {
   usePreviewRenderer();
 
   const photos = useEditorStore((state) => state.photos);
   const activeId = useEditorStore((state) => state.activeId);
   const photo = useEditorStore(selectActivePhoto);
-  const params = useEditorStore(selectActiveParams);
+  const slimEntry = useEditorStore((state) => state.slimEntry);
+  const setSlimEntry = useEditorStore((state) => state.setSlimEntry);
   const effectUrl = useEditorStore(selectEffectUrl);
   const canUndo = useEditorStore(selectCanUndo);
   const canRedo = useEditorStore(selectCanRedo);
@@ -86,6 +120,18 @@ export default function App() {
   const unsaved = useEditorStore((state) => state.unsaved);
   const workspace = useEditorStore((state) => state.workspace);
   const setWorkspace = useEditorStore((state) => state.setWorkspace);
+
+  // 界面精简后老用户的批量/RAW 入口换了位置，首次进入提示一次。
+  useEffect(() => {
+    const key = "lumi.slim.legacy-hint.v1";
+    try {
+      if (window.localStorage.getItem(key)) return;
+      window.localStorage.setItem(key, "1");
+    } catch {
+      // 隐私模式禁用存储时直接提示，不影响使用。
+    }
+    useEditorStore.getState().notify("info", "批量处理和 RAW 已移到「文件」菜单");
+  }, []);
 
   // 有未保存修改时同步给 Rust：关闭窗口/⌘Q 前弹出原生确认，避免静默丢失。
   useEffect(() => {
@@ -316,14 +362,11 @@ export default function App() {
       } else if (discarded > 0) {
         useEditorStore
           .getState()
-          .notify(
-            "info",
-            `${discarded} 张人脸的旧 Provider/模型版本稠密结论与当前环境不一致，已锁定 LEVEL 3，需重新分析`,
-          );
+          .notify("info", `${discarded} 张旧照片的人脸分析结果来自不同版本，已作废，请重新精修`);
       } else if (pending > 0) {
         useEditorStore
           .getState()
-          .notify("info", `${pending} 张人脸匹配置信度不足，请在人脸面板确认`);
+          .notify("info", `${pending} 张照片的人脸需要重新确认，建议重新精修一次`);
       } else if (missingFaces > 0) {
         useEditorStore
           .getState()
@@ -382,7 +425,7 @@ export default function App() {
     };
   }, []);
 
-  // 人脸推理进度（真实后端事件）。
+  // 人脸检测进度（真实后端事件）。
   useEffect(() => {
     let alive = true;
     let unsubscribe: (() => void) | undefined;
@@ -504,6 +547,9 @@ export default function App() {
     };
   }, [handleImport, handleExport, handleSaveProject, handleOpenProject]);
 
+  // 开关只在需要整体回滚时关掉：旧面板不再渲染，右栏始终回到双入口。
+  const showLegacy = LEGACY_PANELS_ENABLED && workspace !== "edit";
+
   return (
     <div className={`app ${platformClass()}`}>
       <TopBar
@@ -512,8 +558,10 @@ export default function App() {
         canRedo={canRedo}
         canPaste={canPaste}
         compareMode={compareMode}
-        workspace={workspace}
-        onWorkspace={setWorkspace}
+        entry={slimEntry}
+        legacyWorkspace={showLegacy}
+        onEntry={setSlimEntry}
+        onLegacyWorkspace={setWorkspace}
         importing={importing}
         exporting={exporting}
         onImport={handleImport}
@@ -532,28 +580,42 @@ export default function App() {
       />
 
       <div className="workspace">
-        <LibraryRail photos={photos} activeId={activeId} onImport={handleImport} />
-        {workspace === "batch" ? (
-          <BatchWorkspace />
+        {showLegacy && workspace === "batch" ? (
+          <LegacyHost label="批量处理" wide onBack={() => setSlimEntry(slimEntry)}>
+            <BatchWorkspace />
+          </LegacyHost>
         ) : (
           <>
+            <LibraryRail photos={photos} activeId={activeId} onImport={handleImport} />
             <CanvasStage photo={photo} effectUrl={effectUrl} onImport={handleImport} />
-            {workspace === "smart" ? (
-              <SmartPanel />
-            ) : workspace === "presets" ? (
-              <PresetPanel />
-            ) : workspace === "raw" ? (
-              <RawPanel />
-            ) : workspace === "color" ? (
-              <ColorPanel />
-            ) : workspace === "performance" ? (
-              <PerformancePanel />
-            ) : workspace === "ai" ? (
-              <AiPortraitPanel photo={photo} />
-            ) : workspace === "models" ? (
-              <ModelHubPanel />
+            {!showLegacy ? (
+              slimEntry === "oneclick" ? (
+                <OneClickPanel photo={photo} />
+              ) : (
+                <ManualPanel photo={photo} />
+              )
             ) : (
-              <Inspector photo={photo} params={params} />
+              <LegacyHost
+                label={workspace === "raw" ? "RAW 显影" : "这个功能"}
+                onBack={() => setSlimEntry(slimEntry)}
+              >
+                {/* 旧面板代码全部保留，只是从主入口隐藏（见 featureFlags）。 */}
+                {workspace === "smart" ? (
+                  <SmartPanel />
+                ) : workspace === "presets" ? (
+                  <PresetPanel />
+                ) : workspace === "raw" ? (
+                  <RawPanel />
+                ) : workspace === "color" ? (
+                  <ColorPanel />
+                ) : workspace === "performance" ? (
+                  <PerformancePanel />
+                ) : workspace === "ai" ? (
+                  <AiPortraitPanel photo={photo} />
+                ) : workspace === "models" ? (
+                  <ModelHubPanel />
+                ) : null}
+              </LegacyHost>
             )}
           </>
         )}

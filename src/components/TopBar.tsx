@@ -2,16 +2,18 @@ import {
   Columns2,
   Download,
   FolderOpen,
+  Hand,
   Redo2,
-  RotateCcw,
   Ruler,
   Save,
+  Sparkles,
   Undo2,
 } from "lucide-react";
 import type { PhotoAsset, Workspace } from "../types";
 import { Menu } from "./ui/Menu";
-import type { CompareMode } from "../state/editorStore";
+import type { CompareMode, SlimEntry } from "../state/editorStore";
 import { isDesktopRuntime } from "../lib/platform";
+import { LEGACY_MENU_ITEMS, LEGACY_PANELS_ENABLED } from "./slim/featureFlags";
 
 async function closeWindow() {
   if (!isDesktopRuntime()) return;
@@ -25,8 +27,12 @@ interface TopBarProps {
   canRedo: boolean;
   canPaste: boolean;
   compareMode: CompareMode;
-  workspace: Workspace;
-  onWorkspace: (workspace: Workspace) => void;
+  /** 当前右栏入口（只在 workspace === "edit" 时有效）。 */
+  entry: SlimEntry;
+  /** 是否身处旧面板（批量 / RAW），此时两个入口都不高亮。 */
+  legacyWorkspace: boolean;
+  onEntry: (entry: SlimEntry) => void;
+  onLegacyWorkspace: (workspace: Workspace) => void;
   importing: boolean;
   exporting: boolean;
   onImport: () => void;
@@ -44,14 +50,20 @@ interface TopBarProps {
   onZoom200: () => void;
 }
 
+/**
+ * 顶栏：只保留两个入口 + 导入/对比/撤销/重做/保存/导出 + 三个菜单。
+ * 「批量处理」「RAW 显影」不在主入口出现，收进「文件」菜单（主理人裁决 Q3）。
+ */
 export function TopBar({
   photo,
   canUndo,
   canRedo,
   canPaste,
   compareMode,
-  workspace,
-  onWorkspace,
+  entry,
+  legacyWorkspace,
+  onEntry,
+  onLegacyWorkspace,
   importing,
   exporting,
   onImport,
@@ -90,6 +102,16 @@ export function TopBar({
             "separator",
             { label: "导出当前照片…", shortcut: "⌘E", disabled: !photo, onSelect: onExport },
             "separator",
+            ...(LEGACY_PANELS_ENABLED
+              ? [
+                  ...LEGACY_MENU_ITEMS.map((item) => ({
+                    label: item.label,
+                    disabled: !photo,
+                    onSelect: () => onLegacyWorkspace(item.workspace),
+                  })),
+                  "separator" as const,
+                ]
+              : []),
             ...(isDesktopRuntime()
               ? [{ label: "退出 LUMI RETOUCH", onSelect: () => void closeWindow() }]
               : []),
@@ -124,29 +146,25 @@ export function TopBar({
         />
       </nav>
 
-      <nav className="workspace-switch" aria-label="工作区">
-        {(
-          [
-            ["edit", "编辑"],
-            ["smart", "智能精修"],
-            ["presets", "预设库"],
-            ["raw", "RAW"],
-            ["color", "色彩"],
-            ["performance", "性能"],
-            ["ai", "AI 人像"],
-            ["models", "模型库"],
-            ["batch", "批量处理"],
-          ] as [Workspace, string][]
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            className={`workspace-tab ${workspace === value ? "active" : ""}`}
-            onClick={() => onWorkspace(value)}
-          >
-            {label}
-          </button>
-        ))}
+      <nav className="slim-switch" aria-label="功能入口">
+        <button
+          type="button"
+          className={`slim-switch-btn ${!legacyWorkspace && entry === "oneclick" ? "is-active" : ""}`}
+          aria-pressed={!legacyWorkspace && entry === "oneclick"}
+          onClick={() => onEntry("oneclick")}
+        >
+          <Sparkles size={13} />
+          一键精修
+        </button>
+        <button
+          type="button"
+          className={`slim-switch-btn ${!legacyWorkspace && entry === "manual" ? "is-active" : ""}`}
+          aria-pressed={!legacyWorkspace && entry === "manual"}
+          onClick={() => onEntry("manual")}
+        >
+          <Hand size={13} />
+          手动调整
+        </button>
       </nav>
 
       <div className="topbar-actions">
@@ -155,6 +173,16 @@ export function TopBar({
           {importing ? "导入中…" : "导入"}
         </button>
         <div className="topbar-divider" />
+        <button
+          type="button"
+          className={`btn ${compareMode === "split" ? "btn-active" : ""}`}
+          onClick={onToggleCompare}
+          disabled={!photo}
+          title="分屏对比 (⌘\\)"
+        >
+          <Columns2 size={14} />
+          对比
+        </button>
         <button
           type="button"
           className="icon-btn"
@@ -173,21 +201,6 @@ export function TopBar({
         >
           <Redo2 size={15} />
         </button>
-        <div className="topbar-divider" />
-        <button
-          type="button"
-          className={`btn ${compareMode === "split" ? "btn-active" : ""}`}
-          onClick={onToggleCompare}
-          disabled={!photo}
-          title="分屏对比 (⌘\\)"
-        >
-          <Columns2 size={14} />
-          对比
-        </button>
-        <button type="button" className="btn" onClick={onExport} disabled={!photo || exporting}>
-          <Download size={14} />
-          {exporting ? "导出中…" : "导出"}
-        </button>
         <button
           type="button"
           className="icon-btn"
@@ -197,14 +210,9 @@ export function TopBar({
         >
           <Save size={14} />
         </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="重置参数"
-          onClick={onResetAll}
-          disabled={!photo}
-        >
-          <RotateCcw size={14} />
+        <button type="button" className="btn" onClick={onExport} disabled={!photo || exporting}>
+          <Download size={14} />
+          {exporting ? "导出中…" : "导出"}
         </button>
       </div>
 
@@ -212,7 +220,7 @@ export function TopBar({
 
       <div className="topbar-meta" data-tauri-drag-region>
         <Ruler size={12} />
-        <span>{photo ? `${photo.width} × ${photo.height}` : "工程底座 v0.1"}</span>
+        <span>{photo ? `${photo.width} × ${photo.height}` : "还没有照片"}</span>
       </div>
     </header>
   );

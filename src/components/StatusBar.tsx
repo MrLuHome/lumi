@@ -1,28 +1,25 @@
 import { Minus, Plus } from "lucide-react";
 import type { PhotoAsset } from "../types";
 import { useEditorStore } from "../state/editorStore";
-import { formatDuration, formatFileSize, formatMegapixels, formatZoom } from "../lib/format";
+import { formatFileSize, formatMegapixels, formatZoom } from "../lib/format";
 import { isDesktopRuntime } from "../lib/platform";
 
 interface StatusBarProps {
   photo: PhotoAsset | null;
 }
 
+/** 底部状态条：只说人话，不暴露算法名、耗时与内部配置。 */
 export function StatusBar({ photo }: StatusBarProps) {
   const zoom = useEditorStore((state) => state.zoom);
   const viewport = useEditorStore((state) => state.viewport);
   const fitZoom = useEditorStore((state) => state.fitZoom);
   const status = useEditorStore((state) => state.renderStatus);
-  const elapsed = useEditorStore((state) => state.renderElapsedMs);
   const error = useEditorStore((state) => state.renderError);
   const progress = useEditorStore((state) => state.renderProgress);
   const zoomStep = useEditorStore((state) => state.zoomStep);
   const setZoom = useEditorStore((state) => state.setZoom);
   const fitToWindow = useEditorStore((state) => state.fitToWindow);
   const actualPixels = useEditorStore((state) => state.actualPixels);
-  const colorStatus = useEditorStore((state) => state.colorStatus);
-  const gpuStatus = useEditorStore((state) => state.gpuStatus);
-  const faceResult = useEditorStore((state) => (photo ? state.faces[photo.id] : undefined));
   const loadSession = useEditorStore((state) => state.loadSession);
 
   return (
@@ -39,21 +36,19 @@ export function StatusBar({ photo }: StatusBarProps) {
             </span>
             <span className="status-muted">{formatMegapixels(photo.width, photo.height)}</span>
             <span className="status-badge">{photo.format}</span>
-            {photo.bitDepth > 8 ? <span className="status-badge">16-bit</span> : null}
-            <span className="status-muted">工作区 sRGB</span>
-            {colorStatus ? <span className="status-badge">{colorStatus.outputLabel}</span> : null}
+            {photo.bitDepth > 8 ? <span className="status-badge">16 位</span> : null}
             <span className="status-muted">{formatFileSize(photo.fileSize)}</span>
           </>
         ) : (
-          <span className="status-muted">未打开照片</span>
+          <span className="status-muted">还没有打开照片</span>
         )}
         {loadSession.phase === "loading" ? (
           <span className="status-badge">项目读取中…</span>
         ) : loadSession.phase === "restoring" ? (
-          <span className="status-badge">人脸参数恢复中…</span>
+          <span className="status-badge">正在恢复人脸参数…</span>
         ) : loadSession.phase === "failed" ? (
           <span className="status-badge" title={loadSession.error?.message}>
-            项目加载失败{loadSession.error ? `：${loadSession.error.code}` : ""}
+            项目打开失败
           </span>
         ) : null}
       </div>
@@ -113,30 +108,18 @@ export function StatusBar({ photo }: StatusBarProps) {
 
       <div className="status-right">
         {!isDesktopRuntime() && <span className="status-note">浏览器预览模式</span>}
-        {gpuStatus ? (
-          <span className="status-muted" title={gpuStatus.reason}>
-            {gpuStatus.enabled ? `GPU · ${gpuStatus.device || "Metal"}` : "CPU 计算"}
-          </span>
-        ) : null}
-        {faceResult ? (
-          <span className="status-muted" title="当前照片使用的人脸 Provider">
-            人脸 · {faceResult.model}
-          </span>
-        ) : null}
         <span className={`proc proc-${error ? "error" : status}`} title={error ?? undefined}>
           {error ? (
-            <>处理失败</>
+            <>预览没出来，参数已保存</>
           ) : status === "rendering" ? (
             <>
               <span className="spinner" />
-              {progress
-                ? `${progress.stage} ${Math.round(progress.progress * 100)}%`
-                : "处理中"}
+              {progress ? `正在生成预览 ${Math.round(progress.progress * 100)}%` : "正在生成预览"}
             </>
           ) : status === "ready" ? (
             <>
               <span className="proc-dot" />
-              就绪{elapsed !== null && elapsed > 0 ? ` · ${formatDuration(elapsed)}` : ""}
+              预览已更新
             </>
           ) : (
             <>

@@ -12,6 +12,8 @@ interface SliderProps {
   onChange: (value: number) => void;
   /** 百分比类参数显示 % 后缀。 */
   suffix?: string;
+  /** 禁用（例如这一项还没有可用的分析结论）。 */
+  disabled?: boolean;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -28,6 +30,7 @@ export function Slider({
   defaultValue = 0,
   onChange,
   suffix,
+  disabled = false,
 }: SliderProps) {
   const ratio = (value - min) / (max - min);
   const zeroRatio = (0 - min) / (max - min);
@@ -52,9 +55,11 @@ export function Slider({
 
   return (
     <div
-      className={`slider ${active ? "is-active" : ""}`}
-      onDoubleClick={() => onChange(defaultValue)}
-      title="双击归零"
+      className={`slider ${active ? "is-active" : ""} ${disabled ? "is-disabled" : ""}`}
+      onDoubleClick={() => {
+        if (!disabled) onChange(defaultValue);
+      }}
+      title={disabled ? "这一项暂时不可调" : "双击归零"}
     >
       <div className="slider-head">
         <span className="slider-label">{label}</span>
@@ -67,12 +72,13 @@ export function Slider({
             max={max}
             step={step}
             value={text}
+            disabled={disabled}
             aria-label={`${label}数值`}
             onFocus={() => setEditing(true)}
             onChange={(event) => {
               setText(event.target.value);
               const numeric = Number.parseFloat(event.target.value);
-              if (Number.isFinite(numeric)) onChange(clamp(numeric, min, max));
+              if (Number.isFinite(numeric) && !disabled) onChange(clamp(numeric, min, max));
             }}
             onBlur={commit}
             onKeyDown={(event) => {
@@ -88,7 +94,7 @@ export function Slider({
             className="slider-reset"
             aria-label={`重置${label}`}
             title={`重置${label}`}
-            disabled={!active}
+            disabled={!active || disabled}
             onClick={() => onChange(defaultValue)}
           >
             ↺
@@ -107,6 +113,7 @@ export function Slider({
           max={max}
           step={step}
           value={value}
+          disabled={disabled}
           aria-label={label}
           onChange={(event) => onChange(Number(event.target.value))}
         />

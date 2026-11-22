@@ -49,6 +49,7 @@ import {
   PARAM_GROUPS,
   PARAM_LABELS,
   type BeautyKey,
+  type AdjustmentKey,
   type BodyAnchor,
   type BodyShapeKey,
   type CurveChannel,
@@ -83,6 +84,20 @@ import {
   undoHistory,
   type HistoryStack,
 } from "./history";
+import {
+  ITEM_META,
+  clearLegacyAdjustments,
+  defaultOneClick,
+  defaultSixItems,
+  itemsFromParams,
+  tonalDeltas,
+  writeSixItem,
+  type AppliedPlan,
+  type OneClickMode,
+  type OneClickState,
+  type SixItemId,
+  type SixItemState,
+} from "./slim";
 import { buildProjectSnapshot, type ProjectMeta, type ProjectSnapshot } from "./project";
 import { devLog } from "../lib/diagnostics";
 
@@ -93,12 +108,28 @@ export const ZOOM_MAX = 4;
 /** 缩放超过该比例时请求 3200px 高清预览。 */
 export const DETAIL_ZOOM_THRESHOLD = 1.05;
 
+/** 打开某项开关时的默认强度：0 强度看起来像「点了没反应」，所以给一个中间值。 */
+export const DEFAULT_ITEM_STRENGTH = 60;
+
 export type RenderStatus = "idle" | "rendering" | "ready" | "error";
 export type CompareMode = "off" | "split";
 export type FaceStatus = "idle" | "loading" | "ready" | "error";
 export type BeautyStatus = "idle" | "analyzing" | "ready" | "error";
 export type MaskStatus = "idle" | "loading" | "ready" | "error";
 export type BrushMode = "off" | "paint" | "erase" | "repair";
+
+/** 精简版的两个入口。右栏只渲染当前入口，画布/图库/撤销栈完全不受影响。 */
+export type SlimEntry = "oneclick" | "manual";
+
+/** 单张照片的整图分析缓存（⑤⑥ 的方向与幅度来源）。 */
+export interface SlimReport {
+  report: AnalysisReport;
+  /** 分析当时的参数值，作为「锚点 + 建议增量」的基准。 */
+  anchors: Partial<Record<AdjustmentKey, number>>;
+  status: MaskStatus;
+  error: string | null;
+  elapsedMs: number;
+}
 
 /** 项目加载状态机：只有 ready 允许编辑与保存。 */
 export type ProjectLoadPhase = "idle" | "loading" | "restoring" | "ready" | "failed" | "closing";
@@ -257,6 +288,35 @@ export interface EditorState {
   /** 第六轮：工作区切换。 */
   workspace: Workspace;
   setWorkspace: (workspace: Workspace) => void;
+
+  /** 第九轮：双入口精简界面（只影响右栏渲染，不改任何持久化结构）。 */
+  slimEntry: SlimEntry;
+  setSlimEntry: (entry: SlimEntry) => void;
+  /** 六项开关状态；`strength` 是「记住的强度」，关闭时不清零，方便再打开。 */
+  slimItems: Record<SixItemId, SixItemState>;
+  setSlimItems: (items: Record<SixItemId, SixItemState>) => void;
+  setSlimItemEnabled: (id: SixItemId, enabled: boolean) => void;
+  applySlimItem: (id: SixItemId, strength: number) => void;
+  resetSlimItem: (id: SixItemId) => void;
+  /** 一键精修的界面状态；`applied` 只活在内存里，不进项目文件。 */
+  oneClick: OneClickState;
+  setOneClickMode: (mode: OneClickMode) => void;
+  setOneClickStrength: (strength: number) => void;
+  setOneClickStatus: (status: OneClickState["status"]) => void;
+  setOneClickError: (message: string | null) => void;
+  setOneClickApplied: (applied: AppliedPlan | null) => void;
+  /** 整图分析缓存（⑤⑥ 的方向与幅度）。 */
+  slimReports: Record<string, SlimReport>;
+  setSlimReport: (
+    photoId: string,
+    report: AnalysisReport,
+    anchors: Partial<Record<AdjustmentKey, number>>,
+    elapsedMs: number,
+  ) => void;
+  setSlimReportStatus: (photoId: string, status: MaskStatus, message?: string | null) => void;
+  clearSlimReport: (photoId: string) => void;
+  /** 旧调整清理：把新界面看不到、但仍在改像素的旧参数一次性归零。 */
+  clearLegacyAdjustments: () => void;
 
   /** 第七轮：Raster/RAW 来源、RAW 显影参数、色彩输出与计算后端。 */
   rawByPhoto: Record<string, RawDevelopParams>;
@@ -685,6 +745,116 @@ export function createEditorStore() {
       workspace: "edit",
       setWorkspace: (workspace) => set({ workspace }),
 
+      slimEntry: "oneclick",
+      setSlimEntry: (slimEntry) => set({ slimEntry, workspace: "edit" }),
+      slimItems: defaultSixItems(),
+      setSlimItems: (slimItems) => set({ slimItems }),
+      setSlimItemEnabled: (id, enabled) => {
+        const current = get().slimItems[id];
+        const target = enabled ? (current.strength > 0 ? current.strength : DEFAULT_ITEM_STRENGTH) : 0;
+        // applySlimItem 内部会记住强度：关闭时写 0，但保留「下次打开用多大」。
+        get().applySlimItem(id, target);
+      },
+      applySlimItem: (id, strength) => {
+        const state = get();
+        const photoId = state.activeId;
+        if (!photoId) return;
+        const slimReport = state.slimReports[photoId];
+        const next = writeSixItem(
+          state.params[photoId] ?? DEFAULT_PARAMS,
+          state.faces[photoId] ?? null,
+          id,
+          strength,
+          {
+            anchors: slimReport?.anchors ?? {},
+            deltas: tonalDeltas(slimReport?.report ?? null),
+          },
+        );
+        apply(() => next, `手动调整·${ITEM_META[id].label}`, `slim:${id}`);
+        const items = get().slimItems;
+        set({
+          slimItems: {
+            ...items,
+            [id]: {
+              enabled: strength > 0,
+              strength: strength > 0 ? strength : items[id].strength,
+            },
+          },
+        });
+      },
+      resetSlimItem: (id) => {
+        get().applySlimItem(id, 0);
+        set({ slimItems: { ...get().slimItems, [id]: { enabled: false, strength: 0 } } });
+      },
+      oneClick: defaultOneClick(),
+      setOneClickMode: (mode) => set({ oneClick: { ...get().oneClick, mode } }),
+      setOneClickStrength: (strength) =>
+        set({ oneClick: { ...get().oneClick, strength: clamp(strength, 0, 100) } }),
+      setOneClickStatus: (status) => set({ oneClick: { ...get().oneClick, status } }),
+      setOneClickError: (message) =>
+        set({
+          oneClick: {
+            ...get().oneClick,
+            error: message,
+            status: message ? "error" : get().oneClick.status,
+          },
+        }),
+      setOneClickApplied: (applied) => set({ oneClick: { ...get().oneClick, applied } }),
+      slimReports: {},
+      setSlimReport: (photoId, report, anchors, elapsedMs) =>
+        set((state) => ({
+          slimReports: {
+            ...state.slimReports,
+            [photoId]: { report, anchors, status: "ready", error: null, elapsedMs },
+          },
+          // 一键精修写完后，六项滑块按真实参数同步，避免两处数字打架。
+          slimItems: itemsFromParams(state.params[photoId] ?? DEFAULT_PARAMS, {
+            anchors,
+            deltas: tonalDeltas(report),
+          }),
+        })),
+      setSlimReportStatus: (photoId, status, message) =>
+        set((state) => {
+          const previous = state.slimReports[photoId];
+          return {
+            slimReports: {
+              ...state.slimReports,
+              [photoId]: {
+                report: previous?.report ?? {
+                  imageHash: "",
+                  algorithmVersion: "",
+                  resultVersion: 0,
+                  analyzedAtMs: 0,
+                  mode: "standard",
+                  faces: 0,
+                  metrics: [],
+                  suggestions: [],
+                  warnings: [],
+                  capabilities: {
+                    faceDetection: false,
+                    beautyAnalysis: false,
+                    manualMask: false,
+                    background: false,
+                  },
+                },
+                anchors: previous?.anchors ?? {},
+                status,
+                error: message ?? null,
+                elapsedMs: previous?.elapsedMs ?? 0,
+              },
+            },
+          };
+        }),
+      clearSlimReport: (photoId) =>
+        set((state) => {
+          const slimReports = { ...state.slimReports };
+          delete slimReports[photoId];
+          return { slimReports };
+        }),
+      clearLegacyAdjustments: () => {
+        apply((current) => clearLegacyAdjustments(current), "清除旧调整");
+      },
+
       rawByPhoto: {},
       rawStatus: {},
       rawError: null,
@@ -831,11 +1001,13 @@ export function createEditorStore() {
         const renderedPreviews = { ...state.renderedPreviews };
         const faces = { ...state.faces };
         const beautyAnalysis = { ...state.beautyAnalysis };
+        const slimReports = { ...state.slimReports };
         delete params[id];
         delete history[id];
         delete renderedPreviews[id];
         delete faces[id];
         delete beautyAnalysis[id];
+        delete slimReports[id];
 
         let activeId = state.activeId;
         if (activeId === id) {
@@ -856,6 +1028,7 @@ export function createEditorStore() {
           renderedPreviews,
           faces,
           beautyAnalysis,
+          slimReports,
           activeId,
           autoFit: true,
           pan: { x: 0, y: 0 },
@@ -999,6 +1172,9 @@ export function createEditorStore() {
           beautyStatus: "idle",
           beautyError: null,
           beautyProgress: null,
+          slimReports: {},
+          slimItems: defaultSixItems(),
+          oneClick: defaultOneClick(),
           maskVisible: false,
           maskPreview: null,
           maskStatus: "idle",
@@ -1074,6 +1250,9 @@ export function createEditorStore() {
           beautyStatus: "idle",
           beautyError: null,
           beautyProgress: null,
+          slimReports: {},
+          slimItems: defaultSixItems(),
+          oneClick: defaultOneClick(),
           maskPreview: null,
           maskStatus: "idle",
           maskError: null,
@@ -2035,6 +2214,10 @@ export const selectActiveFace = (state: EditorState) => {
 
 export const selectActiveBeautyAnalysis = (state: EditorState): BeautyAnalysis | null =>
   (state.activeId ? state.beautyAnalysis[state.activeId] : undefined) ?? null;
+
+/** 当前照片的整图分析缓存（⑤⑥ 的方向与幅度）。 */
+export const selectActiveSlimReport = (state: EditorState): SlimReport | null =>
+  (state.activeId ? state.slimReports[state.activeId] : undefined) ?? null;
 
 /** 当前选中人脸的参数条目；尚未同步时返回 null。 */
 export const selectActiveFaceBeauty = (state: EditorState) => {
