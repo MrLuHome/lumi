@@ -335,7 +335,7 @@ export default function App() {
         try {
           const items = await importPaths(paths);
           if (items.length === 0) {
-            state.notify("error", "没有找到可导入的图片（支持 JPG / PNG / WebP）");
+            state.notify("error", "没有找到可导入的图片（支持 JPG / PNG / WebP / TIFF）");
             return;
           }
           useEditorStore.getState().addPhotos(items);

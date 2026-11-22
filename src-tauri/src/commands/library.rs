@@ -72,7 +72,7 @@ pub async fn pick_images(state: State<'_, ImageCache>) -> AppResult<Vec<ImageIte
     tauri::async_runtime::spawn_blocking(move || {
         let selection = rfd::FileDialog::new()
             .set_title("导入照片")
-            .add_filter("照片", &["jpg", "jpeg", "png", "webp"])
+            .add_filter("照片", &["jpg", "jpeg", "png", "webp", "tif", "tiff"])
             .pick_files();
         match selection {
             // 用户取消不应弹错误提示。

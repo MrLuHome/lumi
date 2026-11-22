@@ -99,7 +99,32 @@ fn to_pair(point: (f32, f32)) -> [f32; 2] {
     [point.0, point.1]
 }
 
+/// 保护级别：固定点 > 五官锚点环 > 脸型环。同一位置只保留级别最高的控制点。
+fn protection(tag: ControlTag) -> u8 {
+    match tag {
+        ControlTag::Fixed => 3,
+        ControlTag::Eye { .. } | ControlTag::Nose { .. } | ControlTag::Mouth { .. } => 2,
+        ControlTag::Face { .. } => 1,
+    }
+}
+
+/// 真实人脸的鼻子/嘴位置差异很大，脸型环可能与五官环在同一点重合。
+/// 重合点若保留两种位移，任何塑形都会让相邻三角形折叠，因此按保护级别焊接。
+const WELD_DISTANCE: f32 = 0.01;
+
 fn push_point(points: &mut Vec<ControlPoint>, local: [f32; 2], tag: ControlTag, weight: f32) {
+    if let Some(existing) = points.iter_mut().find(|point| {
+        (point.local[0] - local[0]).powi(2) + (point.local[1] - local[1]).powi(2)
+            < WELD_DISTANCE * WELD_DISTANCE
+    }) {
+        if protection(tag) > protection(existing.tag) {
+            existing.local = local;
+            existing.local_to = local;
+            existing.tag = tag;
+            existing.weight = weight;
+        }
+        return;
+    }
     points.push(ControlPoint {
         local,
         local_to: local,
@@ -443,5 +468,51 @@ mod tests {
         assert!(!preview.dense_landmarks);
         assert_eq!(preview.source, "yunet-5");
         assert!(!preview.triangles.is_empty());
+    }
+
+    /// 回归：真实近景人像里鼻尖可能低到让鼻部环与脸型环重合。
+    /// 重合点在焊接前会让瘦脸把相邻三角形翻折，安全策略随即把强度降为 0。
+    #[test]
+    fn coincident_feature_and_face_rings_are_welded_before_deformation() {
+        let mut sample = face();
+        // 鼻部环 1 的底部与脸型环 2 的底部在局部坐标 (0, 1.2) 重合。
+        sample.landmarks[2] = NormPoint {
+            x: 0.5,
+            y: 0.5152,
+        };
+        let geometry = FaceGeometry::from_face(&sample, 1000, 1000).unwrap();
+        let params = FaceReshape {
+            face: FaceShape {
+                slim: 50.0,
+                ..Default::default()
+            },
+            ..FaceReshape::new(1)
+        };
+        let mut mesh = build(&geometry, &params, None);
+
+        for (index, first) in mesh.points.iter().enumerate() {
+            for second in mesh.points.iter().skip(index + 1) {
+                let distance = ((first.local[0] - second.local[0]).powi(2)
+                    + (first.local[1] - second.local[1]).powi(2))
+                .sqrt();
+                assert!(
+                    distance >= WELD_DISTANCE,
+                    "控制点未焊接：{distance} < {WELD_DISTANCE}"
+                );
+            }
+        }
+        assert_eq!(mesh.flipped_triangles(), 0, "焊接后不应再有翻折");
+        assert!(mesh.max_displacement() > 1.0);
+
+        let quality = crate::face_reshape::quality::stabilize(
+            &mut mesh,
+            crate::face_reshape::quality::MAX_FACE_DISPLACEMENT_RATIO,
+        );
+        assert!(
+            quality.applied_scale > 0.0,
+            "中等强度瘦脸不应被完全回退：{:?}",
+            quality.notes
+        );
+        assert_eq!(quality.flipped_triangles, 0);
     }
 }

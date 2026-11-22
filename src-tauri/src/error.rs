@@ -15,7 +15,7 @@ pub enum AppError {
     #[error("图片编码失败：{0}")]
     Encode(String),
 
-    #[error("没有找到可导入的图片（支持 JPG / PNG / WebP）")]
+    #[error("没有找到可导入的图片（支持 JPG / PNG / WebP / TIFF）")]
     EmptySelection,
 
     #[error("后台任务执行失败：{0}")]

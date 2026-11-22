@@ -46,7 +46,7 @@ fn contains(triangle: &Triangle, x: f64, y: f64) -> bool {
 ///
 /// - 输入少于 3 个不重复点或所有点共线时返回空；
 /// - 输出三角形使用原始索引，按确定性顺序生成；
-/// - 不保证三角形绕向，调用方自行统一。
+/// - 所有三角形统一为正绕向（叉积 > 0），调用方可以直接比较符号判断折叠。
 pub fn delaunay(points: &[[f32; 2]]) -> Vec<[usize; 3]> {
     if points.len() < 3 {
         return Vec::new();
@@ -145,14 +145,26 @@ pub fn delaunay(points: &[[f32; 2]]) -> Vec<[usize; 3]> {
         if triangle.a >= unique.len() || triangle.b >= unique.len() || triangle.c >= unique.len() {
             continue;
         }
-        let (a, b, c) = (triangle.a, triangle.b, triangle.c);
+        // 顶点索引先映射回调用方原始点集：去重只影响相邻重复点，
+        // 若直接把 unique 索引当原始索引，后续点的所有三角形都会错位。
+        let (a, b, c) = (
+            index_of[triangle.a],
+            index_of[triangle.b],
+            index_of[triangle.c],
+        );
         if a == b || b == c || a == c {
             continue;
         }
-        if triangle_area(points[a], points[b], points[c]).abs() < 1e-3 {
+        let area = triangle_area(points[a], points[b], points[c]);
+        if area.abs() < 1e-3 {
             continue;
         }
-        output.push([a, b, c]);
+        // 统一为正绕向，保证调用方的翻转检测只反映真实折叠。
+        if area < 0.0 {
+            output.push([a, c, b]);
+        } else {
+            output.push([a, b, c]);
+        }
     }
     output
 }
@@ -222,5 +234,32 @@ mod tests {
             }
         }
         assert!(touched.iter().all(|value| *value));
+    }
+
+    /// 回归：输出必须统一正绕向，且重复点不能让后续索引整体错位。
+    #[test]
+    fn winding_is_normalized_and_duplicates_keep_original_indices() {
+        let points = vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+            [5.0, 5.0],
+            [5.0, 5.0],
+        ];
+        let triangles = delaunay(&points);
+        assert!(!triangles.is_empty());
+        for triangle in &triangles {
+            let area = triangle_area(
+                points[triangle[0]],
+                points[triangle[1]],
+                points[triangle[2]],
+            );
+            assert!(area > 0.0, "三角形绕向未统一：{triangle:?} area={area}");
+            assert!(
+                !triangle.contains(&5),
+                "重复点应复用第一个索引，不能指向重复副本：{triangle:?}"
+            );
+        }
     }
 }

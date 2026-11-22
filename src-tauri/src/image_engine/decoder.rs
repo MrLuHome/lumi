@@ -6,7 +6,19 @@ use image::{DynamicImage, ImageDecoder, ImageReader};
 use crate::error::{AppError, AppResult};
 use crate::image_engine::buffer::{ensure_reasonable_size, Image16};
 
-pub const SUPPORTED_EXTENSIONS: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
+pub const SUPPORTED_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "webp", "tif", "tiff"];
+
+/// RAW 扩展名：当前 Beta 未开放导入（LibRaw 许可仍待审核）。
+const RAW_EXTENSIONS: [&str; 20] = [
+    "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "rw2", "orf", "raf", "dng", "pef",
+    "srw", "erf", "kdc", "mrw", "x3f", "3fr", "iiq",
+];
+
+fn extension_of(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,22 +44,17 @@ pub struct DecodedImage {
 }
 
 pub fn is_supported_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| SUPPORTED_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+    extension_of(path)
+        .map(|ext| SUPPORTED_EXTENSIONS.contains(&ext.as_str()))
         .unwrap_or(false)
 }
 
 pub fn format_label(path: &Path) -> String {
-    match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .as_deref()
-    {
+    match extension_of(path).as_deref() {
         Some("jpg") | Some("jpeg") => "JPEG".to_string(),
         Some("png") => "PNG".to_string(),
         Some("webp") => "WebP".to_string(),
+        Some("tif") | Some("tiff") => "TIFF".to_string(),
         Some(other) => other.to_ascii_uppercase(),
         None => "未知".to_string(),
     }
@@ -55,9 +62,19 @@ pub fn format_label(path: &Path) -> String {
 
 /// 解码并按 EXIF Orientation 摆正；16-bit 源图保留 16-bit 精度。
 pub fn decode(path: &Path) -> AppResult<DecodedImage> {
+    let extension = extension_of(path).unwrap_or_default();
+    if RAW_EXTENSIONS.contains(&extension.as_str()) {
+        // 诚实报错：RAW 解码器存在，但本轮 Beta 未开放导入。
+        return Err(AppError::Unsupported(format!(
+            "{} 是 RAW 文件，当前 Beta 未开放 RAW 导入（LibRaw 许可审核中）",
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "文件".into())
+        )));
+    }
     if !is_supported_extension(path) {
         return Err(AppError::Unsupported(format!(
-            "{} 不是支持的图片格式（JPG / PNG / WebP）",
+            "{} 不是支持的图片格式（JPG / PNG / WebP / TIFF）",
             path.file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "文件".into())
@@ -131,7 +148,29 @@ mod tests {
     fn detects_supported_extensions_case_insensitively() {
         assert!(is_supported_extension(Path::new("/tmp/a.JPG")));
         assert!(is_supported_extension(Path::new("/tmp/a.webp")));
-        assert!(!is_supported_extension(Path::new("/tmp/a.tiff")));
+        assert!(is_supported_extension(Path::new("/tmp/a.tiff")));
+        assert!(is_supported_extension(Path::new("/tmp/a.TIF")));
+    }
+
+    #[test]
+    fn tiff_is_decoded_with_orientation_and_label() {
+        let path = std::env::temp_dir().join("lumi-tiff-round10.tiff");
+        RgbaImage::from_pixel(6, 4, Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let decoded = decode(&path).unwrap();
+        assert_eq!(decoded.format, "TIFF");
+        assert_eq!(decoded.image.dimensions(), (6, 4));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn raw_is_rejected_with_explicit_message() {
+        let path = std::env::temp_dir().join("lumi-fake-round10.cr3");
+        std::fs::write(&path, b"fake raw").unwrap();
+        let error = decode(&path).unwrap_err();
+        assert!(error.to_string().contains("未开放 RAW"));
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
