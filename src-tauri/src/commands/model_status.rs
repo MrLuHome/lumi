@@ -319,6 +319,95 @@ mod tests {
         assert!(value["detail"].as_str().unwrap().contains("SHA256"));
     }
 
+    /// 命令层真正发给前端的**快照**形状：字段名与层级一旦漂移，
+    /// `ModelHubPanel` 这类消费方会静默读到 `undefined`。
+    ///
+    /// 说明一处与任务描述不一致的地方：前端契约里**没有** `blocking` 字段。
+    /// `blocking` 是 `ModelHealth`（准入链内部结果）的概念，序列化给前端的是
+    /// `failure`（顺序上第一个阻塞项）+ `findings`（全量）。这样前端只需读
+    /// `state` 做分支、读 `failure` 做说明、读 `findings` 做诊断，不必理解"判定顺序"。
+    #[test]
+    fn registry_snapshot_serializes_with_the_frontend_key_set() {
+        use crate::ai_engine::model_registry::{locate, Registry};
+
+        let registry = Registry::new(None);
+        let mut dirs = locate::dev_base_dirs();
+        dirs.push(PathBuf::from("/definitely/not/here"));
+        let value = serde_json::to_value(registry.snapshot(&dirs)).unwrap();
+
+        // 顶层。
+        for key in ["schemaVersion", "generatedAtUnix", "models", "summary"] {
+            assert!(value.get(key).is_some(), "快照缺少 `{key}`");
+        }
+        for key in [
+            "total",
+            "official",
+            "ready",
+            "verified",
+            "blocked",
+            "userImported",
+        ] {
+            assert!(value["summary"].get(key).is_some(), "summary 缺少 `{key}`");
+        }
+
+        // 单条模型。
+        let model = &value["models"][0];
+        for key in [
+            "id",
+            "displayName",
+            "version",
+            "task",
+            "origin",
+            "official",
+            "format",
+            "file",
+            "sizeBytes",
+            "sizeOnDiskBytes",
+            "sha256",
+            "input",
+            "outputs",
+            "license",
+            "state",
+            "loaded",
+            "path",
+            "failure",
+            "findings",
+            "checkedAtUnix",
+        ] {
+            assert!(model.get(key).is_some(), "模型条目缺少 `{key}`");
+        }
+        // 前端没有 `blocking`；被暴露的是 `failure` + `findings`。
+        assert!(
+            model.get("blocking").is_none(),
+            "`blocking` 是内部概念，不应出现在前端契约里"
+        );
+        assert!(model["findings"].is_array());
+        assert_eq!(model["sha256"], crate::ai_engine::model_registry::builtin::YUNET.sha256);
+        assert_eq!(model["official"], true);
+
+        // 许可视图：四字段独立 + 未核实字段单列。
+        let license = &model["license"];
+        for key in [
+            "state",
+            "spdx",
+            "weights",
+            "commercialUse",
+            "redistribution",
+            "trainingData",
+            "unverifiedFields",
+            "evidence",
+            "note",
+        ] {
+            assert!(license.get(key).is_some(), "许可视图缺少 `{key}`");
+        }
+        assert_eq!(license["unverifiedFields"], serde_json::json!(["trainingData"]));
+
+        // 结构化输入契约（不是自由字符串）。
+        for key in ["dtype", "layout", "shape", "valueRange", "channelOrder"] {
+            assert!(model["input"].get(key).is_some(), "input 缺少 `{key}`");
+        }
+    }
+
     /// `failure_of()` 的映射是命令层唯一的"错误 → 失败态"翻译点。
     /// 注意 `ModelCorrupt` 分支目前把 `actual_sha` 填成 `None`（R12 待修，
     /// 见 `docs/R11_ROUND_REPORT.md` 已知问题），本测试**如实记录现状**而不是背书。
