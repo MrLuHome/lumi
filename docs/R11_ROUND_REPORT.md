@@ -300,11 +300,11 @@ pub struct ModelIntrospection {
 
 | # | 命令 | 结果 | 基线 | 判定 |
 |---|------|------|------|------|
-| V1 | `cargo test --lib` | **477 passed / 0 failed / 3 ignored**，6.70s | 397 passed / 0 failed / 3 ignored | ✅ +80 条新单测，0 失败 |
-| V2 | `cargo test`（全量 17 个 target） | **575 passed / 0 failed / 7 ignored** | 477 passed / 0 failed / 7 ignored | ✅ +98 条，0 失败 |
+| V1 | `cargo test --lib` | **478 passed / 0 failed / 3 ignored**，7.24s | 397 passed / 0 failed / 3 ignored | ✅ +81 条新单测，0 失败 |
+| V2 | `cargo test`（全量 17 个 target） | **576 passed / 0 failed / 7 ignored** | 477 passed / 0 failed / 7 ignored | ✅ +99 条，0 失败 |
 | V3 | `cargo clippy --all-targets` | **0 warning / 0 error**（`Finished dev profile`，无输出） | 0 warning | ✅ |
 | V4 | `cargo check --no-default-features --lib` | **通过**（`Finished dev profile in 3.81s`） | 通过 | ✅ |
-| V5 | `cargo test --no-default-features --lib` | **477 passed / 0 failed / 3 ignored**，6.63s | 397 passed | ✅ 与 V1 完全一致 |
+| V5 | `cargo test --no-default-features --lib` | **478 passed / 0 failed / 3 ignored**，7.13s | 397 passed | ✅ 与 V1 完全一致 |
 | V6 | `cargo test --test face_detection --test beauty --test beauty_real --test face_intelligence` | 4 + 12 + 4 + 5 = **25 passed / 0 failed**（`beauty_real` 真实跑满 **27.74 s**，未跳过） | 同 | ✅ 真实推理路径零回归 |
 | V7 | `pnpm test`（前端 vitest） | **81 passed / 8 files**，235ms | 81 passed | ✅ |
 | V8 | `npx tsc --noEmit` | **无输出（0 error）** | 0 | ✅ |
@@ -313,7 +313,7 @@ pub struct ModelIntrospection {
 
 | target | passed | ignored |
 |--------|--------|---------|
-| `src/lib.rs` | 477 | 3 |
+| `src/lib.rs` | 478 | 3 |
 | `tests/beauty.rs` | 12 | 1 |
 | `tests/beauty_real.rs` | 4 | 0 |
 | `tests/engine.rs` | 10 | 1 |
@@ -329,7 +329,7 @@ pub struct ModelIntrospection {
 | `tests/round10_real_photos.rs` | 5 | 0 |
 | `tests/round8_benchmark.rs` | 0 | 1 |
 | `tests/round9_1_persistence.rs` | 9 | 0 |
-| **合计** | **575** | **7** |
+| **合计** | **576** | **7** |
 
 ### 6.2 `tests/model_registry.rs` 18 条验收测试逐条对应任务书验收点
 
@@ -349,7 +349,7 @@ pub struct ModelIntrospection {
 | R9 量纲护栏 | `yunet_value_range_is_raw255_consistent_with_the_implementation` |
 | 零维形状不得构造张量（§14.3-2） | `tensor::tests::zero_dimension_shape_cannot_construct_a_tensor`（全 0 + 部分 0 两种，并反向确认真实契约不受影响）、`placeholder_shape_is_rejected_instead_of_silently_passing` |
 | **"许可未过就没读文件"的行为级铁证** | `verify::tests::license_block_never_reads_the_file`（`chmod 000` 对照组：许可 `NotAllowed` ⇒ 只报许可；改成 `Allowed` ⇒ `corrupt` + `os error 13`） |
-| 命令层序列化契约（无 tauri runtime） | `commands::model_status::tests`：`runtime_status_serializes_with_camel_case_keys` / `status_from_state_maps_failures_into_the_view` / `inference_error_serializes_to_the_four_field_contract` / `failure_of_maps_every_code_to_a_matching_kind` |
+| 命令层序列化契约（无 tauri runtime） | `commands::model_status::tests`：`registry_snapshot_serializes_with_the_frontend_key_set`（快照全字段 + 许可四字段 + `unverifiedFields`，并断言 `blocking` **不在**前端契约里）/ `runtime_status_serializes_with_camel_case_keys` / `status_from_state_maps_failures_into_the_view` / `inference_error_serializes_to_the_four_field_contract` / `failure_of_maps_every_code_to_a_matching_kind` |
 | 快照**不哈希**的可判别证明 | `snapshot_does_not_hash_the_weight`（篡改副本仍报 verified + 登记值；对照组完整校验报 corrupt） |
 | 内置 ID 命名契约 | `every_registered_model_id_follows_the_naming_contract`（遍历 `builtin::ALL`） |
 | 前端状态联合类型双向对齐 | `model_runtime_state_strings_match_the_frontend_union`（7 个变体全构造 + `include_str!` 切出 `ModelState` 联合类型双向比对） |
@@ -553,7 +553,18 @@ QA 结论是 `ff91cee` 通过、无 FAIL，但指出**我自己写坏了 4 条�
 | 3 | `model_id_follows_the_naming_contract` 只校验函数内硬编码字面量，不碰 `builtin::ALL` | 遍历 `builtin::ALL`：字符集 `[a-z0-9-]`、长度 ≤48、无首尾/连续 `-`、`<task>-` 前缀与 `spec.task` 一致、版本尾段、ID 唯一 |
 | 4 | `snapshot_reads_real_model_without_hashing` 断言 `sha256 == 登记值`，而"现算"与"不现算"值相同，无法区分 | 改成**可判别构造**：真实权重拷到临时目录、翻 1 字节保持长度，指向副本做 snapshot —— 若真哈希就会报 `corrupt`，实际仍 `verified` + 登记值 + `sizeOnDiskBytes` 来自 `metadata`；同时用 `verify::check_at` 对照证明该副本确实是"坏"的。按 QA 建议**不用计时断言**（易 flaky） |
 | 5 | `verify.rs` 模块注释引用了**不存在的**测试名 `license_block_never_reads_the_file`（把弱证明写成强证明） | 补上真实的强测试：`#[cfg(unix)]` 把权重 `chmod 000`，许可 `NotAllowed` ⇒ findings 只有 `licenseBlocked`；同一文件改成 `Allowed` ⇒ `corrupt` + `os error 13`。第二组证明"文件确实读不了"，因此第一组只能解释为"没读"。当前用户能读（root）时自动跳过。**已用变异验证该测试真的会红**（把断言改成 `MUTATED_...` 后变红，随后还原） |
-| 6 | `commands/model_status.rs` 250 行零测试 | 补 4 条不依赖 tauri runtime 的契约测试：camelCase 键名、`InferenceError` 四字段、`status_from_state` 映射、`failure_of` 五种错误码 → 五种失败态的映射 |
+| 6 | `commands/model_status.rs` 250 行零测试 | 补 5 条不依赖 tauri runtime 的契约测试：快照全字段键集、`ModelRuntimeStatus` camelCase 键名、`InferenceError` 四字段、`status_from_state` 映射、`failure_of` 五种错误码 → 五种失败态的映射 |
+
+**这 6 条现在靠什么判据变红**（回答"被改错会不会红"）：
+
+| # | 判据 |
+|---|------|
+| 1 | 真实 `portrait.jpg` 上 `assert!(!legacy.faces.is_empty())`；任一字段超出 `f32::EPSILON * 8 × 量级` 即红。若有人把 `detect_with_cancel` 改成不转调同一路径、或两条路径分叉，坐标/分数立刻不等 |
+| 2 | 删/改任一 `as_str()` 分支 ⇒ 与 TS 联合类型双向比对失配；只改 `types.ts` 不改 Rust 同样红（`include_str!` 读真实文件，不是手抄数组） |
+| 3 | 往 `builtin::ALL` 加一条 id 不合规/前缀与 `task` 不一致/重复的登记 ⇒ 立即红 |
+| 4 | 一旦有人把 `snapshot()` 改成做内容校验，篡改副本会得到 `corrupt` 而断言要求 `verified` ⇒ 红 |
+| 5 | `verify.rs` 的 `chmod 000` 对照组：若有人把许可判定移到读文件之后，`NotAllowed` 那一组会多出 `corrupt` 发现；若有人删掉读文件前的许可短路，第二组也拿不到 `os error 13` |
+| 6 | 键名改回 snake_case、或把 `failure`/`findings` 从视图里删掉、或重新暴露 `blocking` ⇒ 立即红 |
 
 同时按 QA / 架构师意见补的两道守卫（都不改既有行为）：
 
@@ -627,3 +638,12 @@ QA 结论是 `ff91cee` 通过、无 FAIL，但指出**我自己写坏了 4 条�
    `FaceEngine::default()`；registry 的 `(id, sha256)` 键可以直接给 plan 缓存用。
 6. **手工 GUI 验收**（§7 留项）：打包后跑一遍 `skinModelStatus` 挂载、蒙版显示、
    批量导出、项目保存。
+7. **N7（QA 提出，成本极低）**：`model_runtime_state_strings_match_the_frontend_union`
+   的跨语言锁只闭环「TS → Rust」方向——若只给 `ModelRuntimeState` 加第 8 个变体而不动
+   `types.ts`，该用例不会红。修法：测试里用**穷尽 `match`** 把变体映射成名字
+   （新变体不进 `match` 就编译不过），再断言名字集合与 TS 字面量集合相等。
+   这是 R12 新增 `FaceLandmark` 状态前应先补的一步。
+8. **S2 是 R13 的硬闸门，不是建议**：`skin_segmentation/model.rs:63` 的 `status()`
+   走 `verify::check(…, false)`（含 SHA）。动 `SKIN_MODELS` 之前必须换 `check_shallow`
+   或落盘缓存，否则面板挂载会整文件哈希，R1 复活。
+
