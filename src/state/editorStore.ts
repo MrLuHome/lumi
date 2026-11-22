@@ -123,7 +123,14 @@ export type SlimEntry = "oneclick" | "manual";
 
 /** 单张照片的整图分析缓存（⑤⑥ 的方向与幅度来源）。 */
 export interface SlimReport {
-  report: AnalysisReport;
+  /**
+   * 真实的整图分析结果。
+   *
+   * **分析中 / 分析失败时必须是 `null`**：早期版本用「空占位报告」兜底，
+   * 导致 `report` 从「分析中」起就恒为真值，失败后滑块会一路静默 no-op
+   * （验收缺陷 D1）。现在只有 `analyze_retouch` 真的返回时才写值。
+   */
+  report: AnalysisReport | null;
   /** 分析当时的参数值，作为「锚点 + 建议增量」的基准。 */
   anchors: Partial<Record<AdjustmentKey, number>>;
   status: MaskStatus;
@@ -314,9 +321,11 @@ export interface EditorState {
     elapsedMs: number,
   ) => void;
   setSlimReportStatus: (photoId: string, status: MaskStatus, message?: string | null) => void;
-  clearSlimReport: (photoId: string) => void;
-  /** 旧调整清理：把新界面看不到、但仍在改像素的旧参数一次性归零。 */
-  clearLegacyAdjustments: () => void;
+  /**
+   * 旧调整清理：把新界面看不到、但仍在改像素的旧参数一次性归零。
+   * 手绘笔触 / 点选修复点默认**不动**（D5），只有传 true 才一起清。
+   */
+  clearLegacyAdjustments: (includeBrushwork?: boolean) => void;
 
   /** 第七轮：Raster/RAW 来源、RAW 显影参数、色彩输出与计算后端。 */
   rawByPhoto: Record<string, RawDevelopParams>;
@@ -760,16 +769,25 @@ export function createEditorStore() {
         const photoId = state.activeId;
         if (!photoId) return;
         const slimReport = state.slimReports[photoId];
-        const next = writeSixItem(
-          state.params[photoId] ?? DEFAULT_PARAMS,
-          state.faces[photoId] ?? null,
-          id,
-          strength,
-          {
-            anchors: slimReport?.anchors ?? {},
-            deltas: tonalDeltas(slimReport?.report ?? null),
-          },
-        );
+        const before = state.params[photoId] ?? DEFAULT_PARAMS;
+        const next = writeSixItem(before, state.faces[photoId] ?? null, id, strength, {
+          anchors: slimReport?.anchors ?? {},
+          deltas: tonalDeltas(slimReport?.report ?? null),
+        });
+        const changed = !paramsEqual(before, next);
+        if (!changed) {
+          // 没有真正写入（典型场景：⑤⑥ 还没有分析结论，或不给建议）。
+          // 这时**不更新记忆强度**，避免留下「开关像是开了、其实参数没动」的假状态。
+          if (strength === 0) {
+            set({
+              slimItems: {
+                ...state.slimItems,
+                [id]: { enabled: false, strength: state.slimItems[id].strength },
+              },
+            });
+          }
+          return;
+        }
         apply(() => next, `手动调整·${ITEM_META[id].label}`, `slim:${id}`);
         const items = get().slimItems;
         set({
@@ -820,23 +838,9 @@ export function createEditorStore() {
             slimReports: {
               ...state.slimReports,
               [photoId]: {
-                report: previous?.report ?? {
-                  imageHash: "",
-                  algorithmVersion: "",
-                  resultVersion: 0,
-                  analyzedAtMs: 0,
-                  mode: "standard",
-                  faces: 0,
-                  metrics: [],
-                  suggestions: [],
-                  warnings: [],
-                  capabilities: {
-                    faceDetection: false,
-                    beautyAnalysis: false,
-                    manualMask: false,
-                    background: false,
-                  },
-                },
+                // 不再虚构占位报告：没有真实结论时一律 null，
+                // 界面据此判断「未分析 / 失败」，从而能真的重试。
+                report: previous?.report ?? null,
                 anchors: previous?.anchors ?? {},
                 status,
                 error: message ?? null,
@@ -845,14 +849,11 @@ export function createEditorStore() {
             },
           };
         }),
-      clearSlimReport: (photoId) =>
-        set((state) => {
-          const slimReports = { ...state.slimReports };
-          delete slimReports[photoId];
-          return { slimReports };
-        }),
-      clearLegacyAdjustments: () => {
-        apply((current) => clearLegacyAdjustments(current), "清除旧调整");
+      clearLegacyAdjustments: (includeBrushwork = false) => {
+        apply(
+          (current) => clearLegacyAdjustments(current, { includeBrushwork }),
+          includeBrushwork ? "清除旧调整与手绘内容" : "清除旧调整",
+        );
       },
 
       rawByPhoto: {},

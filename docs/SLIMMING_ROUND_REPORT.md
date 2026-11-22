@@ -184,3 +184,109 @@ grep -rn "Provider|LEVEL|置信度|关键点|SHA256|ONNX|语义分割|Tensor|蒙
 
 见 `git log -1 --stat`（message：`feat(slim): 双入口界面与六项手动调整`）。
 `git add` 只加了本轮相关路径：`src/**`、`docs/SLIMMING_*.md`、`src-tauri/tests/slim_items.rs`。
+
+---
+
+# 第二轮：QA 验收缺陷修复（D1–D6）
+
+> 触发：`docs/SLIMMING_ACCEPTANCE.md`（QA 严过关独立复验，六项像素证据全部复现一致）
+> 结论先行：**D1 已修（含 error 路径自动化测试）、D5 已修（清理范围收窄 + 手绘内容改为显式勾选）、D2 选「补证据」路线、D3/D4/D6 已处理。**
+
+## 9.1 修改文件
+
+| 文件 | 改动 |
+|---|---|
+| `src/state/editorStore.ts` | `SlimReport.report` 改为**可空**；`setSlimReportStatus` **不再虚构占位报告**；`applySlimItem` 在「没真正写入」时不更新记忆强度；删除死代码 `clearSlimReport`；`clearLegacyAdjustments(includeBrushwork?)` 增加参数 |
+| `src/state/slim.ts` | 新增 `auditBrushwork()`；`auditLegacyAdjustments()` **把手绘内容摘出**；`clearLegacyAdjustments(params, { includeBrushwork })`；新增 `needsGlobalAnalysis()`（D1 判定表的唯一事实来源）；删除死代码 `hiddenBeautyFields` |
+| `src/components/slim/ManualPanel.tsx` | 提示区抽成纯组件 `ManualNotice`；补 **error 分支 + 「重试」按钮**；⑤⑥ 的**开关**也走「先分析再写」；写入判定改用 `needsGlobalAnalysis` |
+| `src/components/slim/OneClickPanel.tsx` | 失败态聚合 `slimReports[].error`；重试文案指向真实存在的按钮 |
+| `src/components/slim/AdvancedSettings.tsx` | 手绘内容单列区块 + 「同时清除手绘内容（N 处）」复选框，**默认不勾** |
+| `src/components/StatusBar.tsx` | 「参数已保存」→「参数还在（记得保存）」 |
+| `src/styles/app.css` | `.advanced-check`、`.slim-error .mini-btn` |
+| `src/state/slim.test.ts` | +9 例（D1 判定表 / 失败后无假写入 / 重试后生效 / D5 清理范围 / D6 合并窗口） |
+| `src/components/slim/render.test.ts` | +2 例（失败态 UI 白话 + 重试；分析中/未分析提示） |
+| `src-tauri/tests/slim_items.rs` | +1 例（`eye_lines` 单独作用的细纹证据）+ 细纹 fixture + `vertical_energy` |
+
+## 9.2 D1（严重）：分析失败后 ⑤⑥ 永久失效且静默 —— 已修
+
+**根因**：`setSlimReportStatus` 用空占位报告兜底 → `slimReports[p].report` 从「分析中」起恒为真值 → 面板以为已分析 → 空 `suggestions` → 全链路静默 no-op。
+
+**修法（三处一起，任何一处单独都不够）**：
+
+1. **数据结构**：`SlimReport.report: AnalysisReport | null`。`setSlimReportStatus` 只写 `report: previous?.report ?? null` —— **没有真实结论就一定是 null**，占位报告彻底删除。已有旧结论时保留（重分析失败不会把可用结论也搞丢）。
+2. **判定收口**：新增 `needsGlobalAnalysis(id, slimReport)`（`slim.ts`）：「未分析 / 分析中 / 上次失败」一律返回 true。`ManualPanel` 的拖动与**开关**都用它决定「先分析再写」。
+3. **UI 分支**：`ManualNotice` 补 `reportStatus === "error"` 分支 —— 白话原因 + **「重试」按钮**（`ensureGlobalReport(photo, true)`，真实重新分析）。
+
+**用户现在看到什么（这是验收最关心的）**：
+
+| 场景 | 现象 |
+|---|---|
+| 第一次拖 ⑤⑥ | 立刻出现「正在看这张照片的光影和色调… 一般几秒钟」，分析成功后按强度写入 |
+| 分析失败 | 出现红色提示：「『光影调整』『照片色调』这次没看成：<白话原因>。其余四项不受影响，可以照常调整。」+ **「重试」按钮** |
+| 失败后再拖 ⑤⑥ | **会真的重新发起分析**（不是静默 no-op）；再次失败会再弹一次提示 |
+| 失败期间会不会写出脏参数 | 不会。写入前先分析，失败即 return；`applySlimItem` 也加了「没真正写入就不更新记忆强度」的护栏 |
+| 重试成功 | 「重试」消失，滑块立即生效（一条撤销记录） |
+| 一键入口 | 同一个失败原因也会显示在「一键精修」面板，主按钮/「重新精修」都会重新分析 |
+| 人脸检测失败（同类死路） | 也补了「重试」按钮（`handleRetryFace` → 真实 `detect_faces`），不再是只能靠切入口重挂载 |
+
+**测试**（此前 118 例零覆盖 error 路径）：
+- `slim.test.ts › ⑤⑥ 分析失败的恢复路径（D1）` 4 例：`loading/error` 时 `report === null`；失败期间拖动**参数与撤销栈都不动**且不留假开关记忆；`setSlimReport` 回来之后同一滑块写入 10.8（exposure 18×0.6）且恰好一条撤销；placeholder 不会被当成「已分析」。
+- `slim.test.ts › ⑤⑥ 在「未分析 / 分析中 / 上次失败」时都必须先重新分析（D1 判定表）`：6 条断言覆盖 `needsGlobalAnalysis`。
+- `render.test.ts › 分析失败时给出白话原因与「重试」`：断言 error 提示含「重试」「其余四项不受影响」且**不**同时出现「正在看…」。
+
+## 9.3 D2（一般）：③「眼下细纹」无像素证据 —— 选路线 (a) 补证据
+
+**为什么不选改文案**：`eyes.rs:139-160` 的细纹分支代码是完整的（`line_smoothing` + 环带权重），只是原 fixture 里没有皱纹可平。改文案等于把引擎已有能力从 UI 上抹掉。
+
+**新证据**（`item_eye_lines_alone_smooths_under_eye_wrinkles`，`eye_lines=70` 单独作用）：
+
+| 指标 | 数值 | 断言 |
+|---|---|---|
+| 细纹环带 `mean |Δ|` | **0.00183**（≈0.47/255） | > 0.0015 |
+| 竖向高频能量 | **0.02335 → 0.02194（ratio 0.940，降 6%）** | < 0.97（「细纹对比度被压下去」） |
+| 脸外 / 下巴 | 0.00000 / < 0.002 | 不外溢 |
+
+**fixture 的关键坑（值得记录）**：一开始用「1 行深 3 行浅」的硬条纹，`eye_lines` 只有 0.00035——因为 `line_smoothing` 走的是**边缘保持**的引导滤波（`eps=0.0012`，半径 2），硬边被当成结构原样保留（能量只降 1.5%）。改成**平滑余弦**（周期 6、幅度 15%）后才被识别成细纹，能量降 6%。这也解释了为什么这条证据天然比黑眼圈弱：`analyze_face` 对 `eye_lines` 只敢建议 ≤25，产品侧最大 70，本来就比 `dark_circles` 温和。
+
+原 `item_eye_area_changes_under_eye_pixels` **未改动**，实测仍是 QA 复现过的 **0.00892**。
+
+## 9.4 D3（一般）：状态条措辞 —— 已改
+
+`StatusBar.tsx` 预览失败：「预览没出来，参数已保存」→ **「预览没出来，参数还在（记得保存）」**。本项目没有自动保存，这句不再误导。
+
+## 9.5 D4（一般）：死代码 —— 已清
+
+- `clearSlimReport`：**删除**。D1 用「`report` 可空」解决后，不再需要额外的「清空」动作；留着就是新的死代码。（QA 提示它可作 D1 的药，但两处都做会产生「清空后又立刻写 error」的冗余写入。）
+- `hiddenBeautyFields`：**删除**。`advancedLegacy` 清单已经覆盖「额头细纹 / 法令纹」，这个导出没有任何调用点。
+
+## 9.6 D5（一般，数据丢失风险）：清理范围收窄 —— 已修
+
+- `auditLegacyAdjustments()` 现在**只含隐藏的旧调整**：面部塑形 / 身材 / 背景 / 分色 / 曲线 / 风格滤镜 / 旧全图磨皮 / 额头细纹·法令纹 / 清晰度类 / 色阶类。
+- 手绘内容（`manualMask`、`subjectMask` 笔触、`repairPoints`）改用 `auditBrushwork()` **单独披露**，并在高级设置里给一个**默认不勾**的复选框：「同时清除手绘内容（笔触 N 段、点选修复 N 个，共 N 处）」。
+- `clearLegacyAdjustments(params, { includeBrushwork })`：默认 `false` 时**原样保留**手绘内容；确认按钮的 toast 也会区分「旧调整已清除（手绘内容保留）」与「旧调整与手绘内容已清除」。
+- 测试：`旧调整清理不碰手绘内容：默认保留笔触与点选修复点（D5）` —— 先断言审计里没有 `manualMask/subjectMask/repairPoints`、`auditBrushwork` 计数为 2/1，再断言默认清理后三样都还在、`clarity` 归零，最后显式 `clearLegacyAdjustments(true)` 才清空。
+
+## 9.7 D6（观察）：撤销粒度写成显式契约 —— 已补
+
+`连发写入在 600ms 合并窗口内只留一条撤销记录，超过窗口才开新条目（D6）`：
+500ms 后第二次写入 → 仍 1 条；再过 700ms 写入 → 2 条；换到另一项（合并键 `slim:<id>` 不同）→ 3 条。
+**明确契约：一次连续拖动＝一条撤销；中途停顿 >600ms 会切成两条**（与旧界面一致，属既有 `COALESCE_WINDOW_MS` 机制，本轮不改）。
+
+## 9.8 第二轮测试结果（本机实测）
+
+| 命令 | 结果 |
+|---|---|
+| `cargo test --lib` | **478 passed / 0 failed / 3 ignored**（6.69s） |
+| `cargo test --test beauty` | **12 passed / 0 failed / 1 ignored**（1.10s） |
+| `cargo test --test slim_items` | **8 passed / 0 failed**（0.20s，+1 例细纹证据） |
+| `pnpm test` | **10 files / 128 tests passed**（第一轮 118 + 新增 10） |
+| `pnpm typecheck` | **exit 0** |
+| `pnpm build` | **成功**（428.32 kB / gzip 130.04 kB） |
+
+禁用词：新增/改动的 UI 源文件仍 **0 命中**（仅 `analysis.ts` 的替换词表与测试的否定词表里出现）。
+
+## 9.9 本轮新增的已知限制
+
+1. **⑤⑥ 的「上次失败」状态会跨照片保留**（按 `photoId` 存），切回来仍显示失败提示 —— 这是有意的：让用户知道这张照片还没分析成功，而不是假装可以调。
+2. **重试是「整条分析重跑」**，没有做「只重试某一步」的细粒度控制（`analyze_retouch` 是单次命令）。
+3. **细纹证据仍比黑眼圈弱一个量级**（0.00183 vs 0.00892），这是引擎的安全阀（`eye_lines` 建议上限 25），不是缺陷；文案保留「黑眼圈和眼下细纹」，两半边现在都有像素断言。

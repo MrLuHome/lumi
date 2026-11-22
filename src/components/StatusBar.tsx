@@ -110,7 +110,7 @@ export function StatusBar({ photo }: StatusBarProps) {
         {!isDesktopRuntime() && <span className="status-note">浏览器预览模式</span>}
         <span className={`proc proc-${error ? "error" : status}`} title={error ?? undefined}>
           {error ? (
-            <>预览没出来，参数已保存</>
+            <>预览没出来，参数还在（记得保存）</>
           ) : status === "rendering" ? (
             <>
               <span className="spinner" />

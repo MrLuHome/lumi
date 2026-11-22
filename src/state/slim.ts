@@ -30,12 +30,10 @@ import type {
 import {
   BEAUTY_KEYS,
   backgroundIsActive,
-  beautyIsActive,
   clampParams,
   defaultBeauty,
   faceReshapeIsActive,
   bodyAdjustIsActive,
-  subjectMaskHasContent,
 } from "./params";
 
 // ────────────────────────────── 基础类型 ──────────────────────────────
@@ -253,6 +251,21 @@ export function faceKey(face: { faceId: number; faceUuid: string }): string {
 /** 只有「光影」「色调」两项需要先分析。 */
 export function itemNeedsAnalysis(id: SixItemId): boolean {
   return ITEM_META[id].needsAnalysis;
+}
+
+/**
+ * 这次写入之前是否**必须**先跑一次整图分析。
+ *
+ * 未分析、分析中、以及**上次失败**都算「必须」——失败后如果不重新分析，
+ * ⑤⑥ 会退化成静默的假滑块（验收缺陷 D1）。
+ * 参数用结构化类型，避免 slim.ts 反向依赖 editorStore。
+ */
+export function needsGlobalAnalysis(
+  id: SixItemId,
+  slimReport: { report: AnalysisReport | null; status: string } | null,
+): boolean {
+  if (!itemNeedsAnalysis(id)) return false;
+  return !slimReport?.report;
 }
 
 // ────────────────────────────── 手动六项：正向写入 ──────────────────────────────
@@ -805,9 +818,28 @@ function legacyFaceLines(params: EditParams): number {
   return count;
 }
 
+/** 手绘内容（笔触 / 点选修复）：**不是**「看不见的旧调整」，默认不参与清理。 */
+export interface BrushworkSummary {
+  /** 皮肤选区笔触 + 手动人物选区笔触。 */
+  strokes: number;
+  /** 点选修复点。 */
+  repairPoints: number;
+}
+
+export function auditBrushwork(params: EditParams): BrushworkSummary {
+  return {
+    strokes: params.manualMask.strokes.length + params.subjectMask.strokes.length,
+    repairPoints: params.repairPoints.length,
+  };
+}
+
 /**
  * 盘点「新界面看不到、但仍在改像素」的旧调整（§7 兼容性）。
  * 这些参数仍参与渲染，所以必须给用户一个出口，否则等于关不掉。
+ *
+ * **范围只含隐藏的旧调整**：用户自己画的笔触与点选修复点不在此列
+ * （验收缺陷 D5：同一面板既提供画笔又提供「一键抹掉画笔」的按钮，语义矛盾）。
+ * 手绘内容由 `auditBrushwork()` 单独披露，只有用户显式勾选才会清除。
  */
 export function auditLegacyAdjustments(params: EditParams): LegacyAdjustment[] {
   const out: LegacyAdjustment[] = [];
@@ -817,15 +849,6 @@ export function auditLegacyAdjustments(params: EditParams): LegacyAdjustment[] {
   if (bodyCount > 0) out.push({ id: "body", label: "身材调整", count: bodyCount });
   if (backgroundIsActive(params.background)) {
     out.push({ id: "background", label: "背景处理", count: 1 });
-  }
-  if (subjectMaskHasContent(params.subjectMask)) {
-    out.push({ id: "subjectMask", label: "手动人物选区", count: params.subjectMask.strokes.length });
-  }
-  if (params.manualMask.strokes.length > 0) {
-    out.push({ id: "manualMask", label: "皮肤选区笔触", count: params.manualMask.strokes.length });
-  }
-  if (params.repairPoints.length > 0) {
-    out.push({ id: "repairPoints", label: "点选修复", count: params.repairPoints.length });
   }
   if (hslIsActive(params.hsl)) out.push({ id: "hsl", label: "分色调整", count: 1 });
   if (curvesIsActive(params.curves)) out.push({ id: "curves", label: "曲线", count: 1 });
@@ -842,8 +865,17 @@ export function auditLegacyAdjustments(params: EditParams): LegacyAdjustment[] {
   return out;
 }
 
-/** 清除全部旧调整：一次性归零，进一条撤销记录。 */
-export function clearLegacyAdjustments(params: EditParams): EditParams {
+/**
+ * 清除旧调整：一次性归零，进一条撤销记录。
+ *
+ * `includeBrushwork` 默认 **false**：用户手绘的笔触与点选修复点不会被顺手删掉，
+ * 只有他在高级设置里显式勾选「同时清除手绘内容」时才清（D5）。
+ */
+export function clearLegacyAdjustments(
+  params: EditParams,
+  options: { includeBrushwork?: boolean } = {},
+): EditParams {
+  const includeBrushwork = options.includeBrushwork === true;
   const next: EditParams = {
     ...params,
     faces: params.faces.map((face) => ({
@@ -853,9 +885,13 @@ export function clearLegacyAdjustments(params: EditParams): EditParams {
     reshape: [],
     body: [],
     background: { ...params.background, enabled: false, mode: "original", imagePath: "" },
-    subjectMask: { ...params.subjectMask, enabled: false, strokes: [], invert: false },
-    manualMask: { ...params.manualMask, enabled: false, strokes: [], invert: false },
-    repairPoints: [],
+    subjectMask: includeBrushwork
+      ? { ...params.subjectMask, enabled: false, strokes: [], invert: false }
+      : params.subjectMask,
+    manualMask: includeBrushwork
+      ? { ...params.manualMask, enabled: false, strokes: [], invert: false }
+      : params.manualMask,
+    repairPoints: includeBrushwork ? [] : params.repairPoints,
     hsl: {
       red: { hue: 0, saturation: 0, luminance: 0 },
       orange: { hue: 0, saturation: 0, luminance: 0 },
@@ -877,18 +913,4 @@ export function clearLegacyAdjustments(params: EditParams): EditParams {
     blacks: 0,
   };
   return clampParams(next);
-}
-
-/** 六项之外、仍在生效的「隐藏美肤项」：仅用于高级设置的诚实提示。 */
-export function hiddenBeautyFields(params: EditParams): string[] {
-  const out: string[] = [];
-  const active = params.faces.some((face) => face.enabled && beautyIsActive(face.beauty));
-  if (!active) return out;
-  for (const face of params.faces) {
-    if (face.beauty.foreheadLines > 0 || face.beauty.nasolabial > 0) {
-      out.push("额头细纹 / 法令纹");
-      break;
-    }
-  }
-  return out;
 }

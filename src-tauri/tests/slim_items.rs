@@ -104,6 +104,28 @@ fn with_under_eye(mut image: Image16) -> Image16 {
     image
 }
 
+/// 眼下横向细纹（眼袋纹）。
+///
+/// 用**平滑余弦**而不是硬条纹：`line_smoothing` 走的是边缘保持的引导滤波
+/// （`eps = 0.0012`），硬边会被当成结构原样保留（实测只能降 1.5% 能量），
+/// 平滑起伏才会被识别成「细纹」而压下去。位置落在 `eyes.rs` 的
+/// `eye_ring_weight` 环带内（v≈0.24..0.41、|u−眼|≤0.31）。
+fn with_eye_wrinkles(mut image: Image16) -> Image16 {
+    for (x0, x1) in [(141i32, 179i32), (221, 259)] {
+        for y in 196i32..=216 {
+            let phase = std::f32::consts::TAU * y as f32 / 6.0;
+            let factor = 1.0 - 0.15 * (0.5 + 0.5 * phase.cos());
+            for x in x0..=x1 {
+                let pixel = image.get_pixel_mut(x as u32, y as u32);
+                for channel in 0..3 {
+                    pixel.0[channel] = (pixel.0[channel] as f32 * factor).clamp(0.0, 65535.0) as u16;
+                }
+            }
+        }
+    }
+    image
+}
+
 /// 一块偏红、偏暗的肤色不均区域：同时能触发均匀、美白、泛红与暗沉。
 fn with_tone_patch(mut image: Image16) -> Image16 {
     for y in 210..280 {
@@ -152,11 +174,44 @@ fn mean_abs_diff(a: &Image16, b: &Image16, rect: (u32, u32, u32, u32)) -> f32 {
     (sum / count) as f32
 }
 
+/// 区域内的「竖向高频能量」：逐像素与上下 5 行均值之差的绝对值均值。
+/// 皱纹是横向条纹，竖向能量下降 = 细纹对比度被压下去。
+fn vertical_energy(image: &Image16, rect: (u32, u32, u32, u32)) -> f32 {
+    let (x0, y0, x1, y1) = rect;
+    let luma = |pixel: [u16; 4]| {
+        0.299 * pixel[0] as f32 / CHANNEL_MAX as f32
+            + 0.587 * pixel[1] as f32 / CHANNEL_MAX as f32
+            + 0.114 * pixel[2] as f32 / CHANNEL_MAX as f32
+    };
+    let mut sum = 0f64;
+    let mut count = 0f64;
+    for y in y0..y1.min(HEIGHT) {
+        for x in x0..x1.min(WIDTH) {
+            let mut mean = 0f32;
+            let mut n = 0f32;
+            for dy in -2i32..=2 {
+                let sy = (y as i32 + dy).clamp(0, HEIGHT as i32 - 1) as u32;
+                mean += luma(image.get_pixel(x, sy).0);
+                n += 1.0;
+            }
+            sum += (luma(image.get_pixel(x, y).0) - mean / n).abs() as f64;
+            count += 1.0;
+        }
+    }
+    if count <= 0.0 {
+        0.0
+    } else {
+        (sum / count) as f32
+    }
+}
+
 const WHOLE: (u32, u32, u32, u32) = (0, 0, WIDTH, HEIGHT);
 const CHEEK: (u32, u32, u32, u32) = (222, 196, 254, 224);
 const SPOTS: (u32, u32, u32, u32) = (228, 204, 262, 250);
 const UNDER_EYE: (u32, u32, u32, u32) = (140, 192, 260, 218);
 const TONE_PATCH: (u32, u32, u32, u32) = (212, 212, 288, 278);
+/// 只框住左眼下方一条环带：细纹证据要在这里看，不能被两眼之间的皮肤稀释。
+const UNDER_EYE_LEFT: (u32, u32, u32, u32) = (140, 196, 186, 215);
 
 #[test]
 fn item_skin_smoothing_changes_cheek_pixels() {
@@ -208,6 +263,41 @@ fn item_eye_area_changes_under_eye_pixels() {
     // 眼睛美化只处理眼周：脸颊与蒙版外都不该动。
     let cheek = mean_abs_diff(&base, &rendered, (300, 300, 340, 340));
     assert!(cheek < 0.002, "眼周处理不应扩散到下巴区域，实测 {cheek}");
+}
+
+/// D2：把「眼下细纹」这半边单独验证一次。
+///
+/// 原来的眼睛测试用暗沉椭圆做 fixture，`eye_lines` 单独作用只有 ~0.00035
+/// （因为图里没有皱纹可平），等于只验证了黑眼圈。这里换成有横向细纹的
+/// fixture，让 `eye_lines` 自己证明它能改像素。
+#[test]
+fn item_eye_lines_alone_smooths_under_eye_wrinkles() {
+    let base = with_eye_wrinkles(skin_image());
+    let rendered = render(
+        &base,
+        &beauty_params(BeautyParams {
+            eye_lines: 70.0,
+            ..Default::default()
+        }),
+    );
+
+    // ① 绝对变化：细纹环带内的平均绝对差。
+    let diff = mean_abs_diff(&base, &rendered, UNDER_EYE_LEFT);
+    // ② 语义证据：竖向高频能量必须下降 = 细纹对比度被压下去（这才是「变淡」）。
+    let before = vertical_energy(&base, UNDER_EYE_LEFT);
+    let after = vertical_energy(&rendered, UNDER_EYE_LEFT);
+    let ratio = after / before;
+    println!(
+        "item 3 eye_lines only: band mean |Δ| = {diff:.5}, vertical energy {before:.5} -> {after:.5} (ratio {ratio:.3})"
+    );
+    assert!(diff > 0.0015, "眼下细纹必须被淡化，实测 {diff}");
+    assert!(ratio < 0.97, "细纹的竖向对比度必须下降，实测 {ratio}");
+
+    // 只处理眼周：脸外与下巴都不该动。
+    let outside = mean_abs_diff(&base, &rendered, (0, 0, 60, HEIGHT));
+    assert!(outside < 0.0001, "脸外不该动，实测 {outside}");
+    let chin = mean_abs_diff(&base, &rendered, (300, 300, 340, 340));
+    assert!(chin < 0.002, "下巴不该动，实测 {chin}");
 }
 
 #[test]

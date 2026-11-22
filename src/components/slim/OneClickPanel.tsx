@@ -168,7 +168,11 @@ export function OneClickPanel({ photo }: { photo: PhotoAsset | null }) {
     setAppliedNote("已撤销上一步。");
   }, [undo, setOneClickApplied]);
 
-  const errorText = oneClick.error ?? beautyError ?? faceError;
+  const errorText =
+    oneClick.error ??
+    beautyError ??
+    faceError ??
+    (slimReport?.status === "error" ? slimReport.error : null);
   const progress = beautyProgress ?? faceProgress;
 
   if (!photo) {
@@ -260,7 +264,9 @@ export function OneClickPanel({ photo }: { photo: PhotoAsset | null }) {
       {errorText && !busy ? (
         <div className="slim-error">
           <AlertTriangle size={13} />
-          <span>刚才没成功：{plainMessage(errorText)}。点「重试」再来一次。</span>
+          <span>
+            刚才没成功：{plainMessage(errorText)}。点「一键精修」或「重新精修」再来一次。
+          </span>
         </div>
       ) : null}
 

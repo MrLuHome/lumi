@@ -4,7 +4,7 @@ import type { ExportFormat, FaceDetectionResult, PhotoAsset } from "../../types"
 import type { EditParams } from "../../state/params";
 import { findFaceBeauty } from "../../state/params";
 import { useEditorStore } from "../../state/editorStore";
-import { auditLegacyAdjustments } from "../../state/slim";
+import { auditBrushwork, auditLegacyAdjustments } from "../../state/slim";
 import { Slider } from "../ui/Slider";
 import { Switch } from "../ui/Switch";
 
@@ -25,6 +25,8 @@ interface AdvancedSettingsProps {
 export function AdvancedSettings({ photo, params, detection }: AdvancedSettingsProps) {
   const [open, setOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  // 手绘内容默认**不清**（D5）：只有用户显式勾选才一起清掉。
+  const [withBrushwork, setWithBrushwork] = useState(false);
 
   const brushMode = useEditorStore((state) => state.brushMode);
   const brushRadius = useEditorStore((state) => state.brushRadius);
@@ -41,8 +43,10 @@ export function AdvancedSettings({ photo, params, detection }: AdvancedSettingsP
   const notify = useEditorStore((state) => state.notify);
 
   const legacy = auditLegacyAdjustments(params);
+  const brushwork = auditBrushwork(params);
   const faces = detection?.faces ?? [];
   const legacyTotal = legacy.reduce((sum, item) => sum + item.count, 0);
+  const brushworkTotal = brushwork.strokes + brushwork.repairPoints;
 
   return (
     <section className={`advanced ${open ? "is-open" : ""}`}>
@@ -162,7 +166,12 @@ export function AdvancedSettings({ photo, params, detection }: AdvancedSettingsP
           <div className="advanced-block">
             <div className="section-title">旧调整清理</div>
             {legacy.length === 0 ? (
-              <p className="hint-text">没有旧调整在生效，画面就是你现在看到的设置。</p>
+              <p className="hint-text">
+                没有旧调整在生效，画面就是你现在看到的设置。
+                {brushworkTotal > 0
+                  ? `你手绘的 ${brushworkTotal} 处内容属于你自己的编辑，不在这里清理。`
+                  : ""}
+              </p>
             ) : (
               <>
                 <p className="hint-text">
@@ -177,15 +186,34 @@ export function AdvancedSettings({ photo, params, detection }: AdvancedSettingsP
                     </li>
                   ))}
                 </ul>
+                {brushworkTotal > 0 ? (
+                  <label className="advanced-check">
+                    <input
+                      type="checkbox"
+                      checked={withBrushwork}
+                      onChange={(event) => setWithBrushwork(event.target.checked)}
+                    />
+                    <span>
+                      同时清除手绘内容（笔触 {brushwork.strokes} 段、点选修复{' '}
+                      {brushwork.repairPoints} 个，共 {brushworkTotal} 处）
+                    </span>
+                  </label>
+                ) : null}
                 {confirmClear ? (
                   <div className="advanced-buttons">
                     <button
                       type="button"
                       className="btn btn-accent"
                       onClick={() => {
-                        clearLegacy();
+                        clearLegacy(withBrushwork);
                         setConfirmClear(false);
-                        notify("success", "旧调整已全部清除，⌘Z 可撤销");
+                        setWithBrushwork(false);
+                        notify(
+                          "success",
+                          withBrushwork
+                            ? "旧调整与手绘内容已清除，⌘Z 可撤销"
+                            : "旧调整已清除（手绘内容保留），⌘Z 可撤销",
+                        );
                       }}
                     >
                       确认清除

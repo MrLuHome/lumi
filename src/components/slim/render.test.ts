@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import App from "../../App";
 import { OneClickPanel } from "./OneClickPanel";
-import { ManualPanel } from "./ManualPanel";
+import { ManualNotice, ManualPanel } from "./ManualPanel";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { useEditorStore } from "../../state/editorStore";
 import { plainMessage } from "./analysis";
@@ -118,6 +118,91 @@ describe("双入口界面冒烟", () => {
     expect(html).toContain("高级设置");
     expect(html).toContain("1 项旧调整在生效");
     for (const word of BANNED) expect(html).not.toContain(word);
+  });
+
+  it("分析失败时给出白话原因与「重试」，而不是静默的假滑块（D1）", () => {
+    // 提示区是纯 props 组件：SSR 下 zustand 只会读到初始 state，所以这里直接喂 props。
+    const html = renderToStaticMarkup(
+      createElement(ManualNotice, {
+        faceStatus: "ready",
+        hasDetection: true,
+        noFace: false,
+        faceError: null,
+        faceProgress: null,
+        faceCount: 1,
+        reportStatus: "error",
+        reportError: "照片读不出来：文件不见了",
+        reportReady: false,
+        retrying: false,
+        onRetry: () => undefined,
+        onRetryFace: () => undefined,
+      }),
+    );
+    expect(html).toContain("重试");
+    expect(html).toContain("照片读不出来：文件不见了");
+    expect(html).toContain("其余四项不受影响");
+    // 失败态不能同时画「正在分析」。
+    expect(html).not.toContain("正在看这张照片的光影和色调");
+    for (const word of BANNED) expect(html).not.toContain(word);
+  });
+
+  it("人脸检测失败也有「重试」入口，不是死路（D1 同类）", () => {
+    const html = renderToStaticMarkup(
+      createElement(ManualNotice, {
+        faceStatus: "error",
+        hasDetection: false,
+        noFace: false,
+        faceError: "找不到照片：/tmp/a.jpg",
+        faceProgress: null,
+        faceCount: 0,
+        reportStatus: "idle",
+        reportError: null,
+        reportReady: false,
+        retrying: false,
+        onRetry: () => undefined,
+        onRetryFace: () => undefined,
+      }),
+    );
+    expect(html).toContain("重试");
+    expect(html).toContain("找不到照片");
+  });
+
+  it("分析中的提示是真实进度，未分析时给一句白话说明（D1）", () => {
+    const loading = renderToStaticMarkup(
+      createElement(ManualNotice, {
+        faceStatus: "ready",
+        hasDetection: true,
+        noFace: false,
+        faceError: null,
+        faceProgress: null,
+        faceCount: 1,
+        reportStatus: "loading",
+        reportError: null,
+        reportReady: false,
+        retrying: false,
+        onRetry: () => undefined,
+        onRetryFace: () => undefined,
+      }),
+    );
+    expect(loading).toContain("正在看这张照片的光影和色调");
+
+    const idle = renderToStaticMarkup(
+      createElement(ManualNotice, {
+        faceStatus: "ready",
+        hasDetection: true,
+        noFace: false,
+        faceError: null,
+        faceProgress: null,
+        faceCount: 1,
+        reportStatus: "idle",
+        reportError: null,
+        reportReady: false,
+        retrying: false,
+        onRetry: () => undefined,
+        onRetryFace: () => undefined,
+      }),
+    );
+    expect(idle).toContain("会先看一遍这张照片");
   });
 
   it("后端错误里的工程词会被替换成白话，但真实原因仍然保留", () => {

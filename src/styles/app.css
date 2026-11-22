@@ -3964,3 +3964,24 @@
   min-width: 0;
   border-left: none;
 }
+
+.advanced-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px 0 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.advanced-check input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.slim-error .mini-btn {
+  margin-left: auto;
+  flex: none;
+}

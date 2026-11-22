@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AnalysisReport,
   BeautyAnalysis,
@@ -8,6 +8,7 @@ import type {
   RetouchSuggestion,
   SkinModelStatus,
 } from "../types";
+import { paramsEqual } from "./params";
 import {
   DEFAULT_PARAMS,
   defaultBackground,
@@ -19,7 +20,7 @@ import {
   defaultParams,
 } from "./params";
 import { buildProjectDoc, buildProjectSnapshot } from "./project";
-import { createEditorStore, selectEffectUrl } from "./editorStore";
+import { COALESCE_WINDOW_MS, createEditorStore, selectEffectUrl } from "./editorStore";
 import {
   DEFAULT_ONE_CLICK_MODE,
   ITEM_META,
@@ -27,6 +28,7 @@ import {
   MODE_FACTOR,
   SIX_ITEM_ORDER,
   applyOneClickPlan,
+  auditBrushwork,
   auditLegacyAdjustments,
   buildOneClickPlan,
   buildSixItemWrite,
@@ -34,6 +36,7 @@ import {
   directionHint,
   invertItemStrength,
   itemsFromParams,
+  needsGlobalAnalysis,
   toAppliedPlan,
   tonalAnchors,
   tonalDeltas,
@@ -225,6 +228,20 @@ describe("六项映射（手动调整）", () => {
     const base = { ...defaultParams(), skinSmooth: 70 };
     const next = writeSixItem(base, detection([1]), "skin", 0);
     expect(next.skinSmooth).toBe(0);
+  });
+
+  it("⑤⑥ 在「未分析 / 分析中 / 上次失败」时都必须先重新分析（D1 判定表）", () => {
+    const ready = { report: analysisReport([paramSuggestion("exposure", 0, 18)]), status: "ready" };
+    const loading = { report: null, status: "loading" };
+    const failed = { report: null, status: "error" };
+    expect(needsGlobalAnalysis("light", null)).toBe(true);
+    expect(needsGlobalAnalysis("color", null)).toBe(true);
+    expect(needsGlobalAnalysis("light", loading)).toBe(true);
+    expect(needsGlobalAnalysis("light", failed)).toBe(true);
+    expect(needsGlobalAnalysis("light", ready)).toBe(false);
+    // ①②③④ 永远不需要先分析。
+    expect(needsGlobalAnalysis("skin", null)).toBe(false);
+    expect(needsGlobalAnalysis("blemish", failed)).toBe(false);
   });
 
   it("光影/色调没有建议时返回空写入，而不是写 0 偏移", () => {
@@ -594,6 +611,74 @@ describe("store 契约（手动六项）", () => {
     expect(store.getState().params["a"]?.clarity).toBe(30);
   });
 
+  it("旧调整清理不碰手绘内容：默认保留笔触与点选修复点（D5）", () => {
+    const store = setup();
+    store.getState().updateParams(
+      (current) => ({
+        ...current,
+        clarity: 25,
+        manualMask: {
+          ...current.manualMask,
+          enabled: true,
+          strokes: [{ erase: false, radius: 0.05, points: [{ x: 0.4, y: 0.4 }] }],
+        },
+        subjectMask: {
+          ...current.subjectMask,
+          enabled: true,
+          strokes: [
+            { kind: "paint" as const, radius: 0.05, hardness: 50, strength: 100, points: [{ x: 0.5, y: 0.5 }] },
+          ],
+        },
+        repairPoints: [{ x: 0.3, y: 0.3, radius: 0.02 }],
+      }),
+      "手绘",
+    );
+
+    const ids = auditLegacyAdjustments(store.getState().params["a"]!).map((item) => item.id);
+    expect(ids).toContain("detail");
+    expect(ids).not.toContain("manualMask");
+    expect(ids).not.toContain("subjectMask");
+    expect(ids).not.toContain("repairPoints");
+
+    const brush = auditBrushwork(store.getState().params["a"]!);
+    expect(brush.strokes).toBe(2);
+    expect(brush.repairPoints).toBe(1);
+
+    // 默认不带 includeBrushwork：手绘内容必须原样保留。
+    store.getState().clearLegacyAdjustments();
+    const kept = store.getState().params["a"]!;
+    expect(kept.clarity).toBe(0);
+    expect(kept.manualMask.strokes).toHaveLength(1);
+    expect(kept.subjectMask.strokes).toHaveLength(1);
+    expect(kept.repairPoints).toHaveLength(1);
+
+    // 用户显式勾选后才清。
+    store.getState().clearLegacyAdjustments(true);
+    const cleared = store.getState().params["a"]!;
+    expect(cleared.manualMask.strokes).toHaveLength(0);
+    expect(cleared.subjectMask.strokes).toHaveLength(0);
+    expect(cleared.repairPoints).toHaveLength(0);
+  });
+
+  it("连发写入在 600ms 合并窗口内只留一条撤销记录，超过窗口才开新条目（D6）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    const store = setup();
+
+    store.getState().applySlimItem("skin", 20);
+    vi.advanceTimersByTime(COALESCE_WINDOW_MS - 100);
+    store.getState().applySlimItem("skin", 45);
+    expect(store.getState().history["a"]?.past).toHaveLength(1);
+
+    vi.advanceTimersByTime(COALESCE_WINDOW_MS + 100);
+    store.getState().applySlimItem("skin", 70);
+    expect(store.getState().history["a"]?.past).toHaveLength(2);
+
+    // 换到另一项一定开新条目（合并键是 slim:<id>）。
+    store.getState().applySlimItem("eyes", 30);
+    expect(store.getState().history["a"]?.past).toHaveLength(3);
+  });
+
   it("老项目（既有 .lumi 结构）里的塑形/身材/背景/分色/滤镜在加载后仍能被发现并清除", () => {
     // 用项目层真实往返一次：写盘 → 读盘 → 审计。clampParams 若丢了这些字段，
     // 「旧调整清理」就会失效，用户再也关不掉看不到的改动。
@@ -647,4 +732,67 @@ describe("store 契约（手动六项）", () => {
     restored.getState().clearLegacyAdjustments();
     expect(auditLegacyAdjustments(restored.getState().params["a"]!)).toEqual([]);
   });
+});
+
+// ────────────────────────────── ⑤⑥ 分析失败后的恢复（D1） ──────────────────────────────
+
+describe("⑤⑥ 分析失败的恢复路径（D1）", () => {
+  function setup() {
+    const store = createEditorStore();
+    store.getState().addPhotos([makePhoto("a")]);
+    store.getState().setFaces("a", detection([1])!);
+    return store;
+  }
+
+  it("分析中/失败时 report 必须是 null，不能留占位报告", () => {
+    const store = setup();
+    store.getState().setSlimReportStatus("a", "loading");
+    expect(store.getState().slimReports["a"]?.report).toBeNull();
+    store.getState().setSlimReportStatus("a", "error", "照片读不出来");
+    expect(store.getState().slimReports["a"]?.report).toBeNull();
+    expect(store.getState().slimReports["a"]?.status).toBe("error");
+    expect(store.getState().slimReports["a"]?.error).toBe("照片读不出来");
+  });
+
+  it("失败期间拖 ⑤⑥ 不产生假写入：参数与撤销栈都不动，也不留假的开关记忆", () => {
+    const store = setup();
+    store.getState().setSlimReportStatus("a", "error", "boom");
+    const before = store.getState().params["a"]!;
+    store.getState().applySlimItem("light", 60);
+    expect(paramsEqual(before, store.getState().params["a"]!)).toBe(true);
+    expect(store.getState().history["a"]?.past ?? []).toHaveLength(0);
+    expect(store.getState().slimItems.light.enabled).toBe(false);
+    expect(store.getState().slimItems.light.strength).toBe(0);
+  });
+
+  it("重试成功（report 真值回来）后同一个滑块立即生效", () => {
+    const store = setup();
+    store.getState().setSlimReportStatus("a", "error", "boom");
+    expect(store.getState().slimReports["a"]?.report).toBeNull();
+    // 模拟「重试」拿到真实结果
+    store.getState().setSlimReport(
+      "a",
+      analysisReport([paramSuggestion("exposure", 0, 18)]),
+      { exposure: 0 },
+      9,
+    );
+    expect(store.getState().slimReports["a"]?.status).toBe("ready");
+    store.getState().applySlimItem("light", 60);
+    expect(store.getState().params["a"]?.exposure).toBeCloseTo(10.8, 1);
+    expect(store.getState().history["a"]?.past).toHaveLength(1);
+  });
+
+  it("失败后再成功一次，不会把旧的占位结论当成「已分析」", () => {
+    const store = setup();
+    store.getState().setSlimReportStatus("a", "loading");
+    store.getState().setSlimReportStatus("a", "error", "boom");
+    // 没有结论时反解结果是 0，而不是某个凭空的强度
+    expect(invertItemStrength(store.getState().params["a"]!, "light", {}).strength).toBe(0);
+    store.getState().setSlimReport("a", analysisReport([]), {}, 5);
+    expect(store.getState().slimReports["a"]?.report).not.toBeNull();
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
