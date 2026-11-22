@@ -132,9 +132,10 @@ fn performance_24mp() {
     );
     doc.project_uuid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into();
     project::save(&project_path, &doc).unwrap();
+    let saved = project::load(&project_path).unwrap();
     let changeset = ChangeSet {
-        project_id: doc.project_uuid.clone(),
-        base_revision: doc.revision,
+        project_id: saved.project_uuid.clone(),
+        base_revision: saved.revision,
         request_id: "perf-save".into(),
         operations: vec![Operation::UpdateDocMeta {
             patch: serde_json::json!({ "activeIndex": 0 }),
@@ -245,6 +246,25 @@ fn batch_export_50_jpegs() {
     eprintln!("[perf] 50 张 JPEG：total={total_ms} ms slowest={slowest} ms files={files}");
     assert_eq!(files, 50);
     assert!(total_ms < 300_000, "50 张导出总耗时异常：{total_ms} ms");
+}
+
+/// GPU 只做独立基准；主管线仍是 CPU。是否接入由实测倍率决定。
+#[test]
+fn gpu_benchmark_is_measured_without_forcing_pipeline() {
+    use lumi_retouch_lib::gpu::ComputeEngine;
+    let engine = ComputeEngine::new();
+    match engine.run_benchmark() {
+        Ok(rows) => {
+            for row in &rows {
+                eprintln!(
+                    "[perf] gpu {}x{} {:.1}MP cpu={:.1}ms gpu_total={:.1}ms speedup={:.2}x",
+                    row.width, row.height, row.megapixels, row.cpu_ms, row.gpu_total_ms, row.speedup
+                );
+            }
+            eprintln!("[perf] gpu verified_speedup={:?}", engine.verified_speedup());
+        }
+        Err(error) => eprintln!("[perf] gpu benchmark unavailable: {error}"),
+    }
 }
 
 /// 防止性能测试文件在未设置语料时被误判为空跑。
