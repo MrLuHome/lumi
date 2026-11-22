@@ -394,27 +394,66 @@ mod tests {
         assert!(!engine.is_loaded());
     }
 
+    /// 相对 epsilon 比较：两次推理走同一条确定性 CPU 路径，逐位相等是常态，
+    /// 但不能假设编译器的浮点重排永远一致，故给一个按量级缩放的上界。
+    fn close(left: f32, right: f32) -> bool {
+        let epsilon = f32::EPSILON * 8.0;
+        (left - right).abs() <= epsilon * left.abs().max(right.abs()).max(1.0)
+    }
+
+    /// 旧 `detect` 与 `detect_with_cancel` 必须完全等价。
+    ///
+    /// ⚠️ 必须用**真实人像**：旧版用 64×64 纯灰图，实测检出 0 张脸，
+    /// 断言退化成 `0 == 0`，是一条第永远绿的空转测试（QA 指出，已修）。
     #[test]
-    fn detect_and_detect_with_cancel_are_equivalent() {
+    fn detect_and_detect_with_cancel_are_equivalent_on_a_real_portrait() {
         let engine = FaceEngine::default();
-        let preview = blank_preview();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/images/portrait.jpg");
+        let decoded = crate::image_engine::decoder::decode(&fixture).expect("fixture 缺失");
+        let preview = crate::image_engine::buffer::fit_within(&decoded.image, 1800);
+        let width = decoded.image.width();
+        let height = decoded.image.height();
+
         let legacy = engine
-            .detect(&model_path(), &preview, 64, 64, &mut |_, _| {})
+            .detect(&model_path(), &preview, width, height, &mut |_, _| {})
             .unwrap();
         let explicit = engine
             .detect_with_cancel(
                 &model_path(),
                 &preview,
-                64,
-                64,
+                width,
+                height,
                 &mut |_, _| {},
                 &CancelToken::default(),
             )
             .unwrap();
+
+        // 先证明这次比较有意义：真实人像必须检出人脸。
+        assert!(
+            !legacy.faces.is_empty(),
+            "真实人像未检出人脸，本测试会退化成 0 == 0"
+        );
         assert_eq!(legacy.faces.len(), explicit.faces.len());
         assert_eq!(legacy.model, explicit.model);
         assert_eq!(legacy.image_width, explicit.image_width);
         assert_eq!(legacy.image_height, explicit.image_height);
+
+        // 逐字段比较（耗时字段按定义必然不同，不参与比较）。
+        for (left, right) in legacy.faces.iter().zip(explicit.faces.iter()) {
+            assert_eq!(left.id, right.id);
+            assert_eq!(left.uuid, right.uuid);
+            assert!(close(left.score, right.score), "score {} != {}", left.score, right.score);
+            assert!(close(left.x, right.x), "x {} != {}", left.x, right.x);
+            assert!(close(left.y, right.y), "y {} != {}", left.y, right.y);
+            assert!(close(left.width, right.width));
+            assert!(close(left.height, right.height));
+            assert_eq!(left.landmarks.len(), right.landmarks.len());
+            for (left, right) in left.landmarks.iter().zip(right.landmarks.iter()) {
+                assert!(close(left.x, right.x));
+                assert!(close(left.y, right.y));
+            }
+        }
     }
 
     #[test]

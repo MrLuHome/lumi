@@ -320,17 +320,48 @@ mod tests {
         assert_eq!(snapshot.summary.blocked, 1);
     }
 
+    /// 快照**不计算哈希**，用"可判别构造"证明，而不是靠断言"值等于登记值"
+    /// （现算与不现算得到的值相同，那条断言永远绿 —— QA 指出，已修）。
+    ///
+    /// 构造：把真实权重拷到临时目录，**翻 1 字节但保持文件长度不变**，让登记目录
+    /// 指向这份被篡改的副本。若快照真的做了 SHA256 并比对，它会判 `corrupt`；
+    /// 只看存在性与体积的实现则仍报 `verified` 并给出登记值。
     #[test]
-    fn snapshot_reads_real_model_without_hashing() {
+    fn snapshot_does_not_hash_the_weight() {
+        let root = std::env::temp_dir().join(format!("lumi-registry-nohash-{}", std::process::id()));
+        let dir = root.join("models/yunet");
+        std::fs::create_dir_all(&dir).unwrap();
+        let tampered = dir.join(builtin::YUNET.file_name);
+        let mut bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join(builtin::YUNET.dir)
+                .join(builtin::YUNET.file_name),
+        )
+        .unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff; // 长度不变、内容已变 → 只有真算哈希才能发现
+        std::fs::write(&tampered, &bytes).unwrap();
+
         let registry = Registry::new(None);
-        let mut dirs = locate::dev_base_dirs();
-        dirs.push(PathBuf::from("/definitely/not/here"));
-        let snapshot = registry.snapshot(&dirs);
+        let snapshot = registry.snapshot(std::slice::from_ref(&root));
         let entry = snapshot.find(builtin::YUNET.id).unwrap();
-        assert_eq!(entry.state, "verified");
-        assert_eq!(entry.size_on_disk_bytes, builtin::YUNET.size_bytes);
-        // sha256 来自登记表，不是现算的 —— 快照必须保持 O(1)。
+        assert_eq!(
+            entry.state, "verified",
+            "快照做了内容校验（不该）：{:?}",
+            entry.findings
+        );
+        assert!(entry.failure.is_none());
+        // 值来自登记表，不是现算的。
         assert_eq!(entry.sha256, builtin::YUNET.sha256);
+        // 体积来自 metadata（证明读的是文件系统元数据，不是内容）。
+        assert_eq!(entry.size_on_disk_bytes, builtin::YUNET.size_bytes);
+
+        // 对照：真正走完整校验时必须发现篡改，证明这份副本确实"坏"了。
+        let health = verify::check_at(&builtin::YUNET, &tampered, false);
+        assert_eq!(health.blocking.unwrap().kind(), "corrupt");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

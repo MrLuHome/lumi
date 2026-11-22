@@ -5,8 +5,17 @@
 //! 解析（第 ⑥ 步）由 `InferenceBackend::load` 负责。
 //!
 //! **未通过许可时不读任何字节**：存在性判断只用 `is_file()`（一次 `metadata`），
-//! 体积/头字节/SHA 全部跳过。这一点由
-//! `tests/model_registry.rs::license_block_never_reads_the_file` 断言。
+//! 体积/头字节/SHA 全部跳过。这一点由三组测试断言：
+//!
+//! 1. `tests/model_registry.rs::non_commercial_weights_are_rejected_before_any_read`
+//!    —— 文件存在但内容/体积都不对 + 许可 `NotAllowed` ⇒ findings 只有
+//!    `licenseBlocked`（若先读了文件，必然多出 `corrupt`）；
+//! 2. `tests/model_registry.rs::license_failure_blocks_before_missing` —— 许可未过
+//!    且文件缺失 ⇒ `blocking` 仍是许可，`findings` 两栏都要有；
+//! 3. `verify::tests::license_block_never_reads_the_file` —— **行为级铁证**：
+//!    把权重 `chmod 000`，许可 `NotAllowed` 时照常只报许可；把同一文件改成
+//!    `Allowed` 后立刻报 `corrupt` + `os error 13`。对照组证明文件确实不可读，
+//!    因此第一组"没报错"只能来自"没读"。
 
 use std::path::{Path, PathBuf};
 
@@ -350,6 +359,71 @@ mod tests {
         let health = check_shallow(&builtin::YUNET, &real_model_path());
         assert!(health.blocking.is_none());
         assert!(health.resolved_path.is_some());
+    }
+
+    /// 构造一份"许可未通过"的登记记录。
+    fn not_allowed_spec() -> super::super::spec::ModelSpec {
+        use super::super::license::{LicenseRecord, Verdict3};
+        super::super::spec::ModelSpec {
+            license: LicenseRecord {
+                weights: Verdict3::NotAllowed,
+                ..builtin::YUNET.license
+            },
+            ..builtin::YUNET.clone()
+        }
+    }
+
+    /// 行为级证明：许可未过时**没有打开文件**。
+    ///
+    /// 手法：把权重 `chmod 000`（存在、体积正确、但不可读），然后做对照实验：
+    /// - 许可 `NotAllowed` ⇒ findings 只有 `licenseBlocked`（一次 `metadata` 之后即返回）；
+    /// - 许可 `Allowed`   ⇒ 立刻 `corrupt` 且 detail 含 `os error 13`（真的 `open()` 了）。
+    ///
+    /// 第二组证明"这份文件确实读不了"，因此第一组的"没报错"只能解释为"没读"。
+    /// 若当前用户能读（例如 root 会绕过权限位），本测试无法证明任何事，直接跳过。
+    #[cfg(unix)]
+    #[test]
+    fn license_block_never_reads_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("noread");
+        let path = dir.join(builtin::YUNET.file_name);
+        // 体积必须与登记值一致，否则会先被第 ③ 步的体积检查挡下，走不到读文件。
+        std::fs::write(&path, vec![0u8; builtin::YUNET.size_bytes as usize]).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // 前置：确认这份文件此刻真的不可读。
+        if std::fs::read(&path).is_ok() {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).ok();
+            std::fs::remove_dir_all(&dir).ok();
+            eprintln!("[skip] 当前用户可绕过 0o000（如 root），无法证明\"没读文件\"");
+            return;
+        }
+
+        // ① 许可未过 ⇒ 只报许可，一个字节都不读。
+        let blocked = not_allowed_spec();
+        let health = check_at(&blocked, &path, true);
+        assert_eq!(
+            health.findings.len(),
+            1,
+            "许可未过时不该产生任何文件读取类发现：{:?}",
+            health.findings
+        );
+        assert_eq!(health.findings[0].kind(), "licenseBlocked");
+        assert!(health.resolved_path.is_none());
+
+        // ② 对照：许可通过时必须真的去读，且读不到。
+        let health = check_at(&builtin::YUNET, &path, true);
+        let failure = health.blocking.expect("许可通过后必须尝试读取文件");
+        assert_eq!(failure.kind(), "corrupt");
+        let detail = failure.detail().unwrap_or_default();
+        assert!(
+            detail.contains("os error 13") || detail.contains("Permission denied"),
+            "期望权限错误，实际：{detail}"
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

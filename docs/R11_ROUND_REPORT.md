@@ -23,7 +23,7 @@
 4. `commands/model_status.rs` 4 个新命令 + 前端 `types.ts` / `backend.ts` 契约；
 5. 旧表收敛（`skin_segmentation::status()` 转发 registry）+ 许可台账
    `docs/MODEL_LICENSE_REGISTER.md`；
-6. `tests/model_registry.rs` 17 条验收测试。
+6. `tests/model_registry.rs` 18 条验收测试；QA 验收后又收紧了 4 条空转测试（§11.4）。
 
 ---
 
@@ -300,12 +300,12 @@ pub struct ModelIntrospection {
 
 | # | 命令 | 结果 | 基线 | 判定 |
 |---|------|------|------|------|
-| V1 | `cargo test --lib` | **471 passed / 0 failed / 3 ignored** | 397 passed / 0 failed / 3 ignored | ✅ +74 条新单测，0 失败 |
-| V2 | `cargo test`（全量 17 个 target） | **569 passed / 0 failed / 7 ignored** | 477 passed / 0 failed / 7 ignored | ✅ +92 条，0 失败 |
+| V1 | `cargo test --lib` | **477 passed / 0 failed / 3 ignored**，6.70s | 397 passed / 0 failed / 3 ignored | ✅ +80 条新单测，0 失败 |
+| V2 | `cargo test`（全量 17 个 target） | **575 passed / 0 failed / 7 ignored** | 477 passed / 0 failed / 7 ignored | ✅ +98 条，0 失败 |
 | V3 | `cargo clippy --all-targets` | **0 warning / 0 error**（`Finished dev profile`，无输出） | 0 warning | ✅ |
 | V4 | `cargo check --no-default-features --lib` | **通过**（`Finished dev profile in 3.81s`） | 通过 | ✅ |
-| V5 | `cargo test --no-default-features --lib` | **471 passed / 0 failed / 3 ignored** | 397 passed | ✅ 与 V1 完全一致 |
-| V6 | `cargo test --test face_detection --test beauty --test beauty_real --test face_intelligence` | 4 + 12 + 4 + 5 = **25 passed / 0 failed**（`beauty_real` 真实跑满 **48.75 s**，未跳过） | 同 | ✅ 真实推理路径零回归 |
+| V5 | `cargo test --no-default-features --lib` | **477 passed / 0 failed / 3 ignored**，6.63s | 397 passed | ✅ 与 V1 完全一致 |
+| V6 | `cargo test --test face_detection --test beauty --test beauty_real --test face_intelligence` | 4 + 12 + 4 + 5 = **25 passed / 0 failed**（`beauty_real` 真实跑满 **27.74 s**，未跳过） | 同 | ✅ 真实推理路径零回归 |
 | V7 | `pnpm test`（前端 vitest） | **81 passed / 8 files**，235ms | 81 passed | ✅ |
 | V8 | `npx tsc --noEmit` | **无输出（0 error）** | 0 | ✅ |
 
@@ -313,7 +313,7 @@ pub struct ModelIntrospection {
 
 | target | passed | ignored |
 |--------|--------|---------|
-| `src/lib.rs` | 471 | 3 |
+| `src/lib.rs` | 477 | 3 |
 | `tests/beauty.rs` | 12 | 1 |
 | `tests/beauty_real.rs` | 4 | 0 |
 | `tests/engine.rs` | 10 | 1 |
@@ -329,7 +329,7 @@ pub struct ModelIntrospection {
 | `tests/round10_real_photos.rs` | 5 | 0 |
 | `tests/round8_benchmark.rs` | 0 | 1 |
 | `tests/round9_1_persistence.rs` | 9 | 0 |
-| **合计** | **569** | **7** |
+| **合计** | **575** | **7** |
 
 ### 6.2 `tests/model_registry.rs` 18 条验收测试逐条对应任务书验收点
 
@@ -347,6 +347,12 @@ pub struct ModelIntrospection {
 | 推理可取消 | `cancelled_inference_returns_e_cancelled_without_panicking`、`uncancelled_inference_still_works_after_the_cancel_test` |
 | 快照可序列化（camelCase/字段齐全） | `registry_snapshot_is_frontend_ready`、`snapshot_state_reflects_recorded_checks`、`model_runtime_state_strings_match_the_frontend_union` |
 | R9 量纲护栏 | `yunet_value_range_is_raw255_consistent_with_the_implementation` |
+| 零维形状不得构造张量（§14.3-2） | `tensor::tests::zero_dimension_shape_cannot_construct_a_tensor`（全 0 + 部分 0 两种，并反向确认真实契约不受影响）、`placeholder_shape_is_rejected_instead_of_silently_passing` |
+| **"许可未过就没读文件"的行为级铁证** | `verify::tests::license_block_never_reads_the_file`（`chmod 000` 对照组：许可 `NotAllowed` ⇒ 只报许可；改成 `Allowed` ⇒ `corrupt` + `os error 13`） |
+| 命令层序列化契约（无 tauri runtime） | `commands::model_status::tests`：`runtime_status_serializes_with_camel_case_keys` / `status_from_state_maps_failures_into_the_view` / `inference_error_serializes_to_the_four_field_contract` / `failure_of_maps_every_code_to_a_matching_kind` |
+| 快照**不哈希**的可判别证明 | `snapshot_does_not_hash_the_weight`（篡改副本仍报 verified + 登记值；对照组完整校验报 corrupt） |
+| 内置 ID 命名契约 | `every_registered_model_id_follows_the_naming_contract`（遍历 `builtin::ALL`） |
+| 前端状态联合类型双向对齐 | `model_runtime_state_strings_match_the_frontend_union`（7 个变体全构造 + `include_str!` 切出 `ModelState` 联合类型双向比对） |
 | `inspect()` 覆盖 L2/L3 只读结构（§8.6 ⑨） | `inspect_covers_the_l2_l3_read_only_shape`；单测 `inspect_reports_ir_version_opset_and_io_without_compiling` / `inspect_is_cancellable` / `inspect_rejects_a_non_onnx_file`；`gpu_backend_rejects_inspect_with_backend_code` |
 
 ---
@@ -445,7 +451,19 @@ pub struct ModelIntrospection {
    因为 `ModelSpec` 不再是 `Copy`（D11），`&builtin::YUNET` 拿到的是语句级临时借用，
    传不进 `&'static` 形参。`Registry` 本来就只读取 spec（`id`/`sha256` 都拷成 `String`），
    放宽后语义不变，但也意味着"注册表只接受静态登记项"这个约束现在靠**约定**而不是类型系统。
-7. **`release` profile `panic = "abort"`** 使 `CpuTractBackend::run` 的
+7. **`verify.rs` 的 Git-LFS 判据是死代码**（QA 实测）：`header` 只读了 **8 字节**，
+   而 needle `b"version https://git-lfs"` 有 **23 字节**，`starts_with` 恒为 `false`。
+   `model_hub/security.rs:133` 是同一模式的沿袭问题。目前被"体积必须完全等于登记值"
+   兜住，不构成实际风险。**R12 修**：两处一起读 64 字节。
+8. **`commands/model_status.rs::failure_of` 的 `ModelCorrupt` 分支把 `actual_sha` 硬编码成 `None`**，
+   导致前端拿不到"实际摘要"（`ModelFailure.actual` 为空）。本轮不修（要改签名才能传回实际值），
+   已在 `failure_of_maps_every_code_to_a_matching_kind` 里**如实记录现状**，
+   一旦回填该测试就会提示同步更新。**R12 修。**
+9. **本轮有 4 条测试一度是空转的**（QA 指出，已全修，见 §11.4）。教训写在这里而不是删掉：
+   "在真实素材上断言 `0 == 0`"、"只比 2 个却声明 7 个"、"校验硬编码字面量"、
+   "断言现算与不现算同值"，这四种都属于**看起来在测、实际永远绿**。
+   今后 R12+ 写"等价性/不变量"类测试时，必须先问一句"什么改动会让它变红"。
+10. **`release` profile `panic = "abort"`** 使 `CpuTractBackend::run` 的
    `catch_unwind` 在正式包里失效（只在 dev/test 生效）。已在代码注释标注；
    若要在正式包也隔离 panic，需要改 profile，属全局决策，本轮不动。
 
@@ -454,7 +472,16 @@ pub struct ModelIntrospection {
 - **R1** `skin_model_status` 同步命令整文件哈希：本轮把命令改成
   `async + spawn_blocking`（T05），且 `status()` 已改为转发 registry（当前登记表为空，
   不产生任何 IO）。**但风险只是被绕开，没有根治** —— 一旦皮肤登记表有内容，
-  `verify::check(spec, dirs, false)` 仍会做 SHA；届时必须改用 `check_shallow` 或落盘缓存。
+  `verify::check(spec, dirs, false)` 仍会做 SHA。
+
+  > ⚠️ **R13 硬性前置条件（QA 在验收报告里升为"严重级"，此处同升）**：
+  > `ai_engine/skin_segmentation/model.rs` 的 `status()` 现在调用
+  > `model_registry::verify::check(spec, &base_dirs, false)` —— 这个**含 SHA256**。
+  > 当前 `SKIN_MODELS` 为空，循环一次都不进，所以没有 IO；**但只要 R13 往里登记一条权重，
+  > 面板挂载就会整文件哈希，R1 立刻复活**。
+  > 因此在动 `SKIN_MODELS` 之前，**必须先**把该调用换成
+  > `verify::check_shallow(spec, &base_dirs)` 或落盘缓存校验结果。
+  > 本轮按要求**只记录不修**（QA 也确认不要顺手改）。
 - **R2** 同一模型被 2–3 个 `FaceEngine` 各自解析：未修（任务书点名只记录）。
 - **R4** 缓存键不含模型身份：未修。
 - **R5** 内存峰值（24 MP + 5 脸 ≈ 480 MB）：未修。
@@ -514,6 +541,25 @@ pub struct ModelIntrospection {
 **架构师已在设计文档 §14 复核并采纳本项**：R9 更正为「本质不是写错，而是契约以人读字符串表达、无法机器校验」，并确认
 `ai/face.rs` 的 `u16 / 257.0` **实际产生 0..255，与常量一致**。因此 `Raw255` 是正确登记值，不是偏离遗留。
 
+### 11.4 QA 验收（`docs/R11_ACCEPTANCE.md`）之后的收紧
+
+QA 结论是 `ff91cee` 通过、无 FAIL，但指出**我自己写坏了 4 条测试**（永远绿、实际空转）。
+这 4 条已全部改成真测试（详见 §6.2），另补 3 处能真正证伪的护栏：
+
+| # | 原测试的问题 | 改法 |
+|---|--------------|------|
+| 1 | `detect_and_detect_with_cancel_are_equivalent` 用 64×64 纯灰图，实测检出 **0 张脸**，断言退化成 `0 == 0` | 改用真实 `tests/fixtures/images/portrait.jpg`（`decoder::decode` + `fit_within`，与 `face_detection.rs` 同一写法），先断言 `!faces.is_empty()`，再逐字段（id/uuid/score/x/y/w/h/landmarks）用按量级缩放的 `f32::EPSILON * 8` 比较 |
+| 2 | `model_runtime_state_strings_match_the_frontend_union` 期望数组 7 项，实际只调了 2 个 `as_str()`；期望值手抄，改 `types.ts` 不会红 | 7 个变体全部构造逐一断言；并把 `src/types.ts` 里 `export type ModelState = …;` 切出来做**双向**比对（后端多一个状态或前端多一个字面量都会红） |
+| 3 | `model_id_follows_the_naming_contract` 只校验函数内硬编码字面量，不碰 `builtin::ALL` | 遍历 `builtin::ALL`：字符集 `[a-z0-9-]`、长度 ≤48、无首尾/连续 `-`、`<task>-` 前缀与 `spec.task` 一致、版本尾段、ID 唯一 |
+| 4 | `snapshot_reads_real_model_without_hashing` 断言 `sha256 == 登记值`，而"现算"与"不现算"值相同，无法区分 | 改成**可判别构造**：真实权重拷到临时目录、翻 1 字节保持长度，指向副本做 snapshot —— 若真哈希就会报 `corrupt`，实际仍 `verified` + 登记值 + `sizeOnDiskBytes` 来自 `metadata`；同时用 `verify::check_at` 对照证明该副本确实是"坏"的。按 QA 建议**不用计时断言**（易 flaky） |
+| 5 | `verify.rs` 模块注释引用了**不存在的**测试名 `license_block_never_reads_the_file`（把弱证明写成强证明） | 补上真实的强测试：`#[cfg(unix)]` 把权重 `chmod 000`，许可 `NotAllowed` ⇒ findings 只有 `licenseBlocked`；同一文件改成 `Allowed` ⇒ `corrupt` + `os error 13`。第二组证明"文件确实读不了"，因此第一组只能解释为"没读"。当前用户能读（root）时自动跳过。**已用变异验证该测试真的会红**（把断言改成 `MUTATED_...` 后变红，随后还原） |
+| 6 | `commands/model_status.rs` 250 行零测试 | 补 4 条不依赖 tauri runtime 的契约测试：camelCase 键名、`InferenceError` 四字段、`status_from_state` 映射、`failure_of` 五种错误码 → 五种失败态的映射 |
+
+同时按 QA / 架构师意见补的两道守卫（都不改既有行为）：
+
+- `TensorSpec::validate()` 在 `element_count() == 0` 时显式拒绝（覆盖全 0 与**部分 0 维**两种），并配反向用例确认 `[1,3,640,640]` 不受影响。**没有**动 `check_contract` 里"模型侧 `actual == 0` 视为动态维"的通配规则。
+- `builtin.rs` 的输入注释重写为「**BGR，Raw255（u16 ÷ 257 得 0..255）**」，并补上"若登记成 0..1，`validate` 的 `bounds(0,1)` 会让每次检测硬失败 `E_INPUT`"这条更强的后果说明。
+
 ### 11.3 架构师复核（设计 1444 → 1495 行，§14）的落地情况
 
 | §14 项 | 裁决 | 本轮落地 |
@@ -554,6 +600,7 @@ pub struct ModelIntrospection {
 | 1 | `ff91cee6114d162c532da87082926715737faa2f` | `feat(r11): 统一模型注册表与推理准入链`（29 files, +7181 / -116） |
 | 2 | `945bd46` | `docs(r11): 回填本轮代码提交 SHA` |
 | 3 | `96c716d4a3e35bf66a1ed62828a37fc9415f38d0` | `feat(r11): 补 InferenceBackend::inspect 与 TensorSpec 动态形状`（设计更新的三条更正 + §14 复核项） |
+| 4 | 见 `git log -1` | `fix(r11): 收紧空转测试与只读探测契约`（QA 验收后的 4 条空转测试 + 3 处强证据 + 零维守卫 + 命令层契约测试；**QA 请以此为最终验收对象**） |
 - 提交范围（**未用 `git add -A`**）：
   `src-tauri/src`、`src-tauri/tests`、`src/lib`、`src/types.ts`、
   `docs/R11_AUDIT_AND_DESIGN.md`、`docs/MODEL_LICENSE_REGISTER.md`、`docs/R11_ROUND_REPORT.md`

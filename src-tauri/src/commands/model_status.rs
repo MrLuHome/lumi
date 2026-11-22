@@ -248,3 +248,135 @@ pub fn model_unload(
         "cpu-tract",
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai_engine::inference::InferenceError;
+
+    /// 命令层**不依赖 tauri runtime** 的契约测试：只验证"前端拿到什么形状"。
+    ///
+    /// 覆盖不到 `failure_of()` 的分支选择（那需要真实 IO），但能锁住
+    /// camelCase 键名与 `InferenceError` 的四字段形状 —— 这两点一旦漂移，
+    /// 前端 `switch (error.code)` 会静默失效。
+    #[test]
+    fn runtime_status_serializes_with_camel_case_keys() {
+        let status = ModelRuntimeStatus {
+            model_id: "face-detect-yunet-2023mar".into(),
+            state: "ready",
+            loaded: true,
+            elapsed_ms: 128,
+            failure: None,
+            backend: "cpu-tract",
+        };
+        let value = serde_json::to_value(&status).unwrap();
+        for key in ["modelId", "state", "loaded", "elapsedMs", "failure", "backend"] {
+            assert!(value.get(key).is_some(), "缺少字段 `{key}`：{value}");
+        }
+        assert_eq!(value["modelId"], "face-detect-yunet-2023mar");
+        assert_eq!(value["state"], "ready");
+        assert_eq!(value["loaded"], true);
+        assert_eq!(value["elapsedMs"], 128);
+        assert!(value["failure"].is_null());
+    }
+
+    #[test]
+    fn status_from_state_maps_failures_into_the_view() {
+        let failure = crate::ai_engine::model_registry::ModelFailure::LicenseNotCleared {
+            model_id: "m".into(),
+            which: "weights",
+            what_to_check: "核对发布页".into(),
+        };
+        let state = ModelRuntimeState::from_failure(failure);
+        let status = status_from_state("m", &state, 3, "cpu-tract");
+        assert_eq!(status.state, "licenseBlocked");
+        assert!(!status.loaded);
+        assert_eq!(status.elapsed_ms, 3);
+        let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["failure"]["kind"], "licenseBlocked");
+        assert_eq!(value["failure"]["modelId"], "m");
+        // 状态里携带的失败态必须能换回同一个错误码（前端据此分支）。
+        // `ModelFailure` 是**单向视图**（只 Serialize），所以这里从 state 里取原值。
+        let carried = state.failure().expect("失败态必须保留在状态里");
+        assert_eq!(
+            InferenceError::from(carried.clone()).code(),
+            "E_MODEL_LICENSE"
+        );
+    }
+
+    #[test]
+    fn inference_error_serializes_to_the_four_field_contract() {
+        let error = InferenceError::ModelCorrupt {
+            model_id: "face-detect-yunet-2023mar".into(),
+            detail: "SHA256 与登记值不符".into(),
+        };
+        let value = serde_json::to_value(&error).unwrap();
+        let object = value.as_object().expect("必须是对象而不是字符串");
+        assert_eq!(object.len(), 4, "只暴露 4 个字段：{value}");
+        assert_eq!(value["code"], "E_MODEL_CORRUPT");
+        assert_eq!(value["modelId"], "face-detect-yunet-2023mar");
+        assert!(value["message"].as_str().unwrap().contains("损坏"));
+        assert!(value["detail"].as_str().unwrap().contains("SHA256"));
+    }
+
+    /// `failure_of()` 的映射是命令层唯一的"错误 → 失败态"翻译点。
+    /// 注意 `ModelCorrupt` 分支目前把 `actual_sha` 填成 `None`（R12 待修，
+    /// 见 `docs/R11_ROUND_REPORT.md` 已知问题），本测试**如实记录现状**而不是背书。
+    #[test]
+    fn failure_of_maps_every_code_to_a_matching_kind() {
+        let spec = &crate::ai_engine::model_registry::builtin::YUNET;
+        let cases = [
+            (
+                InferenceError::LicenseNotCleared {
+                    model_id: spec.id.into(),
+                    which: "weights",
+                    detail: "未核实".into(),
+                },
+                "licenseBlocked",
+            ),
+            (
+                InferenceError::ModelMissing {
+                    model_id: spec.id.into(),
+                    searched: vec!["/a".into()],
+                },
+                "missing",
+            ),
+            (
+                InferenceError::ModelCorrupt {
+                    model_id: spec.id.into(),
+                    detail: "sha".into(),
+                },
+                "corrupt",
+            ),
+            (
+                InferenceError::ModelVersionMismatch {
+                    model_id: spec.id.into(),
+                    expected: "1x3x640x640".into(),
+                    actual: "1x3x320x320".into(),
+                },
+                "versionMismatch",
+            ),
+            (
+                InferenceError::ModelLoadFailed {
+                    model_id: spec.id.into(),
+                    detail: "parse".into(),
+                },
+                "loadFailed",
+            ),
+        ];
+        for (error, expected) in cases {
+            let failure = failure_of(spec, &error);
+            assert_eq!(failure.kind(), expected, "错误码 {} 映射错了", error.code());
+            assert_eq!(failure.model_id(), spec.id);
+        }
+        // 现状记录：corrupt 分支没有回填 actual_sha。
+        let failure = failure_of(
+            spec,
+            &InferenceError::ModelCorrupt {
+                model_id: spec.id.into(),
+                detail: "sha".into(),
+            },
+        );
+        assert!(failure.actual().is_none(), "若已回填 actual_sha 请更新本条与报告");
+    }
+}

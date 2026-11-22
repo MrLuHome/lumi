@@ -51,9 +51,11 @@ pub const YUNET: ModelSpec = ModelSpec {
     file_name: YUNET_FILE,
     size_bytes: YUNET_SIZE_BYTES,
     sha256: YUNET_SHA256,
-    // 注意：`ai/face.rs` 的预处理是 `u16 像素 / 257.0`，16 位内部表示
-    // （0..65535）压回 0..255，因此**实际口径是 0..255**。
-    // 这不是 0..1：若声明成 ZeroOne，未来按契约实现的预处理会差 255 倍。
+    // 口径：**BGR，Raw255（u16 ÷ 257 得 0..255）**。
+    // `ai/face.rs` 的预处理是 `u16 像素 / 257.0`，而 `u16::MAX / 257.0 == 255.0`，
+    // 即 16 位内部表示（0..65535）压回 0..255，与这里的登记值一致。
+    // 不是 0..1：若登记成 0..1，未来按契约实现的预处理会差 255 倍，
+    // 且 `TensorSpec::validate` 的 bounds(0,1) 会直接让每次检测硬失败 `E_INPUT`。
     input: TensorSpec::declared(&[1, 3, 640, 640], ValueRange::Raw255, ChannelOrder::Bgr),
     outputs: &[
         OutputHead {

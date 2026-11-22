@@ -188,9 +188,11 @@ impl UserModelSnapshot {
         let input = crate::ai_engine::inference::TensorSpec {
             dtype: crate::ai_engine::inference::Dtype::F32,
             layout: crate::ai_engine::inference::Layout::Nchw,
-            // 用户模型的 IO 契约由它自己的 manifest 描述，登记表只能给**占位**形状。
-            // 这不是"真实形状"，因此 `TensorSpec::is_placeholder()` 会判定为占位，
-            // `TensorBatch::validate()` 显式拒绝它 —— 占位值不会被当成零元素张量跑推理。
+            // 用户模型的 IO 契约由它自己的 manifest 描述，登记表只能给**占位**规格：
+            // 形状全 0、值域与通道顺序都是中性默认值，**都不代表真实契约**。
+            // `TensorSpec::is_placeholder()` 会判定为占位，`TensorBatch::validate()`
+            // 显式拒绝它 —— 占位值不会被当成零元素张量跑推理。
+            // （这里出现 `ZeroOne` 只是"未知值域"的中性占位，与 YuNet 的 Raw255 无关。）
             shape: std::borrow::Cow::Borrowed(&[0, 0, 0, 0]),
             value_range: crate::ai_engine::inference::ValueRange::ZeroOne,
             channel_order: crate::ai_engine::inference::ChannelOrder::Rgb,

@@ -164,14 +164,54 @@ impl ModelSpec {
 mod tests {
     use super::*;
 
+    /// 任务 → ID 前缀。新增任务时必须在这里登记前缀，否则 ID 测试会失败。
+    fn task_prefix(task: ModelTask) -> &'static str {
+        match task {
+            ModelTask::FaceDetect => "face-detect-",
+            ModelTask::FaceLandmark => "face-landmark-",
+            ModelTask::SkinParse => "skin-parse-",
+            ModelTask::FaceParse => "face-parse-",
+            ModelTask::SubjectSegment => "subject-segment-",
+            ModelTask::BodyPose => "body-pose-",
+        }
+    }
+
+    /// 内置 ID 必须遵守 `<task>-<family>-<version>` 的更严子集
+    /// （比 `model_hub` 的校验更紧，避免新 ID 漂移）。
+    ///
+    /// 旧版只校验函数里硬编码的一个字面量，不碰 `builtin::ALL` 任何条目，
+    /// **永不失败**（QA 指出，已修）。现在遍历全部登记记录。
     #[test]
-    fn model_id_follows_the_naming_contract() {
-        // 内置 ID 必须遵守更严子集（比 model_hub 的校验更紧，避免新 ID 漂移）。
-        let id = "face-detect-yunet-2023mar";
-        assert!(id.len() <= 48);
-        assert!(id
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'));
+    fn every_registered_model_id_follows_the_naming_contract() {
+        use crate::ai_engine::model_registry::builtin;
+
+        assert!(!builtin::ALL.is_empty(), "登记表为空时本测试无意义");
+
+        let mut seen: Vec<&str> = Vec::new();
+        for spec in builtin::ALL {
+            let id = spec.id;
+            assert!(id.len() <= 48, "`{id}` 超过 48 字符");
+            assert!(!id.is_empty(), "模型 ID 不能为空");
+            assert!(
+                id.chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'),
+                "`{id}` 含非法字符（只允许 [a-z0-9-]）"
+            );
+            assert!(!id.starts_with('-') && !id.ends_with('-'), "`{id}` 首尾不能是 -");
+            assert!(!id.contains("--"), "`{id}` 出现连续 -");
+            assert!(
+                id.starts_with(task_prefix(spec.task)),
+                "`{id}` 不符合 `<task>-<family>-<version>`：任务 {:?} 要求前缀 `{}`",
+                spec.task,
+                task_prefix(spec.task)
+            );
+            assert!(
+                id.rsplit('-').next().unwrap_or_default().len() >= 2,
+                "`{id}` 缺少版本尾段"
+            );
+            assert!(!seen.contains(&id), "模型 ID `{id}` 重复登记");
+            seen.push(id);
+        }
     }
 
     #[test]

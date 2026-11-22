@@ -407,26 +407,91 @@ fn snapshot_state_reflects_recorded_checks() {
 
 #[test]
 fn model_runtime_state_strings_match_the_frontend_union() {
-    let expected = [
-        "verified",
-        "ready",
-        "licenseBlocked",
-        "missing",
-        "corrupt",
-        "versionMismatch",
-        "loadFailed",
-    ];
+    use lumi_retouch_lib::ai_engine::model_registry::ModelFailure;
+
+    // 7 个运行态**全部**构造出来；旧版只比了前 2 个，其余 5 个（含
+    // licenseBlocked / corrupt）从未被调用 as_str()，等于空转（QA 指出，已修）。
+    let model = "face-detect-yunet-2023mar".to_string();
     let states = [
-        ModelRuntimeState::Verified {
-            path: PathBuf::from("/x"),
-        },
-        ModelRuntimeState::Ready {
-            path: PathBuf::from("/x"),
-        },
+        (
+            ModelRuntimeState::Verified {
+                path: PathBuf::from("/x"),
+            },
+            "verified",
+        ),
+        (
+            ModelRuntimeState::Ready {
+                path: PathBuf::from("/x"),
+            },
+            "ready",
+        ),
+        (
+            ModelRuntimeState::LicenseBlocked(ModelFailure::LicenseNotCleared {
+                model_id: model.clone(),
+                which: "weights",
+                what_to_check: "核对".into(),
+            }),
+            "licenseBlocked",
+        ),
+        (
+            ModelRuntimeState::Missing(ModelFailure::Missing {
+                model_id: model.clone(),
+                searched: Vec::new(),
+            }),
+            "missing",
+        ),
+        (
+            ModelRuntimeState::Corrupt(ModelFailure::Corrupt {
+                model_id: model.clone(),
+                detail: "sha".into(),
+                expected_sha: "aa".into(),
+                actual_sha: Some("bb".into()),
+            }),
+            "corrupt",
+        ),
+        (
+            ModelRuntimeState::VersionMismatch(ModelFailure::VersionMismatch {
+                model_id: model.clone(),
+                expected: "a".into(),
+                actual: "b".into(),
+            }),
+            "versionMismatch",
+        ),
+        (
+            ModelRuntimeState::LoadFailed(ModelFailure::LoadFailed {
+                model_id: model.clone(),
+                detail: "parse".into(),
+            }),
+            "loadFailed",
+        ),
     ];
-    assert_eq!(states[0].as_str(), expected[0]);
-    assert_eq!(states[1].as_str(), expected[1]);
-    assert_eq!(expected.len(), 7);
+    assert_eq!(states.len(), 7, "运行态数量变了就必须同步 types.ts 的 ModelState");
+
+    // 跨语言锁：把 types.ts 里 `export type ModelState = … ;` 那一段切出来，
+    // 双向比对 —— 手抄一份 expected 数组只能防 Rust 内部漂移，
+    // 读真实 TS 源码才能防"后端加了状态、前端没加"（以及反向）的漂移。
+    let types_ts = include_str!("../../src/types.ts");
+    let union_start = types_ts
+        .find("export type ModelState =")
+        .expect("types.ts 里找不到 ModelState 联合类型");
+    let union_body = &types_ts[union_start..];
+    let union_body = &union_body[..union_body.find(';').expect("ModelState 联合类型未闭合")];
+
+    for (state, expected) in &states {
+        assert_eq!(state.as_str(), *expected);
+        assert!(
+            union_body.contains(&format!("\"{expected}\"")),
+            "types.ts 的 ModelState 缺少 `{expected}`"
+        );
+    }
+    // 反向：union 里每个字符串字面量都必须是 Rust 定义过的状态。
+    let known: Vec<&str> = states.iter().map(|(_, name)| *name).collect();
+    for token in union_body.split('"').skip(1).step_by(2) {
+        assert!(
+            known.contains(&token),
+            "types.ts 的 ModelState 出现了 Rust 未定义的运行态 `{token}`"
+        );
+    }
 }
 
 #[test]

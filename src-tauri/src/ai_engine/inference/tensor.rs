@@ -223,6 +223,20 @@ impl TensorSpec {
             });
         }
         let expected = self.element_count();
+        // 第二道守卫：**任一维为 0** 都不是可推理的契约。
+        // `is_placeholder()` 只挡全 0；`[1, 0, 4]` 这类部分 0 维会让
+        // `element_count() == 0`，同样会让"空数据"通过长度校验。
+        // 注意：这条守卫只作用于**调用方构造张量**时；`check_contract` 里
+        // "模型侧 actual == 0 视为动态维"的通配规则是另一件事，不要一起改。
+        if expected == 0 {
+            return Err(InferenceError::ContractMismatch {
+                model_id: String::new(),
+                detail: format!(
+                    "契约形状 {} 含 0 维（未登记/占位），不能构造张量",
+                    format_shape(self.shape.as_ref())
+                ),
+            });
+        }
         if data.len() != expected {
             return Err(InferenceError::ContractMismatch {
                 model_id: String::new(),
@@ -370,6 +384,29 @@ mod tests {
         assert!(error.to_string().contains("占位"));
         // 真实契约不是占位。
         assert!(!UNIT.is_placeholder());
+    }
+
+    #[test]
+    fn zero_dimension_shape_cannot_construct_a_tensor() {
+        // 全 0：占位契约。
+        let all_zero =
+            TensorSpec::observed(vec![0, 0, 0, 0], ValueRange::ZeroOne, ChannelOrder::Rgb);
+        let error = TensorBatch::new(all_zero, Vec::new()).unwrap_err();
+        assert_eq!(error.code(), "E_MODEL_CONTRACT");
+
+        // 部分 0 维（不是占位，但 element_count == 0）也必须拒绝，
+        // 否则 `0 == 0` 会让空数据通过长度校验。
+        let partial =
+            TensorSpec::observed(vec![1, 0, 4], ValueRange::ZeroOne, ChannelOrder::Rgb);
+        assert!(!partial.is_placeholder());
+        assert_eq!(partial.element_count(), 0);
+        let error = TensorBatch::new(partial, Vec::new()).unwrap_err();
+        assert_eq!(error.code(), "E_MODEL_CONTRACT");
+        assert!(error.to_string().contains("含 0 维"));
+
+        // 反向守卫：真实契约不能被她误伤（YuNet 的 [1,3,640,640] 仍要 Ok）。
+        let real = TensorSpec::declared(&[1, 3, 640, 640], ValueRange::Raw255, ChannelOrder::Bgr);
+        assert!(TensorBatch::new(real, vec![0.0; 3 * 640 * 640]).is_ok());
     }
 
     #[test]
