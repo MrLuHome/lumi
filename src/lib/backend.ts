@@ -692,3 +692,107 @@ export async function revalidateFaceModel(modelId: string): Promise<import("../t
 export async function removeFaceModel(modelId: string): Promise<void> {
   return invoke("remove_face_model", { modelId });
 }
+
+// ──────────────────────── R11 · 模型注册与推理准入 ────────────────────────
+
+/**
+ * 后端 registry / inference 的结构化错误。
+ *
+ * 与既有字符串错误并存：`AppError` 仍然序列化为纯字符串（`BeautyPanel`、
+ * `FacePanel` 等 10+ 处 `catch` 直接展示），只有 R11 新增命令抛本类型。
+ */
+export class LumiModelError extends Error {
+  readonly code: import("../types").ModelErrorCode;
+  readonly modelId?: string;
+  readonly detail?: string;
+
+  constructor(payload: {
+    code: import("../types").ModelErrorCode;
+    message: string;
+    modelId?: string | null;
+    detail?: string | null;
+  }) {
+    super(payload.message);
+    this.name = "LumiModelError";
+    this.code = payload.code;
+    if (payload.modelId) this.modelId = payload.modelId;
+    if (payload.detail) this.detail = payload.detail;
+  }
+}
+
+/**
+ * 判别结构化模型错误。
+ *
+ * **不能用 `instanceof`**：`invoke` 抛出的是 `@tauri-apps/api` 重建的普通对象，
+ * 原型链上没有 `LumiModelError`。因此按 `code` 的 `E_` 前缀判定。
+ */
+export function isModelError(value: unknown): value is LumiModelError {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "code" in value &&
+    typeof (value as { code: unknown }).code === "string" &&
+    (value as { code: string }).code.startsWith("E_")
+  );
+}
+
+/** 把 `invoke` 抛出的普通对象包装成 `LumiModelError`；其它错误原样返回。 */
+function toModelError(value: unknown): unknown {
+  if (value instanceof LumiModelError) return value;
+  if (isModelError(value)) {
+    const payload = value as {
+      code: import("../types").ModelErrorCode;
+      message?: string;
+      modelId?: string | null;
+      detail?: string | null;
+    };
+    return new LumiModelError({
+      code: payload.code,
+      message: payload.message ?? payload.code,
+      modelId: payload.modelId,
+      detail: payload.detail,
+    });
+  }
+  return value;
+}
+
+function emptyRegistrySnapshot(): import("../types").RegistrySnapshot {
+  return {
+    schemaVersion: 1,
+    generatedAtUnix: 0,
+    models: [],
+    summary: { total: 0, official: 0, ready: 0, verified: 0, blocked: 0, userImported: 0 },
+  };
+}
+
+/** 只读快照：纯内存 + is_file，不做哈希。面板挂载时可安全调用。 */
+export async function modelRegistrySnapshot(): Promise<import("../types").RegistrySnapshot> {
+  if (!isDesktopRuntime()) return emptyRegistrySnapshot();
+  return invoke("model_registry_snapshot");
+}
+
+/** 全量校验（体积 + 格式头 + 契约 + SHA256）。`ids` 省略 = 全部内置模型。 */
+export async function modelRegistryCheck(
+  ids?: string[],
+): Promise<import("../types").RegistrySnapshot> {
+  if (!isDesktopRuntime()) return emptyRegistrySnapshot();
+  return invoke("model_registry_check", { modelIds: ids ?? null });
+}
+
+/** 预热加载：走完整许可闸门 → 校验 → 解析优化。失败抛 `LumiModelError`。 */
+export async function modelLoad(modelId: string): Promise<import("../types").ModelRuntimeStatus> {
+  try {
+    return await invoke<import("../types").ModelRuntimeStatus>("model_load", { modelId });
+  } catch (error) {
+    throw toModelError(error);
+  }
+}
+
+/** 释放已加载模型（纯内存操作，不触碰文件）。 */
+export async function modelUnload(modelId: string): Promise<import("../types").ModelRuntimeStatus> {
+  try {
+    return await invoke<import("../types").ModelRuntimeStatus>("model_unload", { modelId });
+  } catch (error) {
+    throw toModelError(error);
+  }
+}

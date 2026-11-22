@@ -1,9 +1,28 @@
-pub const MODEL_FILE: &str = "face_detection_yunet_2023mar.onnx";
-pub const MODEL_NAME: &str = "YuNet 2023mar";
-pub const MODEL_VERSION: &str = "2023mar";
-pub const MODEL_SHA256: &str = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4";
-pub const MODEL_LICENSE: &str = "MIT";
-pub const MODEL_SOURCE: &str = "https://huggingface.co/opencv/face_detection_yunet";
+//! 随包 YuNet 模型的公开常量。
+//!
+//! R11 起这些常量**从登记表派生**（单一真相）：
+//! `ai_engine::model_registry::builtin::YUNET` 是唯一的登记处，
+//! 这里只保留符号名不变，避免打断 `ai/face.rs`、`ai_engine/skin_segmentation`
+//! 等既有引用点。
+//!
+//! 为什么不是简单的 `const X: &str = YUNET.field`：`MODEL_INPUT` 需要的是
+//! “结构化契约的人可读投影”，而 `format!` 不是 const 表达式。因此
+//! `MODEL_INPUT` 仍是字面量，但由单元测试
+//! `model_input_matches_the_structured_spec` 强制与
+//! `YUNET.input.format_human()` 相等 —— 一旦量纲变化，测试立刻变红。
+
+use crate::ai_engine::model_registry::builtin::YUNET;
+
+pub const MODEL_FILE: &str = YUNET.file_name;
+pub const MODEL_NAME: &str = YUNET.display_name;
+pub const MODEL_VERSION: &str = YUNET.version;
+pub const MODEL_SHA256: &str = YUNET.sha256;
+pub const MODEL_LICENSE: &str = match YUNET.license.spdx {
+    Some(spdx) => spdx,
+    None => "未核实",
+};
+pub const MODEL_SOURCE: &str = YUNET.provenance.weights_url;
+/// 结构化投影：`TensorSpec { shape: [1,3,640,640], F32, NCHW, BGR, Raw255 }`。
 pub const MODEL_INPUT: &str = "1×3×640×640 float32（BGR，0..255）";
 pub const MODEL_OUTPUTS: &str = "cls/obj/bbox/kps，stride 8/16/32，共 12 个输出";
 pub const DETECT_SIZE: u32 = 640;
@@ -21,6 +40,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_engine::inference::ValueRange;
 
     #[test]
     fn sha_matches_known_empty_hash() {
@@ -28,5 +48,32 @@ mod tests {
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn constants_are_derived_from_the_registry() {
+        assert_eq!(MODEL_FILE, YUNET.file_name);
+        assert_eq!(MODEL_NAME, YUNET.display_name);
+        assert_eq!(MODEL_VERSION, YUNET.version);
+        assert_eq!(MODEL_SHA256, YUNET.sha256);
+        assert_eq!(MODEL_SOURCE, YUNET.provenance.weights_url);
+        assert_eq!(MODEL_LICENSE, "MIT");
+        assert_eq!(DETECT_SIZE as usize, YUNET.input.shape[2]);
+        assert_eq!(YUNET.input.shape[3], DETECT_SIZE as usize);
+    }
+
+    /// R9 的回归护栏：常量的量纲描述必须与结构化契约逐字一致。
+    #[test]
+    fn model_input_matches_the_structured_spec() {
+        assert_eq!(MODEL_INPUT, YUNET.input.format_human());
+        assert_eq!(YUNET.input.value_range, ValueRange::Raw255);
+        assert!(MODEL_INPUT.contains("0..255"));
+        assert!(!MODEL_INPUT.contains("0..1）"));
+    }
+
+    #[test]
+    fn outputs_constant_matches_the_head_count() {
+        assert_eq!(YUNET.output_count(), 12);
+        assert!(MODEL_OUTPUTS.contains("12"));
     }
 }

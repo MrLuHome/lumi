@@ -4,6 +4,8 @@
 pub mod background;
 pub mod body;
 pub mod face_frame;
+pub mod inference;
+pub mod model_registry;
 pub mod retouch;
 pub mod segmentation;
 pub mod skin_segmentation;

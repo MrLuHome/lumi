@@ -51,28 +51,35 @@ pub struct SkinModelStatus {
     pub registered_count: usize,
 }
 
+/// 查询皮肤解析能力。
+///
+/// R11 起**转发** `ai_engine::model_registry`：登记表的权威来源只有一处。
+/// 当前皮肤登记表（`model_registry::builtin::SKIN_MODELS`）为空 ——
+/// 没有通过许可审查的权重 —— 因此仍然回退到几何蒙版，
+/// 理由文案保持不变（前端 `BeautyPanel.tsx` 会直接展示这段文字）。
 pub fn status(resource_dir: Option<&Path>) -> SkinModelStatus {
-    for spec in REGISTERED_SKIN_MODELS {
-        if !spec.commercial_use || !is_commercial_license(spec.license) {
-            continue;
-        }
-        if let Some(path) = locate(resource_dir, spec.file) {
-            if verify(&path, spec).is_ok() {
-                return SkinModelStatus {
-                    available: true,
-                    method: format!("onnx:{}", spec.id),
-                    name: spec.name.into(),
-                    version: spec.version.into(),
-                    license: spec.license.into(),
-                    commercial_use: true,
-                    sha256: spec.sha256.into(),
-                    input: spec.input.into(),
-                    outputs: spec.outputs.into(),
-                    path: Some(path.to_string_lossy().into_owned()),
-                    reason: "已加载通过许可审查的皮肤分割权重".into(),
-                    registered_count: REGISTERED_SKIN_MODELS.len(),
-                };
-            }
+    let base_dirs = skin_base_dirs(resource_dir);
+    for spec in crate::ai_engine::model_registry::builtin::SKIN_MODELS {
+        let health = crate::ai_engine::model_registry::verify::check(spec, &base_dirs, false);
+        if health.blocking.is_none() {
+            return SkinModelStatus {
+                available: true,
+                method: format!("onnx:{}", spec.id),
+                name: spec.display_name.into(),
+                version: spec.version.into(),
+                license: spec.license.spdx.unwrap_or("未核实").into(),
+                commercial_use: true,
+                sha256: spec.sha256.into(),
+                input: spec.input.format_human(),
+                outputs: spec
+                    .output_names()
+                    .join("/"),
+                path: health
+                    .resolved_path
+                    .map(|path| path.to_string_lossy().into_owned()),
+                reason: "已加载通过许可审查的皮肤分割权重".into(),
+                registered_count: crate::ai_engine::model_registry::builtin::SKIN_MODELS.len(),
+            };
         }
     }
 
@@ -88,8 +95,19 @@ pub fn status(resource_dir: Option<&Path>) -> SkinModelStatus {
         outputs: "额头/双颊/鼻部/下巴/颈部皮肤 alpha".into(),
         path: None,
         reason: "未登记可商用皮肤解析权重；BiSeNet/CelebAMask-HQ 系受非商用数据集限制，InsightFace 多数模型仅限研究。已回退到几何蒙版，不会用未授权权重冒充 AI 分割。".into(),
-        registered_count: REGISTERED_SKIN_MODELS.len(),
+        registered_count: crate::ai_engine::model_registry::builtin::SKIN_MODELS.len(),
     }
+}
+
+/// 皮肤权重的候选基础目录（与 `commands` 层的候选顺序保持一致）。
+fn skin_base_dirs(resource_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = resource_dir {
+        dirs.push(dir.join("resources"));
+        dirs.push(dir.to_path_buf());
+    }
+    dirs.extend(crate::ai_engine::model_registry::locate::dev_base_dirs());
+    dirs
 }
 
 pub fn locate(resource_dir: Option<&Path>, file: &str) -> Option<PathBuf> {

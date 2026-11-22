@@ -57,8 +57,13 @@ pub fn run() {
                 .unwrap_or_else(|_| std::env::temp_dir().join("lumi-face-models"));
             let executable = std::env::current_exe().ok();
             app.manage(std::sync::Arc::new(
-                face_intelligence::FaceIntelligence::new(yunet, models_root, executable),
+                face_intelligence::FaceIntelligence::new(yunet, models_root.clone(), executable),
             ));
+            // R11 统一模型注册表：权威登记层。用户自备模型的 manifest 目录就是
+            // model_hub 的根目录，registry 只读它（单向依赖，不反向）。
+            app.manage(std::sync::Arc::new(ai_engine::model_registry::Registry::new(
+                Some(models_root),
+            )));
             // 关闭窗口前检查未保存修改：确认后才真正退出。
             let guard = app
                 .state::<commands::project::UnsavedGuard>()
@@ -110,6 +115,10 @@ pub fn run() {
             commands::beauty::skin_model_status,
             commands::beauty::analyze_beauty,
             commands::beauty::preview_skin_mask,
+            commands::model_status::model_registry_snapshot,
+            commands::model_status::model_registry_check,
+            commands::model_status::model_load,
+            commands::model_status::model_unload,
             commands::reshape::reshape_capability,
             commands::reshape::reshape_mesh,
             commands::reshape::export_face_records,

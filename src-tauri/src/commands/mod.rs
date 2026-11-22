@@ -8,6 +8,7 @@ pub mod face_intelligence;
 pub mod faces;
 pub mod gpu;
 pub mod library;
+pub mod model_status;
 pub mod preset;
 pub mod project;
 pub mod raw;

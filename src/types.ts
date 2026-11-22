@@ -332,6 +332,8 @@ export interface MaskPreview {
   skinRatio: number;
   faces: number;
   method: string;
+  /** R11 新增：被跳过的脸与原因（后端为空时会省略该字段）。 */
+  warnings?: string[];
 }
 
 export interface BeautyProgress {
@@ -1189,4 +1191,143 @@ export interface ImportFaceModelInput {
   normalization: "zeroToOne" | "minusOneToOne" | "imagenet" | "raw255";
   outputCoordinate: "normalizedCrop" | "pixelCrop";
   cropMargin: number;
+}
+
+// ───────────────────────────── R11 · 模型注册与推理契约 ─────────────────────────────
+//
+// 与 Rust `ai_engine::inference::InferenceError::code()` 一一对应。
+// 新增错误码必须同时改两侧（`src-tauri/src/ai_engine/inference/error.rs` 的
+// `ERROR_CODES` 与下面的联合类型），否则前端 `switch` 会漏分支。
+export type ModelErrorCode =
+  | "E_MODEL_LICENSE"
+  | "E_MODEL_MISSING"
+  | "E_MODEL_CORRUPT"
+  | "E_MODEL_VERSION"
+  | "E_MODEL_LOAD"
+  | "E_MODEL_CONTRACT"
+  | "E_INPUT"
+  | "E_INFER"
+  | "E_TIMEOUT"
+  | "E_CANCELLED"
+  | "E_BACKEND";
+
+/** 与 Rust `ModelRuntimeState::as_str()` 一一对应。 */
+export type ModelState =
+  | "verified"
+  | "ready"
+  | "licenseBlocked"
+  | "missing"
+  | "corrupt"
+  | "versionMismatch"
+  | "loadFailed";
+
+/** 与 Rust `ModelFailure` 对应。可选字段由 Rust 侧 `skip_serializing_if` 省略。 */
+export interface ModelFailure {
+  kind: Exclude<ModelState, "verified" | "ready">;
+  modelId: string;
+  message: string;
+  detail?: string;
+  searched?: string[];
+  expected?: string;
+  actual?: string;
+}
+
+/** 与 Rust `LicenseState`（face_intelligence::capability）对应。 */
+export type ModelLicenseState =
+  | "verifiedCommercial"
+  | "verifiedPersonal"
+  | "systemFramework"
+  | "researchOnly"
+  | "userUnverified"
+  | "prohibited"
+  | "incompatible"
+  | "removed";
+
+/** 三态判定：许可字段的取值。 */
+export type LicenseVerdict = "allowed" | "notAllowed" | "unverified";
+
+export interface ModelLicenseEvidence {
+  kind: "officialPage" | "bundledLicenseFile" | "weightCard";
+  url: string;
+  /** 原文摘句，便于法务复核。 */
+  quote: string;
+  accessedAt: string;
+}
+
+/** 许可四字段**独立**：不得把 trainingData 合并进 commercialUse。 */
+export interface ModelLicenseView {
+  state: ModelLicenseState;
+  spdx: string | null;
+  weights: LicenseVerdict;
+  commercialUse: LicenseVerdict;
+  redistribution: LicenseVerdict;
+  trainingData: LicenseVerdict;
+  /** 未核实的字段名，例如 ["trainingData"]。 */
+  unverifiedFields: string[];
+  evidence: ModelLicenseEvidence[];
+  note: string;
+}
+
+/** 结构化张量契约（不是自由字符串）。 */
+export interface TensorSpecView {
+  dtype: "f32";
+  layout: "nchw";
+  shape: number[];
+  valueRange: "zeroOne" | "minusOneToOne" | "raw255" | "imagenet";
+  channelOrder: "bgr" | "rgb";
+}
+
+export interface ModelOutputHeadView {
+  name: string;
+  shape: number[];
+  /** 该 head 的语义说明（可选展示）。 */
+  semantic?: string;
+}
+
+export interface ModelEntryView {
+  id: string;
+  displayName: string;
+  version: string;
+  task: "faceDetect" | "faceLandmark" | "skinParse" | "faceParse" | "subjectSegment" | "bodyPose";
+  origin: "builtin" | "userImported";
+  /** 是否属于正式注册清单。用户自备模型恒为 false，不参与默认美肤/默认精修。 */
+  official: boolean;
+  format: "onnx";
+  file: string;
+  sizeBytes: number;
+  sizeOnDiskBytes: number;
+  sha256: string;
+  input: TensorSpecView;
+  outputs: ModelOutputHeadView[];
+  license: ModelLicenseView;
+  state: ModelState;
+  loaded: boolean;
+  path: string | null;
+  failure: ModelFailure | null;
+  /** 全部发现（含被 failure 掩盖的），用于运维诊断。 */
+  findings: ModelFailure[];
+  checkedAtUnix: number;
+}
+
+export interface RegistrySnapshot {
+  schemaVersion: number;
+  generatedAtUnix: number;
+  models: ModelEntryView[];
+  summary: {
+    total: number;
+    official: number;
+    ready: number;
+    verified: number;
+    blocked: number;
+    userImported: number;
+  };
+}
+
+export interface ModelRuntimeStatus {
+  modelId: string;
+  state: ModelState;
+  loaded: boolean;
+  elapsedMs: number;
+  failure: ModelFailure | null;
+  backend: "cpu-tract" | "gpu-reserved";
 }

@@ -48,10 +48,15 @@ fn emit(app: &AppHandle, stage: &'static str, progress: f32) {
 }
 
 /// 查询皮肤分割能力：当前没有可商用权重时明确返回几何方案，不冒充模型。
+///
+/// R11：改为 `async` + `spawn_blocking`。返回结构 `SkinModelStatus` **不变**
+/// （`BeautyPanel.tsx` 与 `types.ts` 零改动），只是不再占用 Tauri 主线程。
 #[tauri::command]
-pub fn skin_model_status(app: AppHandle) -> SkinModelStatus {
+pub async fn skin_model_status(app: AppHandle) -> SkinModelStatus {
     let resource = app.path().resource_dir().ok();
-    model::status(resource.as_deref())
+    tauri::async_runtime::spawn_blocking(move || model::status(resource.as_deref()))
+        .await
+        .unwrap_or_else(|_| model::status(None))
 }
 
 #[derive(Serialize)]
@@ -154,6 +159,9 @@ pub struct MaskPreview {
     pub skin_ratio: f32,
     pub faces: usize,
     pub method: String,
+    /// R11 新增（可选字段，前端可不读）：被跳过的脸与原因，不再静默吞掉错误。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// 生成“显示蒙版”叠加图。使用与渲染完全相同的蒙版构建函数。
@@ -175,10 +183,15 @@ pub async fn preview_skin_mask(
         let params = params.clamped();
         let mut masks = Vec::new();
         let mut total = 0.0f32;
+        let mut warnings = Vec::new();
         for face in faces.faces.iter() {
-            if let Ok(mask) = build_skin_mask(&cached.preview, face, &params.manual_mask) {
-                total += mask.alpha.len() as f32;
-                masks.push(mask);
+            // R11：不再静默吞掉失败脸，把原因带给前端。
+            match build_skin_mask(&cached.preview, face, &params.manual_mask) {
+                Ok(mask) => {
+                    total += mask.alpha.len() as f32;
+                    masks.push(mask);
+                }
+                Err(error) => warnings.push(format!("人脸 {}：{error}", face.id)),
             }
         }
         let active: usize = masks.iter().map(|mask| mask.active_pixels()).sum();
@@ -196,6 +209,7 @@ pub async fn preview_skin_mask(
             skin_ratio,
             faces: masks.len(),
             method: model::status(None).method,
+            warnings,
         })
     })
     .await
