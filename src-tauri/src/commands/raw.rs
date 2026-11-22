@@ -98,9 +98,15 @@ pub async fn raw_develop(path: String, params: RawDevelopParams) -> AppResult<Ra
 /// 能力声明：哪些格式支持、哪些明确不支持。
 #[tauri::command]
 pub fn raw_capabilities() -> serde_json::Value {
+    let enabled = cfg!(feature = "raw");
     serde_json::json!({
-        "decoder": "LibRaw 0.21.1",
-        "supported": ["CR3", "CR2", "ARW", "RW2", "ORF", "DNG", "NEF", "RAF", "TIF(RAW)"],
+        "enabled": enabled,
+        "decoder": if enabled { "LibRaw 0.21.1" } else { "未包含（LibRaw 许可审核中）" },
+        "supported": if enabled {
+            vec!["CR3", "CR2", "ARW", "RW2", "ORF", "DNG", "NEF", "RAF", "TIF(RAW)"]
+        } else {
+            Vec::<&str>::new()
+        },
         "unsupported": ["有损 DNG（JPEG-XL 压缩）", "Nikon HE/HE*（0.21.1 限制）"],
         "demosaic": ["Bayer Malvar-He-Cutler 5×5", "Bayer 双线性", "X-Trans 基础插值（质量有限）"],
         "notes": [

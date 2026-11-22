@@ -7,6 +7,7 @@
 //!
 //! 所有 `unsafe` 集中在 `libraw_ffi.rs`，对外只暴露安全 API。
 
+#[cfg(feature = "raw")]
 mod libraw_ffi;
 mod linear;
 mod metadata;
@@ -77,6 +78,7 @@ pub struct PreviewImage {
 }
 
 /// 读取元数据，不解包像素（速度快，适合图库列表）。
+#[cfg(feature = "raw")]
 pub fn raw_info(path: &Path) -> RawResult<RawInfo> {
     let file = libraw_ffi::open_metadata(path)?;
     let size = std::fs::metadata(path)?.len();
@@ -147,6 +149,7 @@ pub fn raw_info(path: &Path) -> RawResult<RawInfo> {
 }
 
 /// 解包并返回有效区域内的线性 CFA 像素（已减黑电平，未做 gamma）。
+#[cfg(feature = "raw")]
 pub fn decode_linear(path: &Path) -> RawResult<LinearImage> {
     let file = libraw_ffi::read_pixels(path)?;
     linear::from_raw(&file)
@@ -162,6 +165,7 @@ pub fn develop_from_path(path: &Path, params: &RawDevelopParams) -> RawResult<De
 }
 
 /// 读取内嵌预览原始字节；文件没有可用预览时返回 `Ok(None)`。
+#[cfg(feature = "raw")]
 pub fn embedded_preview(path: &Path) -> RawResult<Option<PreviewImage>> {
     let preview = libraw_ffi::read_preview(path)?;
     Ok(preview.map(|preview| PreviewImage {
@@ -170,4 +174,26 @@ pub fn embedded_preview(path: &Path) -> RawResult<Option<PreviewImage>> {
         height: preview.height,
         data: preview.data,
     }))
+}
+
+// —— 不含 LibRaw 的发行构建（1.0 Beta）——
+// 代码保留同一组 API，调用方无需分叉；所有 RAW 入口统一返回明确错误，
+// 保证二进制里没有 LibRaw 符号，也不存在“假装成功”的路径。
+
+#[cfg(not(feature = "raw"))]
+const RAW_DISABLED: &str = "此构建未包含 RAW 解码（LibRaw 许可审核中）";
+
+#[cfg(not(feature = "raw"))]
+pub fn raw_info(_path: &Path) -> RawResult<RawInfo> {
+    Err(RawError::Unsupported(RAW_DISABLED.into()))
+}
+
+#[cfg(not(feature = "raw"))]
+pub fn decode_linear(_path: &Path) -> RawResult<LinearImage> {
+    Err(RawError::Unsupported(RAW_DISABLED.into()))
+}
+
+#[cfg(not(feature = "raw"))]
+pub fn embedded_preview(_path: &Path) -> RawResult<Option<PreviewImage>> {
+    Err(RawError::Unsupported(RAW_DISABLED.into()))
 }

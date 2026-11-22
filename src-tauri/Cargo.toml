@@ -13,6 +13,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+default = ["raw"]
+# 正式包默认包含 RAW；1.0 Beta 用 `--no-default-features` 构建不含 LibRaw 的发行包，
+# 直到 LibRaw 的 LGPL 分发审核完成。
+raw = ["dep:libraw_rs_vendor"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
@@ -24,7 +30,7 @@ rayon = "1.10"
 thiserror = "2"
 tract-onnx = "0.23"
 sha2 = "0.10"
-libraw_rs_vendor = "1.0.0"
+libraw_rs_vendor = { version = "1.0.0", optional = true }
 lcms2 = { version = "6.3.0", features = ["static"] }
 wgpu = "30.0.2"
 pollster = "0.4"

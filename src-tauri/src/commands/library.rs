@@ -50,6 +50,16 @@ fn load_paths(cache: &ImageCache, paths: Vec<PathBuf>) -> AppResult<Vec<ImageIte
     let mut last_error = None;
 
     for path in paths {
+        // RAW 在 Beta 中明确关闭：给出可定位的原因，而不是静默跳过。
+        if decoder::is_raw_extension(&path) {
+            last_error = Some(AppError::Unsupported(format!(
+                "{} 是 RAW 文件，当前 Beta 未开放 RAW 导入（LibRaw 许可审核中）",
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "文件".into())
+            )));
+            continue;
+        }
         if !decoder::is_supported_extension(&path) {
             continue;
         }
@@ -133,5 +143,19 @@ mod tests {
         assert!(empty.is_err(), "空选择应返回错误而不是空列表");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn raw_import_reports_libraw_pending_instead_of_silent_skip() {
+        let cache = ImageCache::new(1);
+        let message = match load_paths(&cache, vec![PathBuf::from("/photos/sample.cr2")]) {
+            Ok(items) => panic!("RAW 不得静默成功，实际导入 {} 张", items.len()),
+            Err(error) => error.to_string(),
+        };
+        assert!(message.contains("RAW"), "必须点明是 RAW：{message}");
+        assert!(
+            message.contains("LibRaw"),
+            "必须点明 LibRaw 许可审核：{message}"
+        );
     }
 }

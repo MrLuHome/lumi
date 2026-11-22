@@ -3,8 +3,11 @@
 //! 输出保持单通道 CFA（不去马赛克、不做 gamma、不乘白平衡增益），
 //! 白平衡系数只随结构体一起传下去，保证后续阶段可以自行决定如何使用。
 
+#[cfg(feature = "raw")]
 use super::libraw_ffi::RawFile;
+#[cfg(feature = "raw")]
 use super::metadata::{cfa_color, cfa_pattern};
+#[cfg(feature = "raw")]
 use super::{RawError, RawResult};
 
 /// 线性（已减黑电平）单通道 CFA 图像。
@@ -34,6 +37,7 @@ impl LinearImage {
     }
 }
 
+#[cfg(feature = "raw")]
 pub(crate) fn from_raw(file: &RawFile) -> RawResult<LinearImage> {
     let pixels = file
         .pixels
@@ -130,6 +134,7 @@ pub(crate) fn from_raw(file: &RawFile) -> RawResult<LinearImage> {
     })
 }
 
+#[cfg(feature = "raw")]
 /// 每通道基准黑电平：优先使用 `cblack[0..4]`，全 0 时回退到 `black`。
 fn base_black(file: &RawFile) -> [u32; 4] {
     let cblack = &file.cblack;
@@ -141,6 +146,7 @@ fn base_black(file: &RawFile) -> [u32; 4] {
     }
 }
 
+#[cfg(feature = "raw")]
 /// 逐像素黑电平模式（`cblack[4] × cblack[5]`），坐标基于有效区域。
 fn pattern_black(file: &RawFile) -> Option<(usize, usize, Vec<u32>)> {
     let cblack = &file.cblack;
@@ -159,6 +165,7 @@ fn pattern_black(file: &RawFile) -> Option<(usize, usize, Vec<u32>)> {
     Some((rows, cols, cblack[start..start + rows * cols].to_vec()))
 }
 
+#[cfg(feature = "raw")]
 /// `cam_mul` 全 0 时回退到 `pre_mul`（LibRaw 对未提供 as-shot 系数的机型的约定）。
 pub(crate) fn effective_white_balance(file: &RawFile) -> [f32; 4] {
     if file.cam_mul.iter().all(|value| *value == 0.0) {

@@ -47,6 +47,7 @@ pub struct WhiteBalance {
 ///
 /// LibRaw 的 2×2 排列以有效区域左上角（`top_margin, left_margin`）为基准，
 /// 因此这里按该偏移取出 4 个色号，避免裁边后相位错位。
+#[cfg(feature = "raw")]
 pub(crate) fn cfa_pattern(
     filters: u32,
     colors: u32,
@@ -112,6 +113,7 @@ pub(crate) fn cfa_pattern(
 
 /// 单个 CFA 色号（0..=3），用于黑电平与通道判定。
 /// X-Trans 的 6×6 排列表不做通道细分，按绿通道处理。
+#[cfg(feature = "raw")]
 pub(crate) fn cfa_color(filters: u32, row: u32, col: u32) -> u32 {
     if filters == 0 || filters == 9 {
         return 1;

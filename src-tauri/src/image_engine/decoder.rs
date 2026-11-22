@@ -49,6 +49,13 @@ pub fn is_supported_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 是否是 RAW 扩展名（当前 Beta 明确拒绝，不静默跳过）。
+pub fn is_raw_extension(path: &Path) -> bool {
+    extension_of(path)
+        .map(|ext| RAW_EXTENSIONS.contains(&ext.as_str()))
+        .unwrap_or(false)
+}
+
 pub fn format_label(path: &Path) -> String {
     match extension_of(path).as_deref() {
         Some("jpg") | Some("jpeg") => "JPEG".to_string(),
