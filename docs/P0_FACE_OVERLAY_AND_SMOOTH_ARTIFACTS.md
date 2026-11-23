@@ -90,7 +90,7 @@
 
 ## Git
 
-见回填 SHA。工作区状态见提交时 `git status`。
+1771aa30ca14cbed982dd9b28a073e48a15f0690工作区状态见提交时 `git status`。
 
 ---
 
