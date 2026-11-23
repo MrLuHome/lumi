@@ -311,7 +311,8 @@ fn finalize_mask(
 }
 
 /// 五官保护图：眼睛/眉毛/鼻孔/嘴唇接近 0，其余为 1。
-fn feature_protection(
+/// 皮肤精修引擎（TextureProtection）与蒙版 finalize 共用。
+pub fn feature_protection(
     geometry: &FaceGeometry,
     width: u32,
     height: u32,
