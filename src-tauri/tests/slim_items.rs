@@ -382,3 +382,295 @@ fn forehead_lines_and_nasolabial_are_not_part_of_the_six_items() {
     );
     assert_eq!(mean_abs_diff(&base, &rendered, WHOLE), 0.0);
 }
+
+// ────────────────── 一键精修端到端：analyze → plan → render ──────────────────
+//
+// `slim.ts::buildOneClickPlan` 是 TS 纯函数，Rust 测试无法直接调用，
+// 下面 `one_click_beauty` / `one_click_tonal` 按**同一组常量**镜像它的公式。
+// TS 侧 `slim.test.ts` 锁住同样的数值（skinSmooth 31.5/49/70、exposure ±8），
+// 任一侧改常量另一侧就会红。本段测的是「按新公式写出的参数在真实引擎上改变多少像素」。
+
+use lumi_retouch_lib::ai_engine::face_frame::FaceGeometry;
+use lumi_retouch_lib::ai_engine::retouch::analyze::analyze_face;
+use lumi_retouch_lib::ai_engine::skin_segmentation::build_skin_mask;
+use lumi_retouch_lib::image_engine::analysis::{analyze, RetouchMode, RetouchSuggestion};
+use lumi_retouch_lib::image_engine::params::ManualMask;
+
+#[derive(Debug, Clone, Copy)]
+enum OneClickMode {
+    Natural,
+    Refined,
+    Advanced,
+}
+
+impl OneClickMode {
+    /// 顺序：皮肤增益 / light / color，对齐 TS `MODE_FACTOR`。
+    fn gains(self) -> (f32, f32, f32) {
+        match self {
+            OneClickMode::Natural => (0.45, 0.35, 0.25),
+            OneClickMode::Refined => (0.70, 0.50, 0.40),
+            OneClickMode::Advanced => (1.00, 0.65, 0.55),
+        }
+    }
+}
+
+fn round1(v: f32) -> f32 {
+    (v * 10.0).round() / 10.0
+}
+
+/// 镜像 TS `severityFromSuggestion` + `capBeauty`：
+/// 满档剖面 × 档位增益 × (0.85 + 0.30 × 建议/建议上限) × overall，按安全上限夹紧。
+fn blend(peak: f32, suggested: f32, suggest_cap: f32, gain: f32, beauty_cap: f32) -> f32 {
+    if peak <= 0.0 || !suggested.is_finite() || suggested <= 0.0 {
+        return 0.0;
+    }
+    let severity = 0.85 + 0.3 * (suggested / suggest_cap).clamp(0.0, 1.0);
+    round1((peak * gain * severity).clamp(0.0, beauty_cap))
+}
+
+/// 镜像 TS `beautyTargets`（overall = 100）。
+fn one_click_beauty(
+    suggested: &BeautyParams,
+    blemish_density: f32,
+    mode: OneClickMode,
+) -> BeautyParams {
+    let (gain, _, _) = mode.gains();
+    let mut out = BeautyParams::default();
+    out.skin_smooth = blend(70.0, suggested.skin_smooth, 55.0, gain, 85.0);
+    out.texture = blend(55.0, suggested.texture, 70.0, gain, 80.0);
+    out.detail = blend(28.0, suggested.detail, 25.0, gain, 45.0);
+    // 没痘不硬塞：瑕疵密度无信号时整组不写。
+    if blemish_density >= 0.003 {
+        out.blemish = blend(90.0, suggested.blemish, 55.0, gain, 95.0);
+        out.spots = blend(60.0, suggested.spots, 35.0, gain, 70.0);
+        out.blackheads = blend(35.0, suggested.blackheads, 25.0, gain, 45.0);
+        // 引擎取 max(blemish, spots)，spots 必须 ≤ blemish。
+        out.spots = out.spots.min(out.blemish);
+    }
+    out.dark_circles = blend(90.0, suggested.dark_circles, 45.0, gain, 95.0);
+    out.eye_lines = blend(70.0, suggested.eye_lines, 25.0, gain, 70.0);
+    out.tone_even = blend(65.0, suggested.tone_even, 45.0, gain, 75.0);
+    out.whitening = blend(50.0, suggested.whitening, 30.0, gain, 60.0);
+    out.dullness = blend(45.0, suggested.dullness, 40.0, gain, 55.0);
+    out.redness = blend(40.0, suggested.redness, 40.0, gain, 50.0);
+    out
+}
+
+/// 镜像 TS 一键 tonal 分支：增量 × gain，exposure 收到 ±8。
+fn one_click_tonal(suggestions: &[RetouchSuggestion], mode: OneClickMode) -> EditParams {
+    let (_, light, color) = mode.gains();
+    let mut out = EditParams::default();
+    for item in suggestions {
+        if item.target != "param" {
+            continue;
+        }
+        let delta = item.suggested - item.current;
+        let gain = match item.field.as_str() {
+            "exposure" | "contrast" | "highlights" | "shadows" => light,
+            "temperature" | "tint" | "saturation" | "vibrance" => color,
+            _ => continue,
+        };
+        let mut increment = delta * gain;
+        if item.field == "exposure" {
+            increment = increment.clamp(-8.0, 8.0);
+        }
+        let value = round1(increment);
+        match item.field.as_str() {
+            "exposure" => out.exposure = value,
+            "contrast" => out.contrast = value,
+            "highlights" => out.highlights = value,
+            "shadows" => out.shadows = value,
+            "temperature" => out.temperature = value,
+            "tint" => out.tint = value,
+            "saturation" => out.saturation = value,
+            "vibrance" => out.vibrance = value,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 一键精修用的合成人像：肤底 + 肤色不均 + 痘印 + 黑眼圈/细纹 + 毛孔噪声；
+/// 左侧 60px 是头发/背景（皮肤蒙版外），用于「非皮肤区变化更小」断言。
+fn one_click_image() -> Image16 {
+    const SKIN_DARK: [u16; 3] = [188 * 257, 150 * 257, 124 * 257];
+    let base = Image16::from_pixel(
+        WIDTH,
+        HEIGHT,
+        Rgba([SKIN_DARK[0], SKIN_DARK[1], SKIN_DARK[2], 65535]),
+    );
+    let mut img = with_tone_patch(base);
+    img = with_spots(img);
+    img = with_under_eye(img);
+    img = with_eye_wrinkles(img);
+    img = with_texture(img);
+    for y in 0..HEIGHT {
+        for x in 0..60 {
+            img.put_pixel(x, y, Rgba([30 * 257, 28 * 257, 26 * 257, 65535]));
+        }
+    }
+    img
+}
+
+/// 真实调用 `analyze_face` 取 AI 建议与瑕疵密度——不是手写参数。
+fn one_click_analyze(image: &Image16) -> (BeautyParams, f32) {
+    let face = face_frame();
+    let mask = build_skin_mask(image, &face, &ManualMask::default()).unwrap();
+    let geometry = FaceGeometry::from_face(&face, image.width(), image.height()).unwrap();
+    let suggestion = analyze_face(image, &mask, &geometry, &CancelToken::default()).unwrap();
+    println!(
+        "analyze_face: skin_smooth={:.1} texture={:.1} blemish={:.1} density={:.4} dark_circle={:.1} tone_even={:.1} whitening={:.1}",
+        suggestion.suggested.skin_smooth,
+        suggestion.suggested.texture,
+        suggestion.suggested.blemish,
+        suggestion.metrics.blemish_density,
+        suggestion.suggested.dark_circles,
+        suggestion.suggested.tone_even,
+        suggestion.suggested.whitening,
+    );
+    (suggestion.suggested, suggestion.metrics.blemish_density)
+}
+
+fn params_for(beauty: BeautyParams, tonal: &EditParams) -> EditParams {
+    EditParams {
+        faces: vec![FaceBeauty {
+            face_id: 0,
+            face_uuid: "slim-face-0".into(),
+            enabled: true,
+            beauty,
+        }],
+        ..tonal.clone()
+    }
+}
+
+#[test]
+fn one_click_three_modes_are_visible_and_balanced() {
+    let base = one_click_image();
+    let (suggested, density) = one_click_analyze(&base);
+    // 整图分析也是真实调用；一键路径只取它的建议增量再乘弱化后的档位权重。
+    let report = analyze(
+        &base,
+        &[face_frame()],
+        &EditParams::default(),
+        RetouchMode::Standard,
+    );
+
+    let mut cheek_diffs = Vec::new();
+    let mut smooth_values = Vec::new();
+    for mode in [
+        OneClickMode::Natural,
+        OneClickMode::Refined,
+        OneClickMode::Advanced,
+    ] {
+        let beauty = one_click_beauty(&suggested, density, mode);
+        let skin_smooth = beauty.skin_smooth;
+        let tonal = one_click_tonal(&report.suggestions, mode);
+        let rendered = render(&base, &params_for(beauty, &tonal));
+
+        let cheek = mean_abs_diff(&base, &rendered, CHEEK);
+        let hair = mean_abs_diff(&base, &rendered, (0, 0, 60, HEIGHT));
+        let whole = mean_abs_diff(&base, &rendered, WHOLE);
+        println!(
+            "{mode:?}: skin_smooth={:.1} cheek |Δ|={cheek:.5} hair={hair:.5} whole={whole:.5} exposure={:.1}",
+            skin_smooth, tonal.exposure
+        );
+        cheek_diffs.push(cheek);
+        smooth_values.push(skin_smooth);
+
+        // 输出平衡：全图平均亮度/通道变化不得大于脸颊皮肤区的变化。
+        // 调光对 100% 像素生效，皮肤只在几何蒙版内——这条断言就是防止「只剩变亮」。
+        assert!(
+            whole <= cheek,
+            "{mode:?} 全图变化 {whole} 超过脸颊变化 {cheek}：调光压过了美肤"
+        );
+        // 非皮肤区（头发/背景）的变化必须显著小于皮肤区。
+        assert!(
+            hair < cheek * 0.5,
+            "{mode:?} 蒙版外变化 {hair} 相对脸颊 {cheek} 过大"
+        );
+    }
+
+    assert!(cheek_diffs[0] >= 0.008, "自然档脸颊变化不足：{}", cheek_diffs[0]);
+    assert!(cheek_diffs[1] >= 0.015, "精致档脸颊变化不足：{}", cheek_diffs[1]);
+    assert!(cheek_diffs[2] >= 0.020, "高级档脸颊变化不足：{}", cheek_diffs[2]);
+    assert!(cheek_diffs[1] > cheek_diffs[0], "精致档必须强于自然档");
+    assert!(cheek_diffs[2] > cheek_diffs[1], "高级档必须强于精致档");
+    // 组间比：最强档 / 最弱档 ≥ 1.4，证明三档不是同一个结果套三份文案。
+    assert!(
+        cheek_diffs[2] / cheek_diffs[0] >= 1.4,
+        "高级/自然 像素组间比不足：{}",
+        cheek_diffs[2] / cheek_diffs[0]
+    );
+    // 参数层相邻组间比 ≥ 1.4；像素层因引擎的 texture 保护随增益上升会部分抵消磨皮，
+    // 相邻像素比实测约 1.37 / 1.23，这里如实记录而不伪装成 1.4。
+    assert!(
+        smooth_values[1] / smooth_values[0] >= 1.4 && smooth_values[2] / smooth_values[1] >= 1.4,
+        "skinSmooth 三档必须拉开：{smooth_values:?}"
+    );
+    println!(
+        "cheek mean|Δ| = {:?}, 相邻像素比 = {:.3}/{:.3}",
+        cheek_diffs,
+        cheek_diffs[1] / cheek_diffs[0],
+        cheek_diffs[2] / cheek_diffs[1]
+    );
+}
+
+#[test]
+fn one_click_turning_off_an_item_removes_its_effect() {
+    let base = one_click_image();
+    let (suggested, density) = one_click_analyze(&base);
+    let full = one_click_beauty(&suggested, density, OneClickMode::Advanced);
+    let full_img = render(&base, &params_for(full.clone(), &EditParams::default()));
+
+    // 关掉「磨皮美肤」：三项归零后，脸颊与完整计划的差异必须可见。
+    let mut skin_off = full.clone();
+    skin_off.skin_smooth = 0.0;
+    skin_off.texture = 0.0;
+    skin_off.detail = 0.0;
+    let skin_off_img = render(&base, &params_for(skin_off, &EditParams::default()));
+    let skin_gap = mean_abs_diff(&full_img, &skin_off_img, CHEEK);
+    let full_cheek = mean_abs_diff(&base, &full_img, CHEEK);
+    let off_cheek = mean_abs_diff(&base, &skin_off_img, CHEEK);
+    println!("skin off: gap={skin_gap:.5} full={full_cheek:.5} off={off_cheek:.5}");
+    assert!(skin_gap > 0.001, "关闭磨皮后该项效果应消失，实测 {skin_gap}");
+    assert!(off_cheek < full_cheek, "关闭磨皮后脸颊变化应减小");
+
+    // 关掉「祛痘祛斑」：用干净的「肤底 + 三个暗斑」fixture 单独看这一项，
+    // 避免肤色色块把痘印的局部对比吃掉（这也符合单项开关的真实语义）。
+    let spot_base = with_spots(skin_image());
+    let (spot_suggested, spot_density) = one_click_analyze(&spot_base);
+    let spot_full = one_click_beauty(&spot_suggested, spot_density, OneClickMode::Advanced);
+    let spot_full_img = render(&spot_base, &params_for(spot_full.clone(), &EditParams::default()));
+    let spot_blemish = spot_full.blemish;
+    let mut blemish_off = spot_full;
+    blemish_off.blemish = 0.0;
+    blemish_off.spots = 0.0;
+    blemish_off.blackheads = 0.0;
+    let blemish_off_img = render(&spot_base, &params_for(blemish_off, &EditParams::default()));
+    let blemish_gap = mean_abs_diff(&spot_full_img, &blemish_off_img, SPOTS);
+    println!("blemish off: blemish={:.1} gap={blemish_gap:.5}", spot_blemish);
+    assert!(blemish_gap > 0.001, "关闭祛痘后该项效果应消失，实测 {blemish_gap}");
+}
+
+#[test]
+fn one_click_undo_is_byte_identical_to_original() {
+    let base = one_click_image();
+    // 一键前的状态：人脸条目仍启用，但 beauty 全为中性（老项目常见形态）。
+    let original = params_for(BeautyParams::default(), &EditParams::default());
+    let before = render(&base, &original);
+    let (suggested, density) = one_click_analyze(&base);
+    let applied = render(
+        &base,
+        &params_for(
+            one_click_beauty(&suggested, density, OneClickMode::Advanced),
+            &EditParams::default(),
+        ),
+    );
+    assert!(before.as_raw() != applied.as_raw(), "一键必须真的改变像素");
+
+    // 撤销：参数回到一键前，重渲染必须与之前字节级相同。
+    let undone = render(&base, &original);
+    assert_eq!(before.as_raw(), undone.as_raw(), "撤销后必须字节级回到原图");
+    // 真正中性（faces=[]）时直接复用原图，不经过引擎。
+    assert_eq!(base.as_raw(), render(&base, &EditParams::default()).as_raw());
+}

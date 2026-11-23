@@ -26,6 +26,7 @@ import type {
   BeautyParams,
   EditParams,
   FaceDetectionResult,
+  FaceSuggestion,
 } from "../types";
 import {
   BEAUTY_KEYS,
@@ -211,12 +212,45 @@ export const ADJUST_CAP: Partial<Record<AdjustmentKey, [number, number]>> = {
   vibrance: [-25, 25],
 };
 
-/** 三档系数（§5.2）：含义是「把 AI 建议做到百分之多少」。高级档也不超调。 */
+/**
+ * 三档系数。两种含义，不要混用：
+ * - ①②③④（皮肤类）：作用在**满档剖面 ITEM_PROFILE**上的增益，0.45 / 0.70 / 1.0。
+ *   skinSmooth 因此落在 31.5 / 49 / 70，而不是 AI 保守建议 × 0.55 后的 13.8。
+ * - ⑤⑥（调光类）：作用在 AI 整图建议增量上的权重，刻意比皮肤弱得多——
+ *   exposure 对**全图每个像素**生效，皮肤算法只在几何蒙版内，调光权重稍大就会
+ *   把「修皮肤」观感压成「稍微变亮」。
+ */
 export const MODE_FACTOR: Record<OneClickMode, Record<SixItemId, number>> = {
-  natural: { skin: 0.55, blemish: 0.5, eyes: 0.4, tone: 0.55, light: 0.6, color: 0.5 },
-  refined: { skin: 0.8, blemish: 0.75, eyes: 0.7, tone: 0.8, light: 0.85, color: 0.75 },
-  advanced: { skin: 1, blemish: 1, eyes: 1, tone: 1, light: 1, color: 1 },
+  natural: { skin: 0.45, blemish: 0.45, eyes: 0.45, tone: 0.45, light: 0.35, color: 0.25 },
+  refined: { skin: 0.7, blemish: 0.7, eyes: 0.7, tone: 0.7, light: 0.5, color: 0.4 },
+  advanced: { skin: 1, blemish: 1, eyes: 1, tone: 1, light: 0.65, color: 0.55 },
 };
+
+/**
+ * AI 建议值的上限（对齐 `analyze.rs` 各字段的 clamp 上界）。
+ * 只用来折算「问题严重度」，不参与渲染，也不改引擎里的任何数值。
+ * 来自 analyze.rs:216-232：skin_smooth≤55 / texture≤70 / blemish≤55 / spots≤35 …
+ */
+const AI_SUGGEST_CAP: Partial<Record<BeautyKey, number>> = {
+  skinSmooth: 55,
+  texture: 70,
+  detail: 25,
+  blemish: 55,
+  spots: 35,
+  blackheads: 25,
+  toneEven: 45,
+  whitening: 30,
+  redness: 40,
+  dullness: 40,
+  darkCircles: 45,
+  eyeLines: 25,
+};
+
+/** 瑕疵密度低于此值视为「没痘」，一键不硬塞祛痘组（对齐 §6.2 的门控）。 */
+const BLEMISH_DENSITY_GATE = 0.003;
+
+/** 一键路径 exposure 相对锚点的最大位移（手动路径不受此限制）。 */
+const ONE_CLICK_EXPOSURE_LIMIT = 8;
 
 /** 覆盖判定的容差（§5.5）。 */
 export const WRITE_TOLERANCE = 0.5;
@@ -628,6 +662,55 @@ function currentFaceBeauty(
 }
 
 /**
+ * 问题分析调节：把「AI 建议 / 该字段建议上限」温和映射到 0.85~1.15。
+ * 问题越重（建议越接近上限）写得越多，但下限仍是 0.85，
+ * 不会像旧逻辑那样把力度压回手动满档的 20%。
+ */
+function severityFromSuggestion(key: BeautyKey, suggested: number): number {
+  const cap = AI_SUGGEST_CAP[key] ?? 50;
+  return 0.85 + 0.3 * clamp(suggested / cap, 0, 1);
+}
+
+/**
+ * 一键精修的皮肤类字段目标值 = 满档剖面 × 档位增益 × 问题分析调节 × 整体强度。
+ *
+ * 旧逻辑 `suggestion.suggested[key] × factor × overall` 双重保守：
+ * AI 建议本身只到上限的一半（skinSmooth 典型 22~33 / 上限 55），再乘档位，
+ * 一键自然档只剩 13.8，是手动满档 70 的 20%，肉眼几乎不可见。
+ *
+ * 这里改为以 ITEM_PROFILE（引擎认可的满档、已有像素断言）为基准，
+ * AI 建议只负责「温和地调节力度」，不再直接决定写入值。
+ */
+function beautyTargets(
+  suggestion: FaceSuggestion,
+  factor: Record<SixItemId, number>,
+  overall: number,
+): Partial<Record<BeautyKey, number>> {
+  const targets: Partial<Record<BeautyKey, number>> = {};
+  const { suggested, metrics } = suggestion;
+  // 没痘不硬塞：瑕疵密度没有信号时整组不写（避免对干净皮肤做无谓修复）。
+  const hasBlemish = metrics.blemishDensity >= BLEMISH_DENSITY_GATE;
+  for (const id of SIX_ITEM_ORDER) {
+    const profile = ITEM_PROFILE[id];
+    if (ITEM_META[id].adjustment.length > 0) continue; // ⑤⑥ 走 tonal 分支
+    if (id === "blemish" && !hasBlemish) continue;
+    for (const key of ITEM_META[id].beauty) {
+      const peak = profile[key];
+      const value = suggested[key];
+      if (peak === undefined || peak <= 0) continue;
+      if (!Number.isFinite(value) || value <= 0) continue;
+      const target = capBeauty(key, peak * factor[id] * severityFromSuggestion(key, value) * overall);
+      if (target > 0) targets[key] = target;
+    }
+  }
+  // 硬约束：blemish.rs 取 max(blemish, spots)，spots 必须 ≤ blemish，否则滑块不单调。
+  if (targets.spots !== undefined && targets.blemish !== undefined) {
+    targets.spots = Math.min(targets.spots, targets.blemish);
+  }
+  return targets;
+}
+
+/**
  * 把「双分析结果 + 档位 + 整体强度 + 上次写入记录」合成为一次写入计划（§5.4 / §5.5）。
  *
  * 逐字段规则：
@@ -650,12 +733,12 @@ export function buildOneClickPlan(input: OneClickInput): OneClickPlan {
     const faceUuid = findFaceUuid(current, suggestion.faceId, input.detection ?? null);
     const before = currentFaceBeauty(current, suggestion.faceId, faceUuid);
     const wrote = applied?.faceWrites[faceUuid || `id:${suggestion.faceId}`] ?? null;
+    const targets = beautyTargets(suggestion, factor, overall);
     const beauty: Partial<Record<BeautyKey, number>> = {};
     for (const id of SIX_ITEM_ORDER) {
       for (const key of ITEM_META[id].beauty) {
-        const peak = suggestion.suggested[key];
-        if (!Number.isFinite(peak) || peak <= 0) continue;
-        const target = capBeauty(key, peak * factor[id] * overall);
+        const target = targets[key];
+        if (target === undefined) continue;
         const existing = before[key] ?? 0;
         const owned = wrote?.[key];
         if (owned !== undefined && Math.abs(existing - owned) > WRITE_TOLERANCE) {
@@ -684,7 +767,17 @@ export function buildOneClickPlan(input: OneClickInput): OneClickPlan {
       const delta = deltas[key];
       if (delta === undefined) continue;
       const anchor = anchorSource[key] ?? current[key];
-      const target = capAdjust(key, anchor + delta * factor[id] * overall);
+      let increment = delta * factor[id] * overall;
+      // 全图曝光对 100% 像素生效，皮肤算法只在几何蒙版内。一键路径把曝光位移
+      // 收到 ±8（手动六项路径不受限），否则用户只会看见「稍微变亮」。
+      if (key === "exposure") {
+        increment = clamp(
+          increment,
+          -ONE_CLICK_EXPOSURE_LIMIT,
+          ONE_CLICK_EXPOSURE_LIMIT,
+        );
+      }
+      const target = capAdjust(key, anchor + increment);
       const existing = current[key];
       const owned = applied?.paramWrites[key];
       if (owned !== undefined && Math.abs(existing - owned) > WRITE_TOLERANCE) {
@@ -731,7 +824,12 @@ export function applyOneClickPlan(current: EditParams, plan: OneClickPlan): Edit
     );
     if (index >= 0) {
       const entry = next.faces[index]!;
-      next.faces[index] = { ...entry, beauty: { ...entry.beauty, ...write.beauty } };
+      next.faces[index] = {
+        ...entry,
+        // 老项目里 enabled=false 的条目即使写好参数也不会渲染，本次有 beauty 写入就强制启用。
+        enabled: true,
+        beauty: { ...entry.beauty, ...write.beauty },
+      };
       continue;
     }
     next.faces.push({

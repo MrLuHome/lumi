@@ -362,22 +362,76 @@ describe("一键精修计划", () => {
     detection: detection([1]),
   };
 
-  it("三档系数单调递增，且高级档不超过 1", () => {
+  it("三档系数单调递增；皮肤类高级档为满档，调光类刻意弱于皮肤", () => {
     for (const id of SIX_ITEM_ORDER) {
       expect(MODE_FACTOR.natural[id]).toBeLessThan(MODE_FACTOR.refined[id]);
       expect(MODE_FACTOR.refined[id]).toBeLessThan(MODE_FACTOR.advanced[id]);
+    }
+    for (const id of ["skin", "blemish", "eyes", "tone"] as SixItemId[]) {
       expect(MODE_FACTOR.advanced[id]).toBe(1);
     }
+    // 曝光作用于全图，权重必须显著低于局部皮肤，否则观感只剩「稍微变亮」。
+    expect(MODE_FACTOR.advanced.light).toBeLessThan(0.7);
+    expect(MODE_FACTOR.advanced.color).toBeLessThan(0.6);
   });
 
-  it("自然档写出的值是小比例，精致档更大，高级档等于建议值", () => {
+  it("皮肤类字段 = 满档剖面 × 档位增益 × 问题分析调节，三档单调递增", () => {
     const natural = buildOneClickPlan({ ...baseInput, mode: "natural" });
     const refined = buildOneClickPlan({ ...baseInput, mode: "refined" });
     const advanced = buildOneClickPlan({ ...baseInput, mode: "advanced" });
     const valueOf = (plan: typeof natural, key: "skinSmooth") => plan.faces[0]?.beauty[key] ?? 0;
-    expect(valueOf(natural, "skinSmooth")).toBeCloseTo(60 * 0.55, 1);
-    expect(valueOf(refined, "skinSmooth")).toBeCloseTo(60 * 0.8, 1);
-    expect(valueOf(advanced, "skinSmooth")).toBeCloseTo(60, 1);
+    // 建议 60 已到 skinSmooth 建议上限 55 → severity 封顶 1.15。
+    const round1 = (v: number) => Math.round(v * 10) / 10; // 写入端保留一位小数
+    expect(valueOf(natural, "skinSmooth")).toBe(round1(70 * 0.45 * 1.15));
+    expect(valueOf(refined, "skinSmooth")).toBe(round1(70 * 0.7 * 1.15));
+    expect(valueOf(advanced, "skinSmooth")).toBe(round1(70 * 1.15));
+    expect(valueOf(natural, "skinSmooth")).toBeLessThan(valueOf(refined, "skinSmooth"));
+    expect(valueOf(refined, "skinSmooth")).toBeLessThan(valueOf(advanced, "skinSmooth"));
+  });
+
+  it("典型 AI 建议下三档 skinSmooth 精确落在 31.5 / 49 / 70，不再只有手动满档的 20%", () => {
+    // 典型建议 27.5（分析器常见 22~33，上限 55）→ severity = 0.85 + 0.3×0.5 = 1.0。
+    const typical = beautyAnalysis([suggestion(1, { skinSmooth: 27.5 })]);
+    const valueOf = (mode: "natural" | "refined" | "advanced") =>
+      buildOneClickPlan({ ...baseInput, mode, beauty: typical }).faces[0]?.beauty.skinSmooth ?? 0;
+    expect(valueOf("natural")).toBeCloseTo(31.5, 1);
+    expect(valueOf("refined")).toBeCloseTo(49, 1);
+    expect(valueOf("advanced")).toBeCloseTo(70, 1);
+  });
+
+  it("一键路径 exposure 相对锚点最多移动 ±8（手动路径不受限）", () => {
+    const strong = analysisReport([paramSuggestion("exposure", 0, 100)]);
+    const plan = buildOneClickPlan({ ...baseInput, mode: "advanced", report: strong });
+    expect(plan.params.exposure).toBe(8);
+    const dark = analysisReport([paramSuggestion("exposure", 0, -100)]);
+    expect(buildOneClickPlan({ ...baseInput, mode: "advanced", report: dark }).params.exposure).toBe(-8);
+  });
+
+  it("没痘时不硬塞祛痘组（瑕疵密度无信号）", () => {
+    const clean = beautyAnalysis([
+      {
+        ...suggestion(1, { skinSmooth: 27.5, blemish: 40, spots: 30, blackheads: 20 }),
+        metrics: { ...metrics(1), blemishDensity: 0.0001 },
+      },
+    ]);
+    const plan = buildOneClickPlan({ ...baseInput, beauty: clean, mode: "advanced" });
+    for (const key of ["blemish", "spots", "blackheads"] as const) {
+      expect(plan.faces[0]?.beauty[key]).toBeUndefined();
+    }
+    // 其它皮肤项照常写入。
+    expect(plan.faces[0]?.beauty.skinSmooth).toBeGreaterThan(0);
+  });
+
+  it("写入的人脸条目即使老项目里 enabled=false，也会被强制启用", () => {
+    const legacy = {
+      ...defaultParams(),
+      faces: [
+        { faceId: 1, faceUuid: "uuid-1", enabled: false, beauty: defaultBeauty() },
+      ],
+    };
+    const plan = buildOneClickPlan({ ...baseInput, current: legacy });
+    expect(plan.faces.length).toBeGreaterThan(0);
+    expect(applyOneClickPlan(legacy, plan).faces[0]?.enabled).toBe(true);
   });
 
   it("一键计划永不写入额头细纹与法令纹（主理人裁决 Q1）", () => {
