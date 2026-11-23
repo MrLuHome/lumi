@@ -279,7 +279,7 @@ docs/assets/s1_1/{stem}/zoom_{region}_{100|200}.png
 
 ## 9. Git
 
-（提交后回填）
+76c62eece8d9f1f39b4339321bcc7d14952d3eed
 
 ---
 
