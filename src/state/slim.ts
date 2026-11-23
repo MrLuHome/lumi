@@ -2,7 +2,7 @@
  * 双入口精简版的数据层：六项映射、三档系数、一键计划与「不静默覆盖」判定。
  *
  * 这里的函数全部是**纯函数**（不读 store、不发请求、不改入参），方便单测锁定数值契约。
- * 六项 ↔ 参数映射（任务书 §4；改这里之前先读 docs/SLIMMING_AUDIT_AND_DESIGN.md）：
+ * 六项 ↔ 参数映射（任务书 §4）：
  *
  *   ① 磨皮美肤 = skinSmooth + texture + detail
  *   ② 祛痘祛斑 = blemish + spots(必须 ≤ blemish) + blackheads

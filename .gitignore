@@ -27,3 +27,9 @@ src-tauri/gen/schemas/
 
 # 真人像验收素材（隐私照片，不进版本库）
 beauty-validation/
+
+# 工作笔记 / 临时归档 / 截图产物
+.workbuddy/
+.screenshots/
+2026-11-20/
+docs/assets/
