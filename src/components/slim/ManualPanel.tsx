@@ -8,7 +8,11 @@ import {
 } from "../../state/editorStore";
 import {
   SIX_ITEM_ORDER,
+  applyBodySlim,
+  applyFaceSlim,
+  bodySlimStrength,
   directionHint,
+  faceSlimStrength,
   invertItemStrength,
   itemNeedsAnalysis,
   needsGlobalAnalysis,
@@ -16,6 +20,7 @@ import {
   type SixItemId,
 } from "../../state/slim";
 import { AdvancedSettings } from "./AdvancedSettings";
+import { ShapeItemRow } from "./ShapeItemRow";
 import { SixItemRow } from "./SixItemRow";
 import { ensureFaces, ensureGlobalReport, plainMessage } from "./analysis";
 
@@ -132,6 +137,7 @@ export function ManualPanel({ photo }: { photo: PhotoAsset | null }) {
   const applySlimItem = useEditorStore((state) => state.applySlimItem);
   const setSlimItemEnabled = useEditorStore((state) => state.setSlimItemEnabled);
   const resetSlimItem = useEditorStore((state) => state.resetSlimItem);
+  const applyExternalParams = useEditorStore((state) => state.applyExternalParams);
   const notify = useEditorStore((state) => state.notify);
 
   const [analyzing, setAnalyzing] = useState<SixItemId | null>(null);
@@ -232,7 +238,7 @@ export function ManualPanel({ photo }: { photo: PhotoAsset | null }) {
     <aside className="panel slim-panel">
       <div className="slim-head">
         <h2>手动调整</h2>
-        <p className="slim-sub">六个开关，调到你觉得自然就行</p>
+        <p className="slim-sub">八个开关，调到你觉得自然就行</p>
       </div>
 
       <ManualNotice
@@ -251,6 +257,40 @@ export function ManualPanel({ photo }: { photo: PhotoAsset | null }) {
       />
 
       <div className="six-list">
+        <ShapeItemRow
+          id="faceSlim"
+          strength={faceSlimStrength(params)}
+          disabled={!detection || noFace}
+          onToggle={(enabled) => {
+            const next = applyFaceSlim(params, enabled ? 40 : 0);
+            applyExternalParams(photo.id, next, "手动调整·瘦脸");
+          }}
+          onChange={(value) => {
+            const next = applyFaceSlim(params, value);
+            applyExternalParams(photo.id, next, "手动调整·瘦脸");
+          }}
+          onReset={() => {
+            const next = applyFaceSlim(params, 0);
+            applyExternalParams(photo.id, next, "手动调整·瘦脸");
+          }}
+        />
+        <ShapeItemRow
+          id="bodySlim"
+          strength={bodySlimStrength(params)}
+          disabled={false}
+          onToggle={(enabled) => {
+            const next = applyBodySlim(params, enabled ? 35 : 0);
+            applyExternalParams(photo.id, next, "手动调整·瘦身");
+          }}
+          onChange={(value) => {
+            const next = applyBodySlim(params, value);
+            applyExternalParams(photo.id, next, "手动调整·瘦身");
+          }}
+          onReset={() => {
+            const next = applyBodySlim(params, 0);
+            applyExternalParams(photo.id, next, "手动调整·瘦身");
+          }}
+        />
         {SIX_ITEM_ORDER.map((id) => {
           const state = inverted[id];
           const needsAnalysis = itemNeedsAnalysis(id);

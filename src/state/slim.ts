@@ -108,6 +108,129 @@ export function defaultOneClick(): OneClickState {
   };
 }
 
+// ────────────────────────────── G15 手动瘦脸 / 瘦身 ──────────────────────────────
+
+export type ShapeItemId = "faceSlim" | "bodySlim";
+
+export const SHAPE_ITEM_META: Record<
+  ShapeItemId,
+  { label: string; hint: string }
+> = {
+  faceSlim: {
+    label: "瘦脸",
+    hint: "轻微收窄脸型与下颌，五官保持不动",
+  },
+  bodySlim: {
+    label: "瘦身",
+    hint: "收腰与身体轮廓，背景不跟着弯",
+  },
+};
+
+/**
+ * 手动瘦脸强度 0..100 → FaceShape（与 G13 高置信 Advanced 同比例，强度线性）。
+ * 只写轮廓字段，length/balance 恒为 0。
+ */
+export function faceShapeFromStrength(strength: number): FaceShape {
+  const s = clamp(strength, 0, 100) / 100;
+  if (s <= 0) {
+    return {
+      slim: 0,
+      left: 0,
+      right: 0,
+      jaw: 0,
+      cheekbone: 0,
+      width: 0,
+      length: 0,
+      balance: 0,
+    };
+  }
+  return {
+    slim: Math.round(62 * s),
+    jaw: Math.round(40 * s),
+    cheekbone: Math.round(32 * s),
+    width: Math.round(36 * s),
+    left: Math.round(18 * s),
+    right: Math.round(18 * s),
+    length: 0,
+    balance: 0,
+  };
+}
+
+/** 手动瘦身强度 0..100 → BodyShape（负值=收窄，与 G13 一致）。 */
+export function bodyShapeFromStrength(strength: number): BodyShape {
+  const s = clamp(strength, 0, 100) / 100;
+  if (s <= 0) {
+    return {
+      waist: 0,
+      shoulders: 0,
+      hips: 0,
+      thighs: 0,
+      calves: 0,
+      arms: 0,
+      legs: 0,
+    };
+  }
+  return {
+    waist: Math.round(-55 * s),
+    hips: Math.round(-40 * s),
+    thighs: Math.round(-35 * s),
+    calves: Math.round(-22 * s),
+    arms: Math.round(-30 * s),
+    shoulders: Math.round(-15 * s),
+    legs: 0,
+  };
+}
+
+/** 从当前参数反解瘦脸强度（slim ≈ 62 × strength/100）。 */
+export function faceSlimStrength(params: EditParams): number {
+  const entry =
+    params.reshape.find((item) => faceReshapeIsActive(item)) ?? params.reshape[0];
+  if (!entry) return 0;
+  if (entry.face.slim <= 0) return 0;
+  return Math.round(clamp((entry.face.slim / 62) * 100, 0, 100));
+}
+
+/** 从当前参数反解瘦身强度（|waist| ≈ 55 × strength/100）。 */
+export function bodySlimStrength(params: EditParams): number {
+  const entry = params.body.find((item) => bodyAdjustIsActive(item)) ?? params.body[0];
+  if (!entry) return 0;
+  const waist = Math.abs(entry.shape.waist);
+  if (waist <= 0) return 0;
+  return Math.round(clamp((waist / 55) * 100, 0, 100));
+}
+
+/** 把瘦脸强度写回 params（非破坏：只改 reshape.face）。 */
+export function applyFaceSlim(params: EditParams, strength: number): EditParams {
+  const face = faceShapeFromStrength(strength);
+  const reshape = [...params.reshape];
+  const index = reshape.findIndex((entry) => entry.enabled || faceReshapeIsActive(entry));
+  if (index >= 0) {
+    const entry = reshape[index]!;
+    reshape[index] = { ...entry, enabled: strength > 0, face };
+  } else if (strength > 0) {
+    const entry = defaultFaceReshape(0, "");
+    entry.face = face;
+    reshape.push(entry);
+  }
+  return { ...params, reshape };
+}
+
+/** 把瘦身强度写回 params。 */
+export function applyBodySlim(params: EditParams, strength: number): EditParams {
+  const shape = bodyShapeFromStrength(strength);
+  const body = [...params.body];
+  const index = body.findIndex((entry) => entry.enabled || bodyAdjustIsActive(entry));
+  if (index >= 0) {
+    const entry = body[index]!;
+    body[index] = { ...entry, enabled: strength > 0, shape };
+  } else if (strength > 0) {
+    const entry = defaultBodyAdjust("subject-1");
+    entry.shape = shape;
+    body.push(entry);
+  }
+  return { ...params, body };
+}
+
 // ────────────────────────────── 六项元数据 ──────────────────────────────
 
 export interface SixItemMeta {

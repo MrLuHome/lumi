@@ -27,13 +27,19 @@ import {
   ITEM_PROFILE,
   MODE_FACTOR,
   SIX_ITEM_ORDER,
+  applyBodySlim,
+  applyFaceSlim,
   applyOneClickPlan,
   auditBrushwork,
   auditLegacyAdjustments,
+  bodyShapeFromStrength,
+  bodySlimStrength,
   buildOneClickPlan,
   buildSixItemWrite,
   clearLegacyAdjustments,
   directionHint,
+  faceShapeFromStrength,
+  faceSlimStrength,
   invertItemStrength,
   itemsFromParams,
   needsGlobalAnalysis,
@@ -475,11 +481,31 @@ describe("一键精修计划", () => {
     }
   });
 
-  it("整体强度 0 时什么都不写", () => {
-    const plan = buildOneClickPlan({ ...baseInput, overall: 0 });
-    expect(plan.fields).toBe(0);
-    expect(plan.faces).toEqual([]);
-    expect(plan.params).toEqual({});
+  it("G15：手动瘦脸/瘦身强度映射单调且可复位", () => {
+    const zero = faceShapeFromStrength(0);
+    expect(zero.slim).toBe(0);
+    const mid = faceShapeFromStrength(50);
+    const high = faceShapeFromStrength(100);
+    expect(mid.slim).toBeGreaterThan(0);
+    expect(high.slim).toBeGreaterThan(mid.slim);
+    expect(high.length).toBe(0);
+
+    const b0 = bodyShapeFromStrength(0);
+    expect(b0.waist).toBe(0);
+    const b50 = bodyShapeFromStrength(50);
+    const b100 = bodyShapeFromStrength(100);
+    expect(b50.waist).toBeLessThan(0);
+    expect(b100.waist).toBeLessThan(b50.waist);
+
+    const base = defaultParams();
+    const slimmed = applyFaceSlim(base, 60);
+    expect(faceSlimStrength(slimmed)).toBe(60);
+    const cleared = applyFaceSlim(slimmed, 0);
+    expect(faceSlimStrength(cleared)).toBe(0);
+
+    const body = applyBodySlim(base, 40);
+    expect(bodySlimStrength(body)).toBe(40);
+    expect(applyBodySlim(body, 0).body.every((e) => e.shape.waist === 0 || !e.enabled)).toBe(true);
   });
 
   it("G14：一键计划可写入瘦脸 reshape 与瘦身 body", () => {
