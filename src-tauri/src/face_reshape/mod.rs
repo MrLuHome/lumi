@@ -11,6 +11,7 @@
 
 pub mod blending;
 pub mod boundary;
+pub mod contour;
 pub mod deformation;
 pub mod face_mesh;
 pub mod identity;

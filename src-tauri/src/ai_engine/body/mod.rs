@@ -4,6 +4,7 @@
 //! 没有 AI 姿态点时，形状参数作用于每一行的轮廓带，手动推拉作用于局部，
 //! 所有结果都经过位移上限与折叠检查。
 
+pub mod analysis;
 pub mod constraints;
 pub mod deformation;
 pub mod landmarks;
