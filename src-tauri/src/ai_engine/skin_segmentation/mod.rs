@@ -289,10 +289,15 @@ fn finalize_mask(
         }
     }
 
-    // 低置信度区域直接归零，避免弱蒙版产生“糊一层”的假效果。
+    // 软清除弱响应：≤0.05 → 0；0.05..0.16 平滑抬升；更高保持原值。
+    // 不能用 smoothstep 把 0.4 的高光置信度抬到 1（会破坏「有上限」语义），
+    // 也不能硬切 <0.12→0（会在羽化后留下多边形硬边）。
     for value in alpha.iter_mut() {
-        if *value < 0.12 {
+        let v = *value;
+        if v <= 0.05 {
             *value = 0.0;
+        } else if v < 0.16 {
+            *value = v * smoothstep(0.05, 0.16, v);
         }
     }
 
@@ -503,6 +508,17 @@ pub fn apply_ownership(masks: &mut [SkinMask], centers: &[(f32, f32)]) {
             }
             if nearest != index {
                 mask.alpha[position] = 0.0;
+            }
+        }
+        // 归属切割是硬 Voronoi 边：切割后再软清除+羽化，避免直线接缝。
+        let feather = ((mask.width.max(mask.height) as f32 * 0.012).round() as u32).clamp(2, 12);
+        box_blur_alpha(&mut mask.alpha, mask.width, mask.height, feather);
+        for value in mask.alpha.iter_mut() {
+            let v = *value;
+            if v <= 0.05 {
+                *value = 0.0;
+            } else if v < 0.16 {
+                *value = v * smoothstep(0.05, 0.16, v);
             }
         }
     }

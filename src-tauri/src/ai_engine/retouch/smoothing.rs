@@ -27,31 +27,41 @@ pub fn smooth_skin(
     let radius = ((width as f32 * 0.012).round() as u32).clamp(2, 18);
     let texture = (beauty.texture / 100.0).clamp(0.0, 1.0);
     let detail_recovery = (beauty.detail / 100.0).clamp(0.0, 1.0);
-    // 引导滤波的正则项：纹理保护越高，eps 越大，越把皮肤细节当作“边缘”保留。
+    // 引导滤波的正则项：纹理保护越高，eps 越越大，越把皮肤细节当作“边缘”保留。
     // 0.0015 已明显低于普通皮肤纹理方差，可产生可见平滑；纹理保护拉满时接近恒等。
     let eps = 0.0015 + 0.045 * (1.0 - texture);
 
-    let planes = RgbPlanes::from_image(image, mask);
-    let pixel_count = (width * height) as usize;
+    // 带 halo 读取：box/guided 窗口在 ROI 边界不再截断，消除横向条纹与矩形接缝。
+    let pad = (radius * 2 + 4).min(48);
+    let padded = RgbPlanes::from_image_padded(image, mask, pad);
+    let filter_w = padded.width;
+    let filter_h = padded.height;
     let mut bases: [Vec<f32>; 3] = [
-        vec![0f32; pixel_count],
-        vec![0f32; pixel_count],
-        vec![0f32; pixel_count],
+        vec![0f32; (filter_w * filter_h) as usize],
+        vec![0f32; (filter_w * filter_h) as usize],
+        vec![0f32; (filter_w * filter_h) as usize],
     ];
     for channel in 0..3 {
         cancel.check()?;
-        let small = guided_filter(&planes.planes[channel], width, height, radius, eps);
+        let small = guided_filter(&padded.planes[channel], filter_w, filter_h, radius, eps);
         let large = guided_filter(
-            &planes.planes[channel],
-            width,
-            height,
+            &padded.planes[channel],
+            filter_w,
+            filter_h,
             (radius as f32 * 2.2).round() as u32,
             eps * 1.8,
         );
-        for index in 0..pixel_count {
+        for index in 0..bases[channel].len() {
             bases[channel][index] = (small[index] + large[index]) * 0.5;
         }
     }
+    // 裁回 mask 尺寸后再做像素级融合。
+    let planes = padded.crop_center(width, height);
+    let bases = [
+        crop_plane(&bases[0], filter_w, filter_h, width, height, pad),
+        crop_plane(&bases[1], filter_w, filter_h, width, height, pad),
+        crop_plane(&bases[2], filter_w, filter_h, width, height, pad),
+    ];
     // 纹理保护越高，回注比例越大；细节恢复在此之上额外补高频。
     // 即使纹理保护拉满也保留 5% 的低频基底差异，避免完全平掉皮肤结构。
     let keep = (0.08 + 0.45 * texture + 0.22 * detail_recovery).clamp(0.08, 0.95);
@@ -86,6 +96,30 @@ pub fn smooth_skin(
         }
     }
     Ok(())
+}
+
+/// 从含 halo 的平面裁出中心 `out_w × out_h`。
+fn crop_plane(
+    src: &[f32],
+    filter_w: u32,
+    filter_h: u32,
+    out_w: u32,
+    out_h: u32,
+    pad: u32,
+) -> Vec<f32> {
+    let mut out = vec![0f32; (out_w * out_h) as usize];
+    let pad = pad.min((filter_w.saturating_sub(out_w)) / 2);
+    let pad_y = pad.min((filter_h.saturating_sub(out_h)) / 2);
+    for y in 0..out_h {
+        for x in 0..out_w {
+            let sx = x + pad;
+            let sy = y + pad_y;
+            if sx < filter_w && sy < filter_h {
+                out[(y * out_w + x) as usize] = src[(sy * filter_w + sx) as usize];
+            }
+        }
+    }
+    out
 }
 
 /// 小半径局部平滑，用于眼下细纹、额头细纹、法令纹。只平滑亮度，保留色度。

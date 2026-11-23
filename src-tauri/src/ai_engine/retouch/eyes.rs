@@ -91,20 +91,22 @@ pub fn treat_eye_area(
 
     // 细纹：一次小半径平滑，权重按三种细纹的最大值合成。
     if beauty.eye_lines > 0.0 || beauty.forehead_lines > 0.0 || beauty.nasolabial > 0.0 {
+        // 先用 ROI 内真实亮度填满 plane（禁止 0 填充）：0 会被 guided/box 均值
+        // 拉进邻域，产生横向条纹与异常比值。
         let mut plane = vec![0f32; count];
         let mut weights = vec![0f32; count];
         for y in 0..height {
             for x in 0..width {
                 let index = (y * width + x) as usize;
-                if mask.alpha[index] <= 0.05 {
-                    continue;
-                }
                 let image_x = mask.x0 as u32 + x;
                 let image_y = mask.y0 as u32 + y;
                 if image_x >= image.width() || image_y >= image.height() {
                     continue;
                 }
                 plane[index] = luma(image.get_pixel(image_x, image_y).0);
+                if mask.alpha[index] <= 0.05 {
+                    continue;
+                }
                 if plane[index] < 0.10 || plane[index] > 0.95 {
                     // 睫毛、高光不做平滑。
                     continue;

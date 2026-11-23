@@ -19,3 +19,20 @@ export const LEGACY_MENU_ITEMS: { workspace: "batch" | "raw"; label: string }[] 
   { workspace: "batch", label: "批量处理…" },
   { workspace: "raw", label: "RAW 显影…" },
 ];
+
+/**
+ * 开发者调试图层（人脸框 / 关键点 / ID 文字 / 网格 / 身体锚点）。
+ * 正常预览与导出默认关闭；仅 DEV 或显式 `VITE_DEBUG_OVERLAYS=1` 时可开启。
+ * 导出走 Rust 管线，本开关只影响 DOM/SVG 叠加层。
+ */
+export const DEBUG_OVERLAYS_ENABLED: boolean = (() => {
+  try {
+    if (import.meta.env.VITE_DEBUG_OVERLAYS === "1") return true;
+    if (typeof localStorage !== "undefined" && localStorage.getItem("lumi.debugOverlays") === "1") {
+      return true;
+    }
+  } catch {
+    // 忽略隐私模式等存储错误
+  }
+  return Boolean(import.meta.env.DEV);
+})();

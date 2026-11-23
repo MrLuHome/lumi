@@ -32,15 +32,13 @@ pub fn even_skin_tone(
     let mut blue_yellow = vec![0f32; count];
     let mut active = vec![false; count];
 
+    // ROI 内全部像素写入 LAB（禁止 0 占位）：box_mean 对 0 的平均会产生条纹偏色。
     for y in 0..height {
         if y % 64 == 0 {
             cancel.check()?;
         }
         for x in 0..width {
             let index = (y * width + x) as usize;
-            if mask.alpha[index] <= 0.02 {
-                continue;
-            }
             let image_x = mask.x0 as u32 + x;
             let image_y = mask.y0 as u32 + y;
             if image_x >= image.width() || image_y >= image.height() {
@@ -55,7 +53,7 @@ pub fn even_skin_tone(
             lightness[index] = lab[0];
             green_red[index] = lab[1];
             blue_yellow[index] = lab[2];
-            active[index] = true;
+            active[index] = mask.alpha[index] > 0.02;
         }
     }
 

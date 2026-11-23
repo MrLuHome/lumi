@@ -4,6 +4,7 @@ import type { MeshPreview, PhotoAsset } from "../types";
 import { previewSubjectMask, reshapeMesh } from "../lib/backend";
 import { selectActiveBodyAdjust, selectActiveFaces, selectActiveParams, useEditorStore } from "../state/editorStore";
 import { isDesktopRuntime } from "../lib/platform";
+import { DEBUG_OVERLAYS_ENABLED } from "./slim/featureFlags";
 
 interface CanvasStageProps {
   photo: PhotoAsset | null;
@@ -525,7 +526,7 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
               />
             )}
 
-            {showBodyAnchors && bodyAdjust && bodyAdjust.anchors.length > 0 && (
+            {DEBUG_OVERLAYS_ENABLED && showBodyAnchors && bodyAdjust && bodyAdjust.anchors.length > 0 && (
               <svg
                 className="body-anchor-overlay"
                 viewBox={`0 0 ${photo.width} ${photo.height}`}
@@ -564,7 +565,7 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
               </svg>
             )}
 
-            {showFaceOverlay && faceResult && faceResult.faces.length > 0 && (
+            {DEBUG_OVERLAYS_ENABLED && showFaceOverlay && faceResult && faceResult.faces.length > 0 && (
               <svg
                 className="face-overlay"
                 viewBox={`0 0 ${photo.width} ${photo.height}`}
@@ -606,7 +607,7 @@ export function CanvasStage({ photo, effectUrl, onImport }: CanvasStageProps) {
               </svg>
             )}
 
-            {showMesh && mesh && mesh.points.length > 0 && (
+            {DEBUG_OVERLAYS_ENABLED && showMesh && mesh && mesh.points.length > 0 && (
               <svg
                 className="mesh-overlay"
                 viewBox={`0 0 ${photo.width} ${photo.height}`}

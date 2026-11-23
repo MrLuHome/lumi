@@ -112,18 +112,21 @@ fn repair_pass(
 ) -> AppResult<BlemishReport> {
     let width = mask.width;
     let height = mask.height;
+    // 全 ROI 真实亮度（非 0 占位），避免 box_mean 被 0 拉偏产生条纹/假候选。
     let mut luma_plane = vec![0f32; (width * height) as usize];
     let mut skin_pixels = 0usize;
     for y in 0..height {
         for x in 0..width {
             let index = (y * width + x) as usize;
+            let image_x = mask.x0 as u32 + x;
+            let image_y = mask.y0 as u32 + y;
+            if image_x >= image.width() || image_y >= image.height() {
+                continue;
+            }
+            let value = luma(image.get_pixel(image_x, image_y).0);
+            luma_plane[index] = value;
             if mask.alpha[index] > 0.3 {
                 skin_pixels += 1;
-                let image_x = mask.x0 as u32 + x;
-                let image_y = mask.y0 as u32 + y;
-                if image_x < image.width() && image_y < image.height() {
-                    luma_plane[index] = luma(image.get_pixel(image_x, image_y).0);
-                }
             }
         }
     }
@@ -292,7 +295,58 @@ fn repair_pass(
             continue;
         }
         let fill = [sum[0] / count, sum[1] / count, sum[2] / count];
-        let base_strength = 0.85 * (amount / 100.0).clamp(0.35, 1.0);
+        // 降低平色填充强度，并用到边界的软衰减替代 1 像素硬边，
+        // 避免连通域被填成「多边形色块」。
+        let base_strength = 0.55 * (amount / 100.0).clamp(0.30, 1.0);
+
+        // 到组件外缘的近似距离（多次扫描膨胀），用于软过渡。
+        let mut edge_dist = vec![0u8; luma_plane.len()];
+        let mut queue: VecDeque<u32> = VecDeque::new();
+        for pixel in component.pixels.iter() {
+            let index = *pixel as usize;
+            let x = (index as u32 % width) as i32;
+            let y = (index as u32 / width) as i32;
+            let mut is_edge = false;
+            for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                let nx = x + dx;
+                let ny = y + dy;
+                if nx < 0
+                    || ny < 0
+                    || nx >= width as i32
+                    || ny >= height as i32
+                    || !member[(ny as u32 * width + nx as u32) as usize]
+                {
+                    is_edge = true;
+                    break;
+                }
+            }
+            if is_edge {
+                edge_dist[index] = 1;
+                queue.push_back(*pixel);
+            }
+        }
+        let max_ring = ring.min(10) as u8;
+        while let Some(pixel) = queue.pop_front() {
+            let index = pixel as usize;
+            let d = edge_dist[index];
+            if d >= max_ring {
+                continue;
+            }
+            let x = (index as u32 % width) as i32;
+            let y = (index as u32 / width) as i32;
+            for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                let nx = x + dx;
+                let ny = y + dy;
+                if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 {
+                    continue;
+                }
+                let ni = (ny as u32 * width + nx as u32) as usize;
+                if member[ni] && edge_dist[ni] == 0 {
+                    edge_dist[ni] = d + 1;
+                    queue.push_back(ni as u32);
+                }
+            }
+        }
 
         for pixel in component.pixels.iter() {
             let index = *pixel as usize;
@@ -303,21 +357,14 @@ fn repair_pass(
             if image_x >= image.width() || image_y >= image.height() {
                 continue;
             }
-            // 边缘像素降低混合强度，避免硬边。
-            let mut edge = false;
-            for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
-                let nx = x + dx;
-                let ny = y + dy;
-                if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 {
-                    edge = true;
-                    continue;
-                }
-                let neighbor = (ny as u32 * width + nx as u32) as usize;
-                if !member[neighbor] {
-                    edge = true;
-                }
+            // 距外缘越近混合越弱；内部充分填充，边缘平滑过渡。
+            let d = edge_dist[index] as f32;
+            let t = (d / (max_ring as f32).max(1.0)).clamp(0.0, 1.0);
+            let soft = t * t * (3.0 - 2.0 * t);
+            let mix = base_strength * soft;
+            if mix <= 0.01 {
+                continue;
             }
-            let mix = base_strength * if edge { 0.65 } else { 1.0 };
             let pixel = image.get_pixel_mut(image_x, image_y);
             for channel in 0..3 {
                 let source = pixel.0[channel] as f32;

@@ -74,6 +74,9 @@ pub fn guided_filter(plane: &[f32], width: u32, height: u32, radius: u32, eps: f
 }
 
 /// 分块裁剪：返回 bbox 内的 RGB 平面（0..1）。
+///
+/// `pad`：在 bbox 外扩采样的边距（像素）。滤波在含 halo 的平面上做，
+/// 再裁回 bbox，消除 ROI 边界处 box/guided 窗口截断造成的横向条纹与矩形接缝。
 pub struct RgbPlanes {
     pub width: u32,
     pub height: u32,
@@ -87,21 +90,35 @@ impl RgbPlanes {
         image: &crate::image_engine::buffer::Image16,
         mask: &super::SkinMask,
     ) -> Self {
-        let width = mask.width;
-        let height = mask.height;
+        Self::from_image_padded(image, mask, 0)
+    }
+
+    /// 从图像读取 mask 区域并外扩 `pad` 像素；返回的平面尺寸为
+    /// `(width+2*pad) × (height+2*pad)`，`x0/y0` 为外扩后左上角。
+    /// 滤波后需用 [`RgbPlanes::crop_center`] 裁回 mask 尺寸。
+    pub fn from_image_padded(
+        image: &crate::image_engine::buffer::Image16,
+        mask: &super::SkinMask,
+        pad: u32,
+    ) -> Self {
+        let pad = pad.min(64);
+        let width = mask.width + pad * 2;
+        let height = mask.height + pad * 2;
+        let x0 = mask.x0 - pad as i32;
+        let y0 = mask.y0 - pad as i32;
         let mut planes = [
             vec![0f32; (width * height) as usize],
             vec![0f32; (width * height) as usize],
             vec![0f32; (width * height) as usize],
         ];
+        let img_w = image.width() as i32;
+        let img_h = image.height() as i32;
         for local_y in 0..height {
             for local_x in 0..width {
-                let x = mask.x0 as u32 + local_x;
-                let y = mask.y0 as u32 + local_y;
-                if x >= image.width() || y >= image.height() {
-                    continue;
-                }
-                let pixel = image.get_pixel(x, y).0;
+                // 边缘复制，禁止用 0 填充（0 会把 box_mean 拉向黑，产生条纹）。
+                let x = (x0 + local_x as i32).clamp(0, img_w - 1);
+                let y = (y0 + local_y as i32).clamp(0, img_h - 1);
+                let pixel = image.get_pixel(x as u32, y as u32).0;
                 let index = (local_y * width + local_x) as usize;
                 for channel in 0..3 {
                     planes[channel][index] = pixel[channel] as f32 / CHANNEL_MAX;
@@ -111,8 +128,35 @@ impl RgbPlanes {
         Self {
             width,
             height,
-            x0: mask.x0,
-            y0: mask.y0,
+            x0,
+            y0,
+            planes,
+        }
+    }
+
+    /// 外扩平面裁回中心 `out_w × out_h`（通常为 mask 尺寸）。
+    pub fn crop_center(&self, out_w: u32, out_h: u32) -> Self {
+        let pad_x = (self.width.saturating_sub(out_w)) / 2;
+        let pad_y = (self.height.saturating_sub(out_h)) / 2;
+        let mut planes = [
+            vec![0f32; (out_w * out_h) as usize],
+            vec![0f32; (out_w * out_h) as usize],
+            vec![0f32; (out_w * out_h) as usize],
+        ];
+        for y in 0..out_h {
+            for x in 0..out_w {
+                let src = ((y + pad_y) * self.width + (x + pad_x)) as usize;
+                let dst = (y * out_w + x) as usize;
+                for channel in 0..3 {
+                    planes[channel][dst] = self.planes[channel][src];
+                }
+            }
+        }
+        Self {
+            width: out_w,
+            height: out_h,
+            x0: self.x0 + pad_x as i32,
+            y0: self.y0 + pad_y as i32,
             planes,
         }
     }

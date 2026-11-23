@@ -4,6 +4,7 @@ import type { PhotoAsset } from "../types";
 import { detectFaces, faceModelStatus } from "../lib/backend";
 import { isDesktopRuntime } from "../lib/platform";
 import { selectActiveFaces, useEditorStore } from "../state/editorStore";
+import { DEBUG_OVERLAYS_ENABLED } from "./slim/featureFlags";
 
 interface FacePanelProps {
   photo: PhotoAsset | null;
@@ -112,10 +113,16 @@ export function FacePanel({ photo }: FacePanelProps) {
         <button
           type="button"
           className={`icon-toggle ${showOverlay ? "is-on" : ""}`}
-          title={showOverlay ? "隐藏检测框与关键点" : "显示检测框与关键点"}
+          title={
+            DEBUG_OVERLAYS_ENABLED
+              ? showOverlay
+                ? "隐藏检测框与关键点"
+                : "显示检测框与关键点"
+              : "调试预览（需开发者开关）"
+          }
           aria-label={showOverlay ? "隐藏检测框与关键点" : "显示检测框与关键点"}
           onClick={() => setShowOverlay(!showOverlay)}
-          disabled={!result}
+          disabled={!result || !DEBUG_OVERLAYS_ENABLED}
         >
           {showOverlay ? <Eye size={14} /> : <EyeOff size={14} />}
         </button>
