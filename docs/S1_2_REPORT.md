@@ -174,7 +174,7 @@ docs/S1_2_REPORT.md                                 本报告
 
 ## 7. Git
 
-（提交后回填）
+1d346f135a1dda06a760b1d7143fb6901ba712eb
 
 ---
 
