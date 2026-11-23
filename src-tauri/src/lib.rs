@@ -64,6 +64,14 @@ pub fn run() {
             app.manage(std::sync::Arc::new(ai_engine::model_registry::Registry::new(
                 Some(models_root),
             )));
+            // 皮肤语义分割权重的打包资源目录：只在命令层取 `resource_dir()`，
+            // 推理层保持零 Tauri 依赖。首张人脸推理时才真正加载（后台线程）。
+            if let Ok(resource) = app.path().resource_dir() {
+                ai_engine::skin_segmentation::onnx::configure_base_dirs(vec![
+                    resource.join("resources"),
+                    resource,
+                ]);
+            }
             // 关闭窗口前检查未保存修改：确认后才真正退出。
             let guard = app
                 .state::<commands::project::UnsavedGuard>()

@@ -317,7 +317,7 @@ mod tests {
         let entry = snapshot.find(builtin::YUNET.id).unwrap();
         assert_eq!(entry.state, "missing");
         assert_eq!(entry.size_on_disk_bytes, 0);
-        assert_eq!(snapshot.summary.blocked, 1);
+        assert_eq!(snapshot.summary.blocked, builtin::ALL.len());
     }
 
     /// 快照**不计算哈希**，用"可判别构造"证明，而不是靠断言"值等于登记值"

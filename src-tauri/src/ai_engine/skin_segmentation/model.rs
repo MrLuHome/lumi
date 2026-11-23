@@ -54,14 +54,57 @@ pub struct SkinModelStatus {
 /// 查询皮肤解析能力。
 ///
 /// R11 起**转发** `ai_engine::model_registry`：登记表的权威来源只有一处。
-/// 当前皮肤登记表（`model_registry::builtin::SKIN_MODELS`）为空 ——
-/// 没有通过许可审查的权重 —— 因此仍然回退到几何蒙版，
-/// 理由文案保持不变（前端 `BeautyPanel.tsx` 会直接展示这段文字）。
+/// 面板挂载时会调用本函数，因此这里**只做浅检查**（许可 → 存在 → 体积/头），
+/// 绝不算 SHA256；SHA256 与契约只在真正加载模型时于后台线程校验（历史风险 R1）。
+/// 浅检查通过但推理层记录过失败时，也如实回退并说明原因。
 pub fn status(resource_dir: Option<&Path>) -> SkinModelStatus {
+    status_from_specs(
+        resource_dir,
+        crate::ai_engine::model_registry::builtin::SKIN_MODELS,
+    )
+}
+
+/// 与 [`status`] 相同的判定，但允许注入登记表，便于失败注入测试。
+fn status_from_specs(
+    resource_dir: Option<&Path>,
+    models: &[&crate::ai_engine::model_registry::spec::ModelSpec],
+) -> SkinModelStatus {
+    use crate::ai_engine::model_registry::state::{ModelFailure, ModelHealth};
+    use crate::ai_engine::model_registry::{license, locate, verify};
+
     let base_dirs = skin_base_dirs(resource_dir);
-    for spec in crate::ai_engine::model_registry::builtin::SKIN_MODELS {
-        let health = crate::ai_engine::model_registry::verify::check(spec, &base_dirs, false);
+    for spec in models {
+        let located = locate::locate(&base_dirs, spec.dir, spec.file_name);
+        let health = match &located {
+            Some(path) => verify::check_shallow(spec, path),
+            None => {
+                let mut health = ModelHealth::new();
+                // 许可是第一顺位：即使文件缺失，也要先暴露许可问题。
+                if let Err(failure) = license::gate(spec.origin, &spec.license, spec.id) {
+                    health.push(failure);
+                }
+                health.push(ModelFailure::Missing {
+                    model_id: spec.id.to_string(),
+                    searched: locate::describe(&locate::candidates(
+                        &base_dirs, spec.dir, spec.file_name,
+                    )),
+                });
+                health
+            }
+        };
         if health.blocking.is_none() {
+            // 浅检查通过不代表推理可用：若加载/推理曾失败，如实回退并披露原因。
+            if let Some(failure) = crate::ai_engine::skin_segmentation::onnx::last_failure() {
+                return fallback(format!(
+                    "皮肤解析权重加载失败：{failure}；已回退到几何蒙版，不会用未授权或不可用的权重冒充 AI 分割。"
+                ));
+            }
+            let unverified = spec.license.unverified_fields();
+            let reason = if unverified.contains(&"trainingData") {
+                "已加载 Selfie Multiclass 皮肤解析（训练数据许可未披露，待法务复核）".into()
+            } else {
+                "已加载通过许可审查的皮肤分割权重".into()
+            };
             return SkinModelStatus {
                 available: true,
                 method: format!("onnx:{}", spec.id),
@@ -71,18 +114,32 @@ pub fn status(resource_dir: Option<&Path>) -> SkinModelStatus {
                 commercial_use: true,
                 sha256: spec.sha256.into(),
                 input: spec.input.format_human(),
-                outputs: spec
-                    .output_names()
-                    .join("/"),
+                outputs: spec.output_names().join("/"),
                 path: health
                     .resolved_path
                     .map(|path| path.to_string_lossy().into_owned()),
-                reason: "已加载通过许可审查的皮肤分割权重".into(),
-                registered_count: crate::ai_engine::model_registry::builtin::SKIN_MODELS.len(),
+                reason,
+                registered_count: models.len(),
             };
         }
+        let detail = health
+            .blocking
+            .as_ref()
+            .map(|failure| {
+                failure
+                    .detail()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| failure.message())
+            })
+            .unwrap_or_default();
+        return fallback(format!(
+            "皮肤解析权重未通过准入检查（{detail}）；已回退到几何蒙版（关键点 + 肤色似然），未使用 AI 分割。"
+        ));
     }
+    fallback("未登记可商用皮肤解析权重；已回退到几何蒙版（关键点 + 肤色似然），不会用未授权权重冒充 AI 分割。".into())
+}
 
+fn fallback(reason: String) -> SkinModelStatus {
     SkinModelStatus {
         available: false,
         method: "landmark-geometry".into(),
@@ -94,7 +151,7 @@ pub fn status(resource_dir: Option<&Path>) -> SkinModelStatus {
         input: "5 关键点 + 图像像素".into(),
         outputs: "额头/双颊/鼻部/下巴/颈部皮肤 alpha".into(),
         path: None,
-        reason: "未登记可商用皮肤解析权重；BiSeNet/CelebAMask-HQ 系受非商用数据集限制，InsightFace 多数模型仅限研究。已回退到几何蒙版，不会用未授权权重冒充 AI 分割。".into(),
+        reason,
         registered_count: crate::ai_engine::model_registry::builtin::SKIN_MODELS.len(),
     }
 }
@@ -207,9 +264,53 @@ mod tests {
 
     #[test]
     fn status_falls_back_to_geometry_without_weights() {
-        let status = status(None);
+        // 注入空登记表：没有权重时不得声称 AI 分割。
+        let status = status_from_specs(None, &[]);
         assert!(!status.available);
         assert_eq!(status.method, "landmark-geometry");
         assert!(status.reason.contains("未登记可商用"));
+    }
+
+    #[test]
+    fn status_reports_registered_model_and_training_data_gap() {
+        let status = status(None);
+        assert!(status.available, "随包权重已登记且浅检查应通过");
+        assert_eq!(
+            status.method,
+            "onnx:skin-parse-mediapipe-selfie-multiclass-256"
+        );
+        assert_eq!(status.license, "Apache-2.0");
+        assert!(
+            status.reason.contains("训练数据许可未披露"),
+            "训练数据 Unverified 必须在状态里如实披露：{}",
+            status.reason
+        );
+        assert_eq!(status.registered_count, 1);
+    }
+
+    #[test]
+    fn status_falls_back_when_license_is_not_cleared() {
+        use crate::ai_engine::model_registry::license::{LicenseRecord, Verdict3};
+        use crate::ai_engine::model_registry::spec::ModelSpec;
+        let bad = ModelSpec {
+            license: LicenseRecord {
+                weights: Verdict3::NotAllowed,
+                ..crate::ai_engine::model_registry::builtin::SELFIE_SKIN.license
+            },
+            ..crate::ai_engine::model_registry::builtin::SELFIE_SKIN.clone()
+        };
+        let status = status_from_specs(None, &[&bad]);
+        assert!(!status.available);
+        assert_eq!(status.method, "landmark-geometry");
+        assert!(
+            status.reason.contains("许可") || status.reason.contains("不允许"),
+            "{}",
+            status.reason
+        );
+        assert!(
+            status.reason.contains("几何蒙版"),
+            "回退路径必须诚实说明用的是几何方案：{}",
+            status.reason
+        );
     }
 }

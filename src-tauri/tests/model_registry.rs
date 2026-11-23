@@ -118,11 +118,15 @@ fn missing_weight_reports_e_missing_and_degrades_to_geometry() {
     assert!(!failure.searched().unwrap().is_empty(), "必须列出搜索过的路径");
     assert_eq!(InferenceError::from(failure).code(), "E_MODEL_MISSING");
 
-    // 降级：皮肤解析在没有可商用权重时回退几何蒙版，文案不得变化。
+    // 皮肤权重已登记（§2.2）：此处只断言随包权重状态可用且如实披露训练数据缺口；
+    // 权重缺失/许可未过的几何回退由 `skin_segmentation::model` 的单测注入覆盖。
     let status = lumi_retouch_lib::ai_engine::skin_segmentation::model::status(None);
-    assert!(!status.available);
-    assert_eq!(status.method, "landmark-geometry");
-    assert!(status.reason.contains("未登记可商用"), "文案不得改：{}", status.reason);
+    assert!(status.available);
+    assert_eq!(
+        status.method,
+        "onnx:skin-parse-mediapipe-selfie-multiclass-256"
+    );
+    assert!(status.reason.contains("训练数据许可未披露"));
 }
 
 #[test]
@@ -312,9 +316,11 @@ fn registry_snapshot_is_frontend_ready() {
     assert_eq!(value["schemaVersion"], 1);
     assert!(value["generatedAtUnix"].as_u64().unwrap() > 0);
     let models = value["models"].as_array().unwrap();
-    assert_eq!(models.len(), 1);
-
-    let model = &models[0];
+    assert_eq!(models.len(), 2, "YuNet + Selfie Multiclass 均应在注册快照中");
+    let model = models
+        .iter()
+        .find(|entry| entry["id"] == builtin::YUNET.id)
+        .expect("YuNet 快照缺失");
     for field in [
         "id",
         "displayName",

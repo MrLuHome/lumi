@@ -1,13 +1,15 @@
 //! 皮肤区域蒙版。
 //!
-//! 本轮没有可确认商用许可的皮肤解析权重（详见 `model.rs` 与 ROUND3_AUDIT），
-//! 因此实际生效的是可解释、可测试的几何方案：
-//! 5 个关键点建立脸部坐标系 → 额头/双颊/鼻部/下巴/颈部候选区 →
-//! 挖除眼睛、眉毛、鼻孔、嘴唇 → YCbCr 肤色似然降权 → 羽化。
+//! 几何方案（可解释、可测试）：5 个关键点建立脸部坐标系 → 额头/双颊/鼻部/下巴/颈部
+//! 候选区 → 挖除眼睛、眉毛、鼻孔、嘴唇 → YCbCr 肤色似然降权 → 羽化。
 //!
-//! 该蒙版不是模型推理结果，报告中标注为 `landmark-geometry`，不冒充 AI 分割。
+//! 已登记 MediaPipe Selfie Multiclass 皮肤解析权重后，`build_skin_mask` 优先走
+//! `onnx` 分支（语义分割 + 几何安全网融合）；加载/推理失败一律回退几何蒙版，
+//! 并把原因写入 `SkinModelStatus.reason`，不冒充 AI 分割、不静默吞掉错误。
+//! 两条路径共用 `finalize_mask`（手绘、橡皮、invert、阈值），行为保持一致。
 
 pub mod model;
+pub mod onnx;
 
 use image::Rgba;
 
@@ -64,25 +66,55 @@ impl SkinMask {
 }
 
 /// 生成单张人脸的皮肤蒙版。`manual` 会把画笔/橡皮擦叠加到自动蒙版上。
+///
+/// 调用链保持不变；几何 or 模型的分派封装在本模块内部。加载/推理失败一律
+/// 回退几何蒙版，绝不把异常抛给调用点（分析/渲染链不中断）。
 pub fn build_skin_mask(
     image: &Image16,
     face: &FaceFrame,
     manual: &ManualMask,
 ) -> AppResult<SkinMask> {
     let geometry = FaceGeometry::from_face(face, image.width(), image.height())?;
+    if let Some(plan) = onnx::load() {
+        match onnx::infer(&plan, image, &geometry, manual) {
+            Ok(mask) => return Ok(mask),
+            Err(error) => {
+                // 原因已由 onnx 写入 LAST_FAILURE（status 会显示），这里只回退。
+                eprintln!("[skin-segmentation] 模型分支失败，回退几何蒙版：{error}");
+            }
+        }
+    }
     Ok(build_mask_from_geometry(image, &geometry, manual))
 }
 
+/// 几何路径：与模型路径共用同一包围盒，保证手绘/橡皮坐标一致。
 fn build_mask_from_geometry(
     image: &Image16,
     geometry: &FaceGeometry,
     manual: &ManualMask,
 ) -> SkinMask {
-    let image_width = image.width().max(1);
-    let image_height = image.height().max(1);
-    let d = geometry.eye_distance;
+    let (x0, y0, width, height) = face_bbox(geometry, image.width(), image.height());
+    let alpha = geometry_alpha(image, geometry, x0, y0, width, height);
+    finalize_mask(
+        alpha,
+        geometry,
+        manual,
+        x0,
+        y0,
+        width,
+        height,
+        image.width(),
+        image.height(),
+    )
+}
 
-    // 人脸包围盒：覆盖额头到颈部，并额外留出画笔范围。
+/// 人脸包围盒：覆盖额头到颈部，并额外留出画笔范围。
+fn face_bbox(
+    geometry: &FaceGeometry,
+    image_width: u32,
+    image_height: u32,
+) -> (i32, i32, u32, u32) {
+    let d = geometry.eye_distance;
     let corners = [
         geometry.from_local(-0.98, -1.62),
         geometry.from_local(0.98, -1.62),
@@ -102,21 +134,25 @@ fn build_mask_from_geometry(
     let margin = d * 0.35;
     let x0 = (min_x - margin).floor().max(0.0) as i32;
     let y0 = (min_y - margin).floor().max(0.0) as i32;
-    let x1 = (max_x + margin).ceil().min(image_width as f32) as i32;
-    let y1 = (max_y + margin).ceil().min(image_height as f32) as i32;
-    let width = (x1 - x0).max(1) as u32;
-    let height = (y1 - y0).max(1) as u32;
+    let x1 = (max_x + margin)
+        .ceil()
+        .min(image_width.max(1) as f32) as i32;
+    let y1 = (max_y + margin)
+        .ceil()
+        .min(image_height.max(1) as f32) as i32;
+    (x0, y0, (x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32)
+}
 
-    let [eye_right, eye_left] = geometry.eyes;
-    let eye_right_local = geometry.to_local(eye_right.0, eye_right.1);
-    let eye_left_local = geometry.to_local(eye_left.0, eye_left.1);
-    let nose_local = geometry.to_local(geometry.nose.0, geometry.nose.1);
-    let mouth_center = (
-        (geometry.mouth[0].0 + geometry.mouth[1].0) * 0.5,
-        (geometry.mouth[0].1 + geometry.mouth[1].1) * 0.5,
-    );
-    let mouth_local = geometry.to_local(mouth_center.0, mouth_center.1);
-
+/// 几何置信度：面部椭圆 / 颈部候选 × 五官保护 × 肤色似然 + 高光补偿。
+fn geometry_alpha(
+    image: &Image16,
+    geometry: &FaceGeometry,
+    x0: i32,
+    y0: i32,
+    width: u32,
+    height: u32,
+) -> Vec<f32> {
+    let (eye_right_local, eye_left_local, nose_local, mouth_local) = feature_points(geometry);
     let mut alpha = vec![0f32; (width * height) as usize];
     for local_y in 0..height {
         for local_x in 0..width {
@@ -177,6 +213,39 @@ fn build_mask_from_geometry(
             alpha[(local_y * width + local_x) as usize] = value.clamp(0.0, 1.0);
         }
     }
+    alpha
+}
+
+/// 五官局部坐标（眼/鼻/嘴），几何与模型两条路径共用。
+fn feature_points(
+    geometry: &FaceGeometry,
+) -> ((f32, f32), (f32, f32), (f32, f32), (f32, f32)) {
+    let [eye_right, eye_left] = geometry.eyes;
+    let eye_right_local = geometry.to_local(eye_right.0, eye_right.1);
+    let eye_left_local = geometry.to_local(eye_left.0, eye_left.1);
+    let nose_local = geometry.to_local(geometry.nose.0, geometry.nose.1);
+    let mouth_center = (
+        (geometry.mouth[0].0 + geometry.mouth[1].0) * 0.5,
+        (geometry.mouth[0].1 + geometry.mouth[1].1) * 0.5,
+    );
+    let mouth_local = geometry.to_local(mouth_center.0, mouth_center.1);
+    (eye_right_local, eye_left_local, nose_local, mouth_local)
+}
+
+/// 两条路径共用的后处理：羽化 → 手绘/橡皮 → invert → 低置信度归零。
+#[allow(clippy::too_many_arguments)]
+fn finalize_mask(
+    mut alpha: Vec<f32>,
+    geometry: &FaceGeometry,
+    manual: &ManualMask,
+    x0: i32,
+    y0: i32,
+    width: u32,
+    height: u32,
+    image_width: u32,
+    image_height: u32,
+) -> SkinMask {
+    let d = geometry.eye_distance;
 
     // 自动蒙版羽化：半径随人脸大小变化，避免硬边。
     let feather = (d * 0.020).round().clamp(1.0, 24.0) as u32;
@@ -214,17 +283,7 @@ fn build_mask_from_geometry(
     }
 
     if manual.invert {
-        let protect = feature_protection(
-            geometry,
-            eye_right_local,
-            eye_left_local,
-            nose_local,
-            mouth_local,
-            width,
-            height,
-            x0,
-            y0,
-        );
+        let protect = feature_protection(geometry, width, height, x0, y0);
         for (index, value) in alpha.iter_mut().enumerate() {
             *value = (1.0 - *value) * protect[index];
         }
@@ -246,18 +305,15 @@ fn build_mask_from_geometry(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// 五官保护图：眼睛/眉毛/鼻孔/嘴唇接近 0，其余为 1。
 fn feature_protection(
     geometry: &FaceGeometry,
-    eye_right_local: (f32, f32),
-    eye_left_local: (f32, f32),
-    nose_local: (f32, f32),
-    mouth_local: (f32, f32),
     width: u32,
     height: u32,
     x0: i32,
     y0: i32,
 ) -> Vec<f32> {
+    let (eye_right_local, eye_left_local, nose_local, mouth_local) = feature_points(geometry);
     let mut protect = vec![1f32; (width * height) as usize];
     for local_y in 0..height {
         for local_x in 0..width {
@@ -499,6 +555,13 @@ mod tests {
         )
     }
 
+    /// 直接走几何路径：这些单测验证的是几何蒙版本身的性质，
+    /// 模型分支由 `tests/beauty_skin_model.rs` 单独覆盖。
+    fn geometry_mask(image: &Image16, face: &FaceFrame, manual: &ManualMask) -> SkinMask {
+        let geometry = FaceGeometry::from_face(face, image.width(), image.height()).unwrap();
+        build_mask_from_geometry(image, &geometry, manual)
+    }
+
     fn frame(width: u32, height: u32) -> FaceFrame {
         let d = width as f32 * 0.2;
         let center_x = width as f32 * 0.5;
@@ -531,7 +594,7 @@ mod tests {
     fn mask_covers_skin_and_excludes_eyes_and_mouth() {
         let image = skin_image(400, 400);
         let face = frame(400, 400);
-        let mask = build_skin_mask(&image, &face, &ManualMask::default()).unwrap();
+        let mask = geometry_mask(&image, &face, &ManualMask::default());
         let geometry = FaceGeometry::from_face(&face, 400, 400).unwrap();
 
         let forehead = geometry.from_local(0.0, -0.85);
@@ -564,7 +627,7 @@ mod tests {
         // 而不是因为偏离标准肤色中心被整片丢弃。
         let image = Image16::from_pixel(400, 400, Rgba([100 * 257, 88 * 257, 82 * 257, 65535]));
         let face = frame(400, 400);
-        let mask = build_skin_mask(&image, &face, &ManualMask::default()).unwrap();
+        let mask = geometry_mask(&image, &face, &ManualMask::default());
         let geometry = FaceGeometry::from_face(&face, 400, 400).unwrap();
 
         let cheek = geometry.from_local(0.45, 0.35);
@@ -580,7 +643,7 @@ mod tests {
         // 但不得超过 0.5，且人脸以外的白色区域必须为 0。
         let image = Image16::from_pixel(400, 400, Rgba([65535, 65535, 65535, 65535]));
         let face = frame(400, 400);
-        let mask = build_skin_mask(&image, &face, &ManualMask::default()).unwrap();
+        let mask = geometry_mask(&image, &face, &ManualMask::default());
         let geometry = FaceGeometry::from_face(&face, 400, 400).unwrap();
 
         let forehead = geometry.from_local(0.0, -0.85);
@@ -596,13 +659,43 @@ mod tests {
     fn mask_edges_are_feathered() {
         let image = skin_image(400, 400);
         let face = frame(400, 400);
-        let mask = build_skin_mask(&image, &face, &ManualMask::default()).unwrap();
+        let mask = geometry_mask(&image, &face, &ManualMask::default());
         let soft = mask
             .alpha
             .iter()
             .filter(|value| **value > 0.03 && **value < 0.9)
             .count();
         assert!(soft > 200, "羽化边缘应存在大量中间值，实际 {soft}");
+    }
+
+    #[test]
+    fn model_fusion_boosts_cheeks_but_keeps_eyes_and_mouth_protected() {
+        // 模拟模型在脸颊给出高皮肤置信度、但把眼睛也误判为皮肤：
+        // 五官保护 × max 融合后，脸颊覆盖提升而眼睛/嘴唇仍接近 0。
+        let image = skin_image(400, 400);
+        let face = frame(400, 400);
+        let geometry = FaceGeometry::from_face(&face, 400, 400).unwrap();
+        let (x0, y0, width, height) = face_bbox(&geometry, 400, 400);
+        let protect = feature_protection(&geometry, width, height, x0, y0);
+        let geometry_alpha = geometry_alpha(&image, &geometry, x0, y0, width, height);
+
+        let index_of = |point: (f32, f32)| -> usize {
+            ((point.1 as i32 - y0).max(0) as u32 * width
+                + (point.0 as i32 - x0).max(0) as u32) as usize
+        };
+        let cheek = index_of(geometry.from_local(0.45, 0.35));
+        let eye = index_of(geometry.eyes[0]);
+        let mouth = index_of(geometry.from_local(0.0, 0.95));
+
+        let mut model_alpha = vec![0.95f32; (width * height) as usize];
+        for (value, protection) in model_alpha.iter_mut().zip(&protect) {
+            *value *= protection;
+        }
+        let fused = onnx::fuse_alpha(&model_alpha, &geometry_alpha);
+
+        assert!(fused[cheek] >= 0.9, "模型路径应提升脸颊覆盖");
+        assert!(fused[eye] < 0.1, "模型误判眼睛时必须由五官保护兜底");
+        assert!(fused[mouth] < 0.1, "模型误判嘴唇时必须由五官保护兜底");
     }
 
     #[test]
@@ -626,12 +719,12 @@ mod tests {
                 }],
             }],
         };
-        let painted = build_skin_mask(&image, &face, &brush).unwrap();
+        let painted = geometry_mask(&image, &face, &brush);
         assert!(painted.at(point.0 as u32, point.1 as u32) > 0.9);
 
         let mut eraser = brush.clone();
         eraser.strokes[0].erase = true;
-        let erased = build_skin_mask(&image, &face, &eraser).unwrap();
+        let erased = geometry_mask(&image, &face, &eraser);
         assert!(erased.at(point.0 as u32, point.1 as u32) < 0.1);
     }
 }

@@ -3,9 +3,11 @@
 //! `ai/model.rs` 的常量已经从这张表派生（见该文件的 `MODEL_*` 定义），
 //! 不再维护第二份字形。
 //!
-//! 当前只登记一条：YuNet 2023mar 人脸检测。皮肤解析 / 人物分割登记表刻意留空 ——
-//! 没有通过许可审查的权重就不登记，而不是登记了再指望闸门拦住（那样一旦闸门
-//! 有 bug 就会把未授权权重跑起来）。
+//! 当前登记两条：YuNet 2023mar 人脸检测 + MediaPipe Selfie Multiclass 皮肤解析。
+//! 人物分割登记表仍然刻意留空 —— 没有通过许可审查的权重就不登记，而不是登记了
+//! 再指望闸门拦住（那样一旦闸门有 bug 就会把未授权权重跑起来）。
+//! 皮肤权重的训练数据许可官方未披露，已按现行闸门如实列为 Unverified，
+//! 不得说成「整条数据链路已清」。
 //!
 //! ⚠️ **新增随包权重必须同步 `src-tauri/tauri.conf.json` 的 `resources` 列表**，
 //! 否则开发机能跑、打包后 `locate()` 永远返回 `None`（历史风险 R8）。
@@ -14,6 +16,24 @@ use crate::ai_engine::inference::tensor::{ChannelOrder, TensorSpec, ValueRange};
 
 use super::license::{LicenseEvidence, LicenseEvidenceKind, LicenseRecord, Verdict3};
 use super::spec::{ModelFormat, ModelOrigin, ModelSpec, ModelTask, OutputHead, Provenance};
+
+// ── MediaPipe Selfie Multiclass 256×256（皮肤语义分割）────────────────
+// 官方只发布 TFLite；本轮随包的是第三方从官方 TFLite 转换的合规 ONNX，
+// 随包附 Apache-2.0 全文。训练数据许可未被官方披露，必须如实列为 Unverified。
+pub const SELFIE_SKIN_ID: &str = "skin-parse-mediapipe-selfie-multiclass-256";
+pub const SELFIE_SKIN_NAME: &str = "Selfie Multiclass 皮肤解析";
+pub const SELFIE_SKIN_VERSION: &str = "256x256";
+pub const SELFIE_SKIN_FILE: &str = "selfie_multiclass_256x256.onnx";
+/// 实测 16,453,400 B（2026-11-23）。
+pub const SELFIE_SKIN_SIZE_BYTES: u64 = 16_453_400;
+pub const SELFIE_SKIN_SHA256: &str =
+    "485774fe148451ca3f6c53626654b9a5ea34d291fa07ddac53725aa35ec07587";
+pub const SELFIE_SKIN_LICENSE_SPDX: &str = "Apache-2.0";
+pub const SELFIE_SKIN_DIR: &str = "models/skin";
+pub const SELFIE_SKIN_WEIGHTS_URL: &str = "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite";
+pub const SELFIE_SKIN_LICENSE_URL: &str =
+    "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Multiclass%20Segmentation.pdf";
+pub const SELFIE_SKIN_BUNDLED_LICENSE_FILE: &str = "src-tauri/resources/models/skin/LICENSE";
 
 /// 字面量集中在此定义，`ModelSpec` 与 `ai/model.rs` 的 `MODEL_*` 常量都引用它们。
 ///
@@ -152,16 +172,81 @@ pub const YUNET: ModelSpec = ModelSpec {
     },
 };
 
-/// 皮肤解析登记表。当前为空：BiSeNet / CelebAMask-HQ 系权重受数据集非商用条款限制，
-/// InsightFace 多数模型仅限研究，均不满足打包条件。
-pub const SKIN_MODELS: &[&ModelSpec] = &[];
+/// MediaPipe Selfie Multiclass 256×256 皮肤解析（TFLite → ONNX opset 13）。
+///
+/// 语义：0 background / 1 hair / 2 body-skin / 3 face-skin / 4 clothes / 5 others。
+/// 输出是 **logits**，图内 Softmax 都在 ViT 注意力内部，后处理必须自行沿
+/// axis=1（类别维）softmax 再取 p(2)+p(3)，详见 `skin_segmentation::onnx`。
+/// 输入值域 [-1,1]，与既有 `ValueRange::MinusOneToOne` 完全吻合。
+pub const SELFIE_SKIN: ModelSpec = ModelSpec {
+    id: SELFIE_SKIN_ID,
+    display_name: SELFIE_SKIN_NAME,
+    version: SELFIE_SKIN_VERSION,
+    task: ModelTask::SkinParse,
+    format: ModelFormat::Onnx,
+    origin: ModelOrigin::Builtin,
+    dir: SELFIE_SKIN_DIR,
+    file_name: SELFIE_SKIN_FILE,
+    size_bytes: SELFIE_SKIN_SIZE_BYTES,
+    sha256: SELFIE_SKIN_SHA256,
+    input: TensorSpec::declared(
+        &[1, 3, 256, 256],
+        ValueRange::MinusOneToOne,
+        ChannelOrder::Rgb,
+    ),
+    outputs: &[OutputHead {
+        name: "Identity",
+        shape: &[1, 6, 256, 256],
+        semantic: "6 类逐像素 logits（含 face-skin/body-skin），需 axis=1 softmax",
+    }],
+    license: LicenseRecord {
+        weights: Verdict3::Allowed,
+        training_data: Verdict3::Unverified {
+            what_to_check: "MediaPipe 模型卡未披露训练数据集名称与许可，需 Google/法务确认",
+        },
+        commercial_use: Verdict3::Allowed,
+        redistribution: Verdict3::Allowed,
+        spdx: Some(SELFIE_SKIN_LICENSE_SPDX),
+        evidence: &[
+            LicenseEvidence {
+                kind: LicenseEvidenceKind::WeightCard,
+                url: SELFIE_SKIN_LICENSE_URL,
+                quote: "LICENSED UNDER / Apache License, Version 2.0；作者 Adel Ahmadyan, Google；类别附录 3 body-skin / 4 face-skin",
+                accessed_at: "2026-11-23",
+            },
+            LicenseEvidence {
+                kind: LicenseEvidenceKind::OfficialPage,
+                url: "https://raw.githubusercontent.com/google-ai-edge/mediapipe/master/LICENSE",
+                quote: "Copyright 2023 Google LLC / Licensed under the Apache License, Version 2.0",
+                accessed_at: "2026-11-23",
+            },
+            LicenseEvidence {
+                kind: LicenseEvidenceKind::BundledLicenseFile,
+                url: SELFIE_SKIN_BUNDLED_LICENSE_FILE,
+                quote: "Apache License / Version 2.0, January 2004 / http://www.apache.org/licenses/",
+                accessed_at: "2026-11-23",
+            },
+        ],
+        note: "权重/商用/再分发三项 Allowed（模型卡明示 Apache-2.0，随包附 LICENSE 全文）；训练数据许可未披露，仅写 trained on thousands of samples，必须列为 Unverified 并在 UI 与台账中披露，不得说成整条数据链路已清。ONNX 为第三方从官方 TFLite 用 tf2onnx 1.16.1 / opset 13 转换，我方自转复现列为待办。",
+    },
+    provenance: Provenance {
+        weights_url: SELFIE_SKIN_WEIGHTS_URL,
+        license_url: SELFIE_SKIN_LICENSE_URL,
+        bundled_license_file: Some(SELFIE_SKIN_BUNDLED_LICENSE_FILE),
+        verified_at: "2026-11-23",
+        verified_by: "架构实证（模型卡 PDF / 随包 LICENSE 原文 / tract 0.23.10 推理）",
+    },
+};
+
+/// 皮肤解析登记表。只有一条通过三字段许可闸门 + SHA + 契约实证的权重。
+pub const SKIN_MODELS: &[&ModelSpec] = &[&SELFIE_SKIN];
 
 /// 人物分割 / 人体姿态登记表。当前为空（候选调研清单在
 /// `ai_engine::segmentation::CATALOG`，那是**调研目录**而不是加载源）。
 pub const SEGMENTATION_MODELS: &[&ModelSpec] = &[];
 
 /// 全部内置登记记录。
-pub const ALL: &[&ModelSpec] = &[&YUNET];
+pub const ALL: &[&ModelSpec] = &[&YUNET, &SELFIE_SKIN];
 
 /// 按 ID 查找内置记录。
 pub fn find(id: &str) -> Option<&'static ModelSpec> {
@@ -213,15 +298,59 @@ mod tests {
     }
 
     #[test]
-    fn skin_and_segmentation_tables_stay_empty_until_a_weight_passes_review() {
-        assert!(SKIN_MODELS.is_empty());
+    fn skin_table_registers_one_gate_cleared_weight_and_discloses_training_data() {
+        assert_eq!(SKIN_MODELS.len(), 1);
+        assert_eq!(SKIN_MODELS[0].id, SELFIE_SKIN.id);
+        assert!(
+            super::super::license::gate(
+                SELFIE_SKIN.origin,
+                &SELFIE_SKIN.license,
+                SELFIE_SKIN.id
+            )
+            .is_ok(),
+            "皮肤权重必须通过三字段许可闸门"
+        );
+        assert_eq!(
+            SELFIE_SKIN.license.unverified_fields(),
+            vec!["trainingData"],
+            "训练数据许可未披露必须如实出现在 unverifiedFields"
+        );
+        assert!(SELFIE_SKIN.license.evidence.len() >= 3);
+        // 人物分割表仍然刻意留空。
         assert!(SEGMENTATION_MODELS.is_empty());
+    }
+
+    #[test]
+    fn selfie_skin_matches_the_shipped_artifact() {
+        assert_eq!(SELFIE_SKIN.size_bytes, 16_453_400);
+        assert_eq!(SELFIE_SKIN.file_name, "selfie_multiclass_256x256.onnx");
+        assert_eq!(
+            SELFIE_SKIN.sha256,
+            "485774fe148451ca3f6c53626654b9a5ea34d291fa07ddac53725aa35ec07587"
+        );
+        assert_eq!(SELFIE_SKIN.output_count(), 1);
+        assert_eq!(SELFIE_SKIN.outputs[0].name, "Identity");
+        assert_eq!(SELFIE_SKIN.outputs[0].shape, &[1, 6, 256, 256]);
+        assert_eq!(SELFIE_SKIN.input.shape.as_ref(), &[1, 3, 256, 256]);
+        assert_eq!(SELFIE_SKIN.input.value_range, ValueRange::MinusOneToOne);
+        assert_eq!(SELFIE_SKIN.input.channel_order, ChannelOrder::Rgb);
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(SELFIE_SKIN.dir)
+            .join(SELFIE_SKIN.file_name);
+        let metadata = std::fs::metadata(&path).expect("随包 Selfie Multiclass ONNX 缺失");
+        assert_eq!(metadata.len(), SELFIE_SKIN.size_bytes);
+        let license = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/models/skin/LICENSE");
+        assert!(license.is_file(), "随包 Apache-2.0 许可文件缺失");
     }
 
     #[test]
     fn find_resolves_known_and_unknown_ids() {
         assert_eq!(find(YUNET.id).map(|spec| spec.id), Some(YUNET.id));
+        assert_eq!(find(SELFIE_SKIN.id).map(|spec| spec.id), Some(SELFIE_SKIN.id));
         assert!(find("no-such-model").is_none());
-        assert_eq!(ids(), vec![YUNET.id]);
+        assert_eq!(ids(), vec![YUNET.id, SELFIE_SKIN.id]);
     }
 }
