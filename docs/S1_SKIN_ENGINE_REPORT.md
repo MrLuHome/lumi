@@ -107,7 +107,7 @@ docs/S1_SKIN_ENGINE_REPORT.md                      (本报告)
 
 ## 8. Git
 
-见提交 SHA（回填）。
+71e6d7b6e8fcaf0038d49138ce3b52e3cd183edd
 
 ---
 
