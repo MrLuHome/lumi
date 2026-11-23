@@ -73,6 +73,8 @@ fn status_from_specs(
     use crate::ai_engine::model_registry::{license, locate, verify};
 
     let base_dirs = skin_base_dirs(resource_dir);
+    // 多模型登记时逐个准入：第一个通过的生效；全部失败才回退几何蒙版。
+    let mut last_detail = String::new();
     for spec in models {
         let located = locate::locate(&base_dirs, spec.dir, spec.file_name);
         let health = match &located {
@@ -122,7 +124,7 @@ fn status_from_specs(
                 registered_count: models.len(),
             };
         }
-        let detail = health
+        last_detail = health
             .blocking
             .as_ref()
             .map(|failure| {
@@ -132,8 +134,10 @@ fn status_from_specs(
                     .unwrap_or_else(|| failure.message())
             })
             .unwrap_or_default();
+    }
+    if !last_detail.is_empty() {
         return fallback(format!(
-            "皮肤解析权重未通过准入检查（{detail}）；已回退到几何蒙版（关键点 + 肤色似然），未使用 AI 分割。"
+            "皮肤解析权重未通过准入检查（{last_detail}）；已回退到几何蒙版（关键点 + 肤色似然），未使用 AI 分割。"
         ));
     }
     fallback("未登记可商用皮肤解析权重；已回退到几何蒙版（关键点 + 肤色似然），不会用未授权权重冒充 AI 分割。".into())

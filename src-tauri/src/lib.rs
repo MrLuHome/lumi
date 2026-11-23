@@ -5,6 +5,7 @@
 //! - `ai`：本地 ONNX 人脸检测（tract，纯 CPU）；
 //! - `ai_engine`：皮肤区域、自然磨皮、瑕疵修复、肤色与眼周、一键分析；
 //! - `face_reshape`：第四轮面部塑形（手动变形 + 轮廓级保守调整 + 质量保护）；
+//! - `geometry`：G11 几何变形底座（局部控制点、保护蒙版、坐标映射、多区域合并）；
 //! - `commands`：Tauri 命令边界，只做参数校验、线程调度与序列化；
 //! - `state`：进程内图片缓存与人脸结果缓存。
 
@@ -32,6 +33,7 @@ mod commands;
 pub mod error;
 pub mod face_intelligence;
 pub mod face_reshape;
+pub mod geometry;
 pub mod gpu;
 pub mod image_engine;
 mod state;

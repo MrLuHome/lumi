@@ -402,10 +402,13 @@ mod tests {
         let mut logits = vec![0f32; CLASSES * pixels];
         // 极端 logit 必须放在**同一像素的不同类别**（NCHW: class*pixels + pixel），
         // 才能检验最大值是跨 6 个类别取的；负 logits 也不能当概率直接用。
-        logits[0 * pixels + 0] = -1.49;
-        logits[1 * pixels + 0] = 3.05;
-        logits[0 * pixels + 1] = -100.0;
-        logits[1 * pixels + 1] = 100.0;
+        fn nchw(class: usize, pixel: usize, pixels: usize) -> usize {
+            class * pixels + pixel
+        }
+        logits[nchw(0, 0, pixels)] = -1.49;
+        logits[nchw(1, 0, pixels)] = 3.05;
+        logits[nchw(0, 1, pixels)] = -100.0;
+        logits[nchw(1, 1, pixels)] = 100.0;
         let probs = softmax_classes(&logits).unwrap();
         assert_eq!(probs.len() / CLASSES, pixels);
         assert!(probs.iter().all(|value| *value >= 0.0 && value.is_finite()));
