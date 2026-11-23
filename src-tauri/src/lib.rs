@@ -138,6 +138,8 @@ pub fn run() {
             commands::segmentation::preview_subject_mask,
             commands::body::body_capability,
             commands::body::body_anchor_presets,
+            commands::shape_plan::plan_face_shape,
+            commands::shape_plan::plan_body_shape,
             commands::background::pick_background_image,
             commands::background::background_image_info,
             commands::analysis::analyze_retouch,

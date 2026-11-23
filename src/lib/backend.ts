@@ -10,10 +10,12 @@ import type {
   BeautyProgress,
   BodyAnchorPreset,
   BodyCapability,
+  BodyShapePlan,
   ChangeSet,
   ColorOutputSettings,
   ColorStatus,
   ComputeBackend,
+  DetectedFace,
   DisplayPreviewResult,
   DisplayStatus,
   EditParams,
@@ -23,6 +25,7 @@ import type {
   FaceModelStatus,
   FaceProgress,
   FaceRestoreResult,
+  FaceShapePlan,
   GpuBenchmarkResult,
   GpuStatus,
   MaskPreview,
@@ -256,6 +259,42 @@ export async function previewSkinMask(path: string, params: EditParams): Promise
 export async function reshapeCapability(): Promise<ReshapeCapability> {
   if (!isDesktopRuntime()) throw new Error("塑形能力查询需要在桌面端运行");
   return invoke<ReshapeCapability>("reshape_capability");
+}
+
+/** G14：由人脸检测结果生成瘦脸计划（写入前不改像素）。 */
+export async function planFaceShape(
+  face: DetectedFace,
+  imageWidth: number,
+  imageHeight: number,
+  style: "natural" | "refined" | "advanced",
+  strength: number,
+): Promise<FaceShapePlan> {
+  if (!isDesktopRuntime()) throw new Error("瘦脸计划需要在桌面端运行");
+  return invoke<FaceShapePlan>("plan_face_shape", {
+    face,
+    imageWidth,
+    imageHeight,
+    style,
+    strength,
+  });
+}
+
+/** G14：由人物蒙版生成瘦身计划。 */
+export async function planBodyShape(
+  path: string,
+  mask: SubjectMaskParams,
+  subjectId: string,
+  style: "natural" | "refined" | "advanced",
+  strength: number,
+): Promise<BodyShapePlan> {
+  if (!isDesktopRuntime()) throw new Error("瘦身计划需要在桌面端运行");
+  return invoke<BodyShapePlan>("plan_body_shape", {
+    path,
+    mask,
+    subjectId,
+    style,
+    strength,
+  });
 }
 
 /** 第五轮：手动人物蒙版能力与 AI 分割不可用原因。 */

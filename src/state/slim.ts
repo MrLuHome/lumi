@@ -24,8 +24,10 @@ import type {
   BeautyAnalysis,
   BeautyKey,
   BeautyParams,
+  BodyShape,
   EditParams,
   FaceDetectionResult,
+  FaceShape,
   FaceSuggestion,
 } from "../types";
 import {
@@ -33,6 +35,8 @@ import {
   backgroundIsActive,
   clampParams,
   defaultBeauty,
+  defaultBodyAdjust,
+  defaultFaceReshape,
   faceReshapeIsActive,
   bodyAdjustIsActive,
 } from "./params";
@@ -639,6 +643,10 @@ export interface OneClickFaceWrite {
 export interface OneClickPlan {
   faces: OneClickFaceWrite[];
   params: Partial<Record<AdjustmentKey, number>>;
+  /** G14：瘦脸写入（可选；与美肤同一计划）。 */
+  reshape?: { faceId: number; faceUuid: string; face: FaceShape }[];
+  /** G14：瘦身写入（可选）。 */
+  body?: { subjectId: string; shape: BodyShape }[];
   /** 真正会改变像素的字段数（与当前值差 ≥ 0.5）。 */
   fields: number;
   /** 因为用户手改过而保留的字段数。 */
@@ -859,6 +867,41 @@ export function applyOneClickPlan(current: EditParams, plan: OneClickPlan): Edit
   for (const key of TONAL_KEYS) {
     const value = plan.params[key];
     if (value !== undefined) next[key] = value;
+  }
+  // G14：瘦脸 / 瘦身（仅在计划非空时写入，保持非破坏与可撤销）。
+  if (plan.reshape?.length) {
+    const reshape = [...next.reshape];
+    for (const write of plan.reshape) {
+      const index = reshape.findIndex((entry) =>
+        write.faceUuid ? entry.faceUuid === write.faceUuid : entry.faceId === write.faceId,
+      );
+      if (index >= 0) {
+        const entry = reshape[index]!;
+        reshape[index] = { ...entry, enabled: true, face: { ...entry.face, ...write.face } };
+      } else {
+        const entry = defaultFaceReshape(write.faceId, write.faceUuid);
+        entry.enabled = true;
+        entry.face = { ...write.face };
+        reshape.push(entry);
+      }
+    }
+    next.reshape = reshape;
+  }
+  if (plan.body?.length) {
+    const body = [...next.body];
+    for (const write of plan.body) {
+      const index = body.findIndex((entry) => entry.subjectId === write.subjectId);
+      if (index >= 0) {
+        const entry = body[index]!;
+        body[index] = { ...entry, enabled: true, shape: { ...entry.shape, ...write.shape } };
+      } else {
+        const entry = defaultBodyAdjust(write.subjectId);
+        entry.enabled = true;
+        entry.shape = { ...write.shape };
+        body.push(entry);
+      }
+    }
+    next.body = body;
   }
   return next;
 }

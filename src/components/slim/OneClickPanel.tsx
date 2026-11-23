@@ -18,6 +18,7 @@ import {
 } from "../../state/slim";
 import { Slider } from "../ui/Slider";
 import { ensureBeauty, ensureFaces, ensureGlobalReport, plainMessage } from "./analysis";
+import { planBodyShape, planFaceShape } from "../../lib/backend";
 
 /**
  * 一键精修面板。
@@ -138,21 +139,70 @@ export function OneClickPanel({ photo }: { photo: PhotoAsset | null }) {
           anchors,
           detection: faces,
         });
-        if (plan.fields === 0) {
+
+        // G14：瘦脸 / 瘦身计划（失败不阻断美肤；有蒙版才瘦身）。
+        const mode = state.oneClick.mode;
+        const strength = state.oneClick.strength;
+        const reshapeWrites: NonNullable<typeof plan.reshape> = [];
+        for (const face of faces.faces) {
+          try {
+            const facePlan = await planFaceShape(
+              face,
+              faces.imageWidth,
+              faces.imageHeight,
+              mode,
+              strength,
+            );
+            if (!facePlan.skipped && (facePlan.face.slim !== 0 || facePlan.face.jaw !== 0)) {
+              reshapeWrites.push({
+                faceId: facePlan.faceId,
+                faceUuid: facePlan.faceUuid || face.uuid,
+                face: facePlan.face,
+              });
+            }
+          } catch {
+            // 单脸计划失败忽略，不影响其它写入。
+          }
+        }
+        let bodyWrites: NonNullable<typeof plan.body> = [];
+        const subjectMask = current.subjectMask;
+        if (subjectMask?.enabled && subjectMask.strokes.length > 0) {
+          try {
+            const bodyPlan = await planBodyShape(
+              photo.path,
+              subjectMask,
+              "subject-1",
+              mode,
+              strength,
+            );
+            if (!bodyPlan.skipped) {
+              bodyWrites = [{ subjectId: bodyPlan.subjectId, shape: bodyPlan.shape }];
+            }
+          } catch {
+            // 无蒙版/分析失败则跳过瘦身。
+          }
+        }
+        const fullPlan = {
+          ...plan,
+          reshape: reshapeWrites.length ? reshapeWrites : undefined,
+          body: bodyWrites.length ? bodyWrites : undefined,
+          fields: plan.fields + reshapeWrites.length + bodyWrites.length,
+        };
+        if (fullPlan.fields === 0) {
           setOneClickStatus("ready");
           setAppliedNote(
-            plan.kept > 0
+            fullPlan.kept > 0
               ? "已经是最新效果，你的手动修改都还在。"
               : "这张照片状态不错，没有需要修的地方。",
           );
           return;
         }
-        if (plan.needsConfirm) {
-          setPendingPlan(plan);
+        if (fullPlan.needsConfirm) {
+          setPendingPlan(fullPlan);
           setOneClickStatus("ready");
           return;
         }
-        commit(plan, state.oneClick.mode, state.oneClick.strength);
+        commit(fullPlan, state.oneClick.mode, state.oneClick.strength);
       } catch (error) {
         setOneClickStatus("error");
         setOneClickError(plainMessage(error));

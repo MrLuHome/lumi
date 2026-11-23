@@ -15,3 +15,4 @@ pub mod raw;
 pub mod render;
 pub mod reshape;
 pub mod segmentation;
+pub mod shape_plan;

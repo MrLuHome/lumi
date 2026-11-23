@@ -75,6 +75,8 @@ export interface RenderResult {
   warnings: string[];
 }
 
+import type { BodyShape, FaceShape } from "./state/params";
+
 /** 与 Rust `BodyReport` 对应。 */
 export interface BodyReport {
   subjectId: string;
@@ -84,6 +86,26 @@ export interface BodyReport {
   degraded: boolean;
   elapsedMs: number;
   notes: string[];
+}
+
+/** G14：一键瘦脸计划（与 Rust `FaceShapePlan` 对应）。 */
+export interface FaceShapePlan {
+  faceId: number;
+  faceUuid: string;
+  face: FaceShape;
+  confidence: number;
+  allowAggressive: boolean;
+  notes: string[];
+  skipped: boolean;
+}
+
+/** G14：一键瘦身计划（与 Rust `BodyShapePlan` 对应）。 */
+export interface BodyShapePlan {
+  subjectId: string;
+  shape: BodyShape;
+  confidence: number;
+  notes: string[];
+  skipped: boolean;
 }
 
 /** 与 Rust `BackgroundReport` 对应。 */

@@ -482,6 +482,55 @@ describe("一键精修计划", () => {
     expect(plan.params).toEqual({});
   });
 
+  it("G14：一键计划可写入瘦脸 reshape 与瘦身 body", () => {
+    const plan = buildOneClickPlan({ ...baseInput, mode: "advanced" });
+    const withShape = {
+      ...plan,
+      reshape: [
+        {
+          faceId: 1,
+          faceUuid: "uuid-1",
+          face: {
+            slim: 28,
+            left: 0,
+            right: 0,
+            jaw: 12,
+            cheekbone: 8,
+            width: 10,
+            length: 0,
+            balance: 0,
+          },
+        },
+      ],
+      body: [
+        {
+          subjectId: "subject-1",
+          shape: {
+            waist: -30,
+            shoulders: 0,
+            hips: -12,
+            thighs: -10,
+            calves: 0,
+            arms: -8,
+            legs: 0,
+          },
+        },
+      ],
+      fields: plan.fields + 2,
+    };
+    const next = applyOneClickPlan(baseInput.current, withShape);
+    const reshape = next.reshape.find((e) => e.faceUuid === "uuid-1" || e.faceId === 1);
+    expect(reshape?.enabled).toBe(true);
+    expect(reshape?.face.slim).toBe(28);
+    const body = next.body.find((e) => e.subjectId === "subject-1");
+    expect(body?.enabled).toBe(true);
+    expect(body?.shape.waist).toBe(-30);
+    // 不带 shape 的计划不碰 reshape/body。
+    const plain = applyOneClickPlan(baseInput.current, plan);
+    expect(plain.reshape).toEqual(baseInput.current.reshape);
+    expect(plain.body).toEqual(baseInput.current.body);
+  });
+
   it("没有 applied 记录且当前已有调整时要先确认，不静默覆盖", () => {
     const current = {
       ...defaultParams(),
