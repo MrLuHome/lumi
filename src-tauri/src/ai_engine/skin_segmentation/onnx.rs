@@ -327,12 +327,37 @@ pub fn softmax_classes(logits: &[f32]) -> AppResult<Vec<f32>> {
     Ok(probabilities)
 }
 
-/// 模型 alpha（已乘五官保护）与几何 alpha 融合：取 max，保留几何安全网。
+/// 整脸平均皮肤概率低于此值才认为模型整体失效，需要几何兜底。
+/// 正常推理（椭圆脸 + 少量上下文）均值约 0.3~0.6，远高于此阈值。
+const LOW_CONF_MEAN: f32 = 0.12;
+/// 模型失效时几何兜底的最大权重，保留上限避免退回纯几何矩形。
+const MAX_GEOMETRY_GATE: f32 = 0.9;
+
+/// 融合模型 alpha 与几何 alpha：**模型主导**，几何只在模型整体失效时受限兜底。
+///
+/// 旧实现是逐元素 `max(model, geometry)`：几何蒙版本身覆盖额头-下巴的矩形区域，
+/// 脸颊处 alpha 本就高，`max` 会把模型判定为非皮肤的区域（发际、下颌角、背景）
+/// 顶成高值，最终蒙版退化成与脸型无关的硬矩形——真人取证已证实这一缺陷。
+///
+/// 五官保护已在 `infer` 里乘进 `model_alpha`，无需几何再参与。因此这里按整脸平均
+/// 皮肤置信度算一个全局 gate：模型健康（均值 ≥ `LOW_CONF_MEAN`）时 gate=0，
+/// 蒙版形状完全由模型决定；只有模型近乎检测不到皮肤时才按比例抬高 gate，
+/// 混入几何作安全网，避免完全丢失蒙版。这样「真跑通推理」才是名副其实的 model 分支。
 pub fn fuse_alpha(model_alpha: &[f32], geometry_alpha: &[f32]) -> Vec<f32> {
-    model_alpha
+    let n = model_alpha.len().min(geometry_alpha.len());
+    if n == 0 {
+        return Vec::new();
+    }
+    let mean = model_alpha[..n].iter().sum::<f32>() / n as f32;
+    let gate = if mean >= LOW_CONF_MEAN {
+        0.0
+    } else {
+        (1.0 - (mean / LOW_CONF_MEAN).max(0.0)) * MAX_GEOMETRY_GATE
+    };
+    model_alpha[..n]
         .iter()
-        .zip(geometry_alpha.iter())
-        .map(|(model, geometry_value)| model.max(*geometry_value))
+        .zip(geometry_alpha[..n].iter())
+        .map(|(model, geometry_value)| (model.max(*geometry_value * gate)).clamp(0.0, 1.0))
         .collect()
 }
 

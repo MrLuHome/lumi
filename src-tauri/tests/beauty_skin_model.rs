@@ -209,6 +209,55 @@ fn permuting_class_channels_changes_the_mask() {
 }
 
 #[test]
+fn fused_mask_follows_model_ellipse_not_geometry_rectangle() {
+    // 真人取证反例：融合后蒙版是「额头到下巴的硬矩形方块」，模型语义分割被几何 max 淹没。
+    // fixture：model_alpha 是贴脸型的椭圆（内部高、四周低），geometry_alpha 是覆盖
+    // 额头-下巴的矩形（四角也高）。正确融合后蒙版必须呈椭圆——矩形四角低、椭圆内部高。
+    // 若把 fuse_alpha 改回逐元素 max，四角会被矩形顶成高值 → 本测试变红。
+    const W: usize = 64;
+    const H: usize = 80;
+    let cx = W as f32 * 0.5;
+    let cy = H as f32 * 0.5;
+    let rx = W as f32 * 0.42;
+    let ry = H as f32 * 0.45;
+
+    let mut model_alpha = vec![0f32; W * H];
+    let mut geometry_alpha = vec![0f32; W * H];
+    for y in 0..H {
+        for x in 0..W {
+            let dx = (x as f32 - cx) / rx;
+            let dy = (y as f32 - cy) / ry;
+            let radius = (dx * dx + dy * dy).sqrt();
+            // 椭圆内部高置信（平台 + 薄羽化边缘），外部为 0。
+            model_alpha[y * W + x] = if radius < 0.8 {
+                0.95
+            } else {
+                ((1.0 - radius) / 0.2 * 0.95).max(0.0)
+            };
+            // 几何：额头-下巴矩形，四角也高，仅中央挖一小块模拟五官孔。
+            let in_rect = (6..W - 6).contains(&x) && (6..H - 6).contains(&y);
+            let feature_hole = (cx - 8.0..cx + 8.0).contains(&(x as f32))
+                && (cy - 8.0..cy + 8.0).contains(&(y as f32));
+            geometry_alpha[y * W + x] = if in_rect && !feature_hole { 0.95 } else { 0.0 };
+        }
+    }
+    let fused = onnx::fuse_alpha(&model_alpha, &geometry_alpha);
+
+    // 矩形四角：几何高、椭圆（模型）低。融合后必须保持低——几何矩形不能主导。
+    for (x, y) in [(8usize, 8usize), (W - 9, 8), (8, H - 9), (W - 9, H - 9)] {
+        let idx = y * W + x;
+        assert!(
+            fused[idx] < 0.2,
+            "矩形角 ({x},{y}) alpha={} 过高：几何矩形不能主导最终蒙版",
+            fused[idx]
+        );
+    }
+    // 椭圆内部（非五官孔）：必须高，由模型决定形状。
+    let inside = cy as usize * W + (cx as usize - 18);
+    assert!(fused[inside] > 0.8, "椭圆内部 alpha={} 应高", fused[inside]);
+}
+
+#[test]
 fn failure_injection_never_panics_and_never_loads_untrusted_bytes() {
     use lumi_retouch_lib::ai_engine::model_registry::license::{LicenseRecord, Verdict3};
     use lumi_retouch_lib::ai_engine::model_registry::spec::ModelSpec;
