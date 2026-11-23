@@ -161,3 +161,43 @@ impl RgbPlanes {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai_engine::skin_segmentation::SkinMask;
+    use crate::image_engine::buffer::Image16;
+    use image::Rgba;
+
+    #[test]
+    fn padded_sampling_uses_edge_replication_not_black() {
+        // Halo 外扩必须复制真实边缘像素，禁止用 0（黑色）填充代替。
+        let mut img = Image16::from_pixel(16, 16, Rgba([40_000, 30_000, 20_000, 65535]));
+        img.put_pixel(0, 0, Rgba([50_000, 40_000, 30_000, 65535]));
+        let mask = SkinMask {
+            x0: 4,
+            y0: 4,
+            width: 8,
+            height: 8,
+            alpha: vec![1.0; 64],
+        };
+        let padded = RgbPlanes::from_image_padded(&img, &mask, 6);
+        // 左上角外扩点 (x0=-2,y0=-2) 被 clamp 到 (0,0) → 应为真实边缘像素，而非 0。
+        let corner = padded.planes[0][0];
+        assert!(
+            corner > 0.7,
+            "外扩区域必须是真实边缘像素（复制），不得黑填充 got={corner}"
+        );
+        // 所有平面值有限且非全零
+        for c in 0..3 {
+            assert!(padded.planes[c].iter().all(|v| v.is_finite() && *v >= 0.0));
+            assert!(padded.planes[c].iter().any(|v| *v > 0.1));
+        }
+        // crop_center 能裁回 mask 尺寸
+        let cropped = padded.crop_center(8, 8);
+        assert_eq!((cropped.width, cropped.height), (8, 8));
+        // 中心区域应等于原 ROI 像素
+        let src = img.get_pixel(4, 4).0[0] as f32 / 65535.0;
+        assert!((cropped.planes[0][0] - src).abs() < 1e-6);
+    }
+}

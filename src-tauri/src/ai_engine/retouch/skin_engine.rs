@@ -63,8 +63,8 @@ pub fn run_skin_retouch(
     // 3) 频率分离（对当前 ROI）：先均匀低频，按保护比例回注高频
     let radius = ((mw as f32 * 0.02).round() as u32).clamp(3, 20);
     let eps = 0.004 + 0.02 * (1.0 - beauty.texture.clamp(0.0, 100.0) / 100.0);
-    // split 需要 Image16；改为对 rgb 平面直接分解
-    let (mut low, high) = split_planes(&rgb, mw, mh, radius, eps, cancel)?;
+    // 从原图扩展真实像素 Halo 做引导滤波，再裁回 ROI（禁止 ROI 裁剪后直接滤波产生矩形接缝）。
+    let (mut low, high) = split_planes(image, mask, &rgb, radius, eps, cancel)?;
     let tone_even = (beauty.tone_even.clamp(0.0, 100.0) / 100.0) * 0.7;
     frequency::even_low_frequency_wh(&mut low, mw, mh, &process_w, tone_even, cancel)?;
     let high_keep = (0.20
@@ -83,7 +83,9 @@ pub fn run_skin_retouch(
     grid_params.strength = strength;
     bilateral_grid_smooth(&mut rgb, mw, mh, Some(&process_w), &grid_params, cancel)?;
 
-    // 5) 质量：before = 原 ROI，after = 处理后 rgb
+    // 5) 质量：before = 原 ROI，after = 处理后 rgb；
+    //    skin_w 传原始皮肤蒙版（非 process_w），否则 protect=0 的五官区
+    //    会因 process_w=0 被排除在保护区之外，保护泄漏永远测不到。
     let before = fusion::extract_roi(image, (mask.x0, mask.y0), mw, mh);
     let split_stub = FrequencySplit {
         low,
@@ -91,7 +93,7 @@ pub fn run_skin_retouch(
         width: mw,
         height: mh,
     };
-    let q = quality::evaluate(&before, &rgb, &process_w, &protect, mw, mh);
+    let q = quality::evaluate(&before, &rgb, &mask.alpha, &protect, mw, mh);
 
     // 6) 融合回全图
     let report = fusion::fuse(
@@ -117,27 +119,49 @@ pub fn run_skin_retouch(
 }
 
 /// 对 0..1 RGB 平面做引导滤波频率分离（不依赖 Image16）。
+///
+/// **Halo 策略（S1.1 P1）**：不直接对裁剪 ROI 跑 `guided_filter`（ROI 边界窗口
+/// 截断会在脸颊/额头/下巴边缘产生矩形接缝），而是：
+/// 1. 从**原图**按 mask 包围盒外扩 `pad = min(2r+4, 40)` 像素读取真实像素
+///    （图像四边界统一用边缘复制，禁止 0/黑色填充）；
+/// 2. 在含 Halo 的平面上执行引导滤波；
+/// 3. 裁回目标 ROI，`high = roi - low`。
+///
+/// `roi` 为与 mask ROI 同尺寸的当前像素（0..1 RGB，行优先）。
 fn split_planes(
-    rgb: &[f32],
-    width: u32,
-    height: u32,
+    image: &crate::image_engine::buffer::Image16,
+    mask: &SkinMask,
+    roi: &[f32],
     radius: u32,
     eps: f32,
     cancel: &CancelToken,
 ) -> AppResult<([Vec<f32>; 3], [Vec<f32>; 3])> {
-    use crate::ai_engine::retouch::filter::guided_filter;
-    let n = (width * height) as usize;
+    use crate::ai_engine::retouch::filter::{guided_filter, RgbPlanes};
+    let (mw, mh) = (mask.width, mask.height);
+    let n = (mw * mh) as usize;
+    if mw < 2 || mh < 2 || roi.len() != n * 3 {
+        return Err(crate::error::AppError::Unsupported(
+            "频率分离缓冲尺寸与 ROI 不一致".into(),
+        ));
+    }
+    // 引导滤波嵌套两次盒滤，输出像素依赖半径 2r；Halo ≥ 2r 即与全图滤波一致。
+    let pad = (radius * 2 + 4).min(40);
+    let padded = RgbPlanes::from_image_padded(image, mask, pad);
+    let (fw, fh) = (padded.width, padded.height);
+    let ox = (fw - mw) / 2;
+    let oy = (fh - mh) / 2;
     let mut low: [Vec<f32>; 3] = [vec![0f32; n], vec![0f32; n], vec![0f32; n]];
     let mut high: [Vec<f32>; 3] = [vec![0f32; n], vec![0f32; n], vec![0f32; n]];
     for c in 0..3 {
         cancel.check()?;
-        let mut plane = vec![0f32; n];
-        for i in 0..n {
-            plane[i] = rgb[i * 3 + c];
-        }
-        low[c] = guided_filter(&plane, width, height, radius, eps);
-        for i in 0..n {
-            high[c][i] = plane[i] - low[c][i];
+        let filtered = guided_filter(&padded.planes[c], fw, fh, radius, eps);
+        for y in 0..mh {
+            for x in 0..mw {
+                let l = filtered[((y + oy) * fw + (x + ox)) as usize];
+                let i = (y * mw + x) as usize;
+                low[c][i] = l;
+                high[c][i] = roi[i * 3 + c] - l;
+            }
         }
     }
     Ok((low, high))
@@ -272,5 +296,174 @@ mod tests {
         let beauty = BeautyParams::default();
         run_skin_retouch(&mut img, &mask, &geometry, &beauty, 0.0, &CancelToken::default()).unwrap();
         assert_eq!(img.into_raw(), before.into_raw());
+    }
+
+    // —— S1.1 P1：频率分离真实 Halo ——
+
+    fn ramp_image(w: u32, h: u32) -> Image16 {
+        let mut img = Image16::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let r = (x as f32 / w as f32 * 60000.0) as u16;
+                let g = (y as f32 / h as f32 * 50000.0) as u16;
+                let b = 20_000u16;
+                img.put_pixel(x, y, Rgba([r, g, b, 65535]));
+            }
+        }
+        img
+    }
+
+    fn manual_mask(x0: i32, y0: i32, w: u32, h: u32) -> SkinMask {
+        SkinMask {
+            x0,
+            y0,
+            width: w,
+            height: h,
+            alpha: vec![1.0f32; (w * h) as usize],
+        }
+    }
+
+    fn roi_of(img: &Image16, mask: &SkinMask) -> Vec<f32> {
+        let mut out = vec![0f32; (mask.width * mask.height * 3) as usize];
+        for y in 0..mask.height {
+            for x in 0..mask.width {
+                let gx = (mask.x0 + x as i32) as u32;
+                let gy = (mask.y0 + y as i32) as u32;
+                let p = img.get_pixel(gx, gy).0;
+                let i = ((y * mask.width + x) as usize) * 3;
+                out[i] = p[0] as f32 / 65535.0;
+                out[i + 1] = p[1] as f32 / 65535.0;
+                out[i + 2] = p[2] as f32 / 65535.0;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn split_planes_halo_matches_full_frame_guided_filter() {
+        // 内部 ROI：带 Halo 的 split 应与「全图引导滤波后裁剪」一致（消除矩形接缝的定义）。
+        use crate::ai_engine::retouch::filter::guided_filter;
+        let img = ramp_image(100, 100);
+        let mask = manual_mask(30, 30, 40, 40);
+        let roi = roi_of(&img, &mask);
+        let radius = 6u32;
+        let eps = 0.004f32;
+        let (low, high) = split_planes(&img, &mask, &roi, radius, eps, &CancelToken::default())
+            .unwrap();
+
+        // 参考：全图平面引导滤波 → 裁 ROI。
+        for c in 0..3 {
+            let mut plane = vec![0f32; 100 * 100];
+            for y in 0..100u32 {
+                for x in 0..100u32 {
+                    plane[(y * 100 + x) as usize] =
+                        img.get_pixel(x, y).0[c] as f32 / 65535.0;
+                }
+            }
+            let full_low = guided_filter(&plane, 100, 100, radius, eps);
+            let mut max_err = 0.0f32;
+            for y in 0..40u32 {
+                for x in 0..40u32 {
+                    let got = low[c][(y * 40 + x) as usize];
+                    let want = full_low[((y + 30) * 100 + (x + 30)) as usize];
+                    max_err = max_err.max((got - want).abs());
+                }
+            }
+            assert!(
+                max_err < 1e-4,
+                "Halo split 应与全图引导滤波一致 c={c} max_err={max_err}"
+            );
+        }
+        // high = roi - low 校验
+        for i in 0..40 * 40 {
+            for c in 0..3 {
+                let expect = roi[i * 3 + c] - low[c][i];
+                assert!((high[c][i] - expect).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn split_planes_no_rectangular_seam_on_ramp() {
+        // 纯渐变图：ROI 内 low 应保持线性，边界列不得被拉平（矩形接缝）。
+        let img = ramp_image(96, 96);
+        let mask = manual_mask(24, 24, 48, 48);
+        let roi = roi_of(&img, &mask);
+        let (low, _high) = split_planes(
+            &img,
+            &mask,
+            &roi,
+            6,
+            0.004,
+            &CancelToken::default(),
+        )
+        .unwrap();
+        // R 通道沿 x 线性：low 应贴合理想斜坡。
+        let k = 60000.0f32 / 65535.0;
+        let r0 = 24.0f32 / 96.0;
+        let r1 = 71.0f32 / 96.0;
+        for y in 0..48u32 {
+            for x in 0..48u32 {
+                let t = x as f32 / 47.0;
+                let want = (r0 + (r1 - r0) * t) * k;
+                let got = low[0][(y * 48 + x) as usize];
+                assert!(
+                    (got - want).abs() < 0.02,
+                    "ROI 边界不得出现矩形接缝 ({x},{y}) got={got:.4} want={want:.4}"
+                );
+            }
+        }
+        // 列间梯度连续：首/末列跳变不得显著大于内部中位差。
+        let col_mean = |x: usize| -> f32 {
+            (0..48).map(|y| low[0][y * 48 + x]).sum::<f32>() / 48.0
+        };
+        let mut jumps = Vec::new();
+        for x in 1..48 {
+            jumps.push((col_mean(x) - col_mean(x - 1)).abs());
+        }
+        let mut sorted = jumps.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = sorted[sorted.len() / 2];
+        let limit = (median * 4.0).max(0.005);
+        assert!(
+            jumps[0] <= limit && jumps[jumps.len() - 1] <= limit,
+            "列梯度在 ROI 边界不得突变 first={:?} last={:?} median={median} limit={limit}",
+            jumps[0],
+            jumps[jumps.len() - 1]
+        );
+    }
+
+    #[test]
+    fn split_planes_corner_roi_edge_policy_consistent() {
+        // ROI 触及图像左上角：边缘复制策略，不得产生 NaN/黑洞，且保持渐变趋势。
+        let img = ramp_image(64, 64);
+        let mask = manual_mask(0, 0, 32, 32);
+        let roi = roi_of(&img, &mask);
+        let (low, high) = split_planes(
+            &img,
+            &mask,
+            &roi,
+            5,
+            0.004,
+            &CancelToken::default(),
+        )
+        .unwrap();
+        for c in 0..3 {
+            for v in low[c].iter().chain(high[c].iter()) {
+                assert!(v.is_finite(), "角 ROI 输出必须有限");
+            }
+        }
+        // R 沿 x 上升、G 沿 y 上升（斜坡不被拉平）
+        let r_span = low[0][31] - low[0][0];
+        let g_span = low[1][31 * 32] - low[1][0];
+        assert!(r_span > 0.05, "R 斜坡应保留 span={r_span}");
+        assert!(g_span > 0.05, "G 斜坡应保留 span={g_span}");
+        // B 为常量：不得被填充为黑色
+        let b_mean = low[2].iter().sum::<f32>() / low[2].len() as f32;
+        let want_b = 20_000.0f32 / 65535.0;
+        assert!(
+            (b_mean - want_b).abs() < 0.02,
+            "常量通道不得被黑填充 b_mean={b_mean} want={want_b}"
+        );
     }
 }

@@ -219,4 +219,41 @@ mod tests {
         even_low_frequency_wh(&mut low, 4, 4, &[1.0; 16], 0.0, &CancelToken::default()).unwrap();
         assert_eq!(low[0], before);
     }
+
+    #[test]
+    fn split_halo_matches_full_frame_guided_filter() {
+        // frequency::split 的 Halo 路径应与全图引导滤波裁剪一致（内部 ROI）。
+        use crate::ai_engine::retouch::filter::guided_filter;
+        let mut img: Image16 = Image16::from_pixel(96, 96, Rgba([30_000, 28_000, 26_000, 65535]));
+        for y in 8..88 {
+            for x in 8..88 {
+                let noise = (((x * 5 + y * 3) % 7) as i32 - 3) * 1500;
+                let p = img.get_pixel_mut(x, y);
+                p.0[0] = ((p.0[0] as i32 + noise).clamp(0, 65535)) as u16;
+            }
+        }
+        let mask = build_skin_mask(&img, &face(), &ManualMask::default()).unwrap();
+        let radius = 4u32;
+        let split = split(&img, &mask, radius, 0.004, &CancelToken::default()).unwrap();
+        let (mw, mh) = (mask.width, mask.height);
+        let (ox, oy) = (mask.x0 as u32, mask.y0 as u32);
+        for c in 0..3 {
+            let mut plane = vec![0f32; 96 * 96];
+            for y in 0..96u32 {
+                for x in 0..96u32 {
+                    plane[(y * 96 + x) as usize] = img.get_pixel(x, y).0[c] as f32 / 65535.0;
+                }
+            }
+            let full_low = guided_filter(&plane, 96, 96, radius, 0.004);
+            let mut max_err = 0.0f32;
+            for y in 0..mh {
+                for x in 0..mw {
+                    let got = split.low[c][(y * mw + x) as usize];
+                    let want = full_low[((y + oy) * 96 + (x + ox)) as usize];
+                    max_err = max_err.max((got - want).abs());
+                }
+            }
+            assert!(max_err < 1e-4, "split Halo 应匹配全图滤波 c={c} err={max_err}");
+        }
+    }
 }
