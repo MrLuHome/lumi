@@ -24,3 +24,6 @@ dist/
 # Rust / Tauri 构建产物
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# 真人像验收素材（隐私照片，不进版本库）
+beauty-validation/
