@@ -407,6 +407,34 @@ describe("一键精修计划", () => {
     expect(buildOneClickPlan({ ...baseInput, mode: "advanced", report: dark }).params.exposure).toBe(-8);
   });
 
+  it("纹理保护类字段（texture/detail）不得随档位上升，否则高档抵消磨皮力度", () => {
+    const valueOf = (mode: "natural" | "refined" | "advanced", key: "texture" | "detail") =>
+      buildOneClickPlan({ ...baseInput, mode }).faces[0]?.beauty[key] ?? 0;
+    for (const key of ["texture", "detail"] as const) {
+      const natural = valueOf("natural", key);
+      const refined = valueOf("refined", key);
+      const advanced = valueOf("advanced", key);
+      // 旧逻辑把 texture/detail 与 skinSmooth 乘同一档位增益（0.45/0.7/1.0），
+      // 引擎 eps/retention 随之上升，恰好抵消 skinSmooth 提升 → 三档肉眼不可分辨。
+      expect(refined).toBeLessThanOrEqual(natural);
+      expect(advanced).toBeLessThanOrEqual(refined);
+      // 但仍要保住「不塑料脸」的纹理保护底线，不能归零。
+      expect(advanced).toBeGreaterThan(0);
+    }
+  });
+
+  it("三档曝光有可分辨梯度，不得有两档都撞到同一个 clamp 上限", () => {
+    const exposureOf = (mode: "natural" | "refined" | "advanced") =>
+      buildOneClickPlan({ ...baseInput, mode }).params.exposure ?? 0;
+    const natural = exposureOf("natural");
+    const refined = exposureOf("refined");
+    const advanced = exposureOf("advanced");
+    expect(natural).toBeLessThan(refined);
+    expect(refined).toBeLessThan(advanced);
+    // baseInput 的 exposure 建议是 18（足够大）：旧逻辑下精致/高级都会撞到全局上限 8。
+    expect([natural, refined, advanced].filter((v) => v === 8).length).toBeLessThanOrEqual(1);
+  });
+
   it("没痘时不硬塞祛痘组（瑕疵密度无信号）", () => {
     const clean = beautyAnalysis([
       {
@@ -485,7 +513,8 @@ describe("一键精修计划", () => {
     });
     expect(plan.kept).toBeGreaterThan(0);
     expect(plan.faces[0]?.beauty.skinSmooth).toBeUndefined();
-    expect(plan.faces[0]?.beauty.texture).toBeGreaterThan(0);
+    // texture/detail 已不随档位变化，换档时它们不需要重写；这里检查真正随档位重算的字段。
+    expect(plan.faces[0]?.beauty.blemish).toBeGreaterThan(0);
     // 用户值原样留在参数里。
     expect(applyOneClickPlan(edited, plan).faces[0]?.beauty.skinSmooth).toBe(20);
   });

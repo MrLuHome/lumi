@@ -249,8 +249,24 @@ const AI_SUGGEST_CAP: Partial<Record<BeautyKey, number>> = {
 /** 瑕疵密度低于此值视为「没痘」，一键不硬塞祛痘组（对齐 §6.2 的门控）。 */
 const BLEMISH_DENSITY_GATE = 0.003;
 
-/** 一键路径 exposure 相对锚点的最大位移（手动路径不受此限制）。 */
-const ONE_CLICK_EXPOSURE_LIMIT = 8;
+/**
+ * 纹理保护类字段。`smoothing.rs` 中 texture 抬高引导滤波 eps（更保护皮肤细节）、
+ * detail 抬高 retention（回注更多高频）。若它们与 skinSmooth 同乘档位增益，
+ * 高档会更保护细节，恰好抵消 skinSmooth 提升 → 三档肉眼不可分辨。
+ * 因此这两个字段不随档位上升，固定用满档剖面（仍受问题分析调节与整体强度缩放）。
+ */
+const TEXTURE_PROTECTION_KEYS = new Set<BeautyKey>(["texture", "detail"]);
+
+/**
+ * 一键路径 exposure 相对锚点的最大位移（手动路径不受此限制）。
+ * 按档位分层（4 / 6.5 / 8）：若三档共用同一上限，强建议照片上精致/高级都会撞顶 8，
+ * 相邻档就没有可分辨的曝光梯度了。
+ */
+const ONE_CLICK_EXPOSURE_LIMIT: Record<OneClickMode, number> = {
+  natural: 4,
+  refined: 6.5,
+  advanced: 8,
+};
 
 /** 覆盖判定的容差（§5.5）。 */
 export const WRITE_TOLERANCE = 0.5;
@@ -699,7 +715,10 @@ function beautyTargets(
       const value = suggested[key];
       if (peak === undefined || peak <= 0) continue;
       if (!Number.isFinite(value) || value <= 0) continue;
-      const target = capBeauty(key, peak * factor[id] * severityFromSuggestion(key, value) * overall);
+      // 纹理保护类不乘档位增益：高档只靠 skinSmooth 变强，texture/detail 固定，
+      // 让引擎的 eps/retention 保持「不塑料脸」底线，而不再抵消平滑力度。
+      const gain = TEXTURE_PROTECTION_KEYS.has(key) ? 1 : factor[id];
+      const target = capBeauty(key, peak * gain * severityFromSuggestion(key, value) * overall);
       if (target > 0) targets[key] = target;
     }
   }
@@ -768,14 +787,11 @@ export function buildOneClickPlan(input: OneClickInput): OneClickPlan {
       if (delta === undefined) continue;
       const anchor = anchorSource[key] ?? current[key];
       let increment = delta * factor[id] * overall;
-      // 全图曝光对 100% 像素生效，皮肤算法只在几何蒙版内。一键路径把曝光位移
-      // 收到 ±8（手动六项路径不受限），否则用户只会看见「稍微变亮」。
+      // 全图曝光对 100% 像素生效，皮肤算法只在几何蒙版内。一键路径按档位把曝光位移
+      // 分层收紧（手动六项路径不受限），否则用户只会看见「稍微变亮」，相邻档还会撞顶。
       if (key === "exposure") {
-        increment = clamp(
-          increment,
-          -ONE_CLICK_EXPOSURE_LIMIT,
-          ONE_CLICK_EXPOSURE_LIMIT,
-        );
+        const limit = ONE_CLICK_EXPOSURE_LIMIT[input.mode];
+        increment = clamp(increment, -limit, limit);
       }
       const target = capAdjust(key, anchor + increment);
       const existing = current[key];

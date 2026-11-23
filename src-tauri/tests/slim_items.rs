@@ -412,6 +412,16 @@ impl OneClickMode {
             OneClickMode::Advanced => (1.00, 0.65, 0.55),
         }
     }
+
+    /// 一键 exposure 按档位分层上限（4 / 6.5 / 8），对齐 TS `ONE_CLICK_EXPOSURE_LIMIT`。
+    /// 共用同一上限时，强建议照片的精致/高级会一起撞顶，相邻档就没梯度了。
+    fn exposure_limit(self) -> f32 {
+        match self {
+            OneClickMode::Natural => 4.0,
+            OneClickMode::Refined => 6.5,
+            OneClickMode::Advanced => 8.0,
+        }
+    }
 }
 
 fn round1(v: f32) -> f32 {
@@ -437,8 +447,10 @@ fn one_click_beauty(
     let (gain, _, _) = mode.gains();
     let mut out = BeautyParams::default();
     out.skin_smooth = blend(70.0, suggested.skin_smooth, 55.0, gain, 85.0);
-    out.texture = blend(55.0, suggested.texture, 70.0, gain, 80.0);
-    out.detail = blend(28.0, suggested.detail, 25.0, gain, 45.0);
+    // 纹理保护类不乘档位增益（对齐 TS `TEXTURE_PROTECTION_KEYS`）：
+    // 否则高档 eps/retention 更高，抵消 skinSmooth 提升，三档肉眼不可分辨。
+    out.texture = blend(55.0, suggested.texture, 70.0, 1.0, 80.0);
+    out.detail = blend(28.0, suggested.detail, 25.0, 1.0, 45.0);
     // 没痘不硬塞：瑕疵密度无信号时整组不写。
     if blemish_density >= 0.003 {
         out.blemish = blend(90.0, suggested.blemish, 55.0, gain, 95.0);
@@ -456,7 +468,7 @@ fn one_click_beauty(
     out
 }
 
-/// 镜像 TS 一键 tonal 分支：增量 × gain，exposure 收到 ±8。
+/// 镜像 TS 一键 tonal 分支：增量 × gain，exposure 按档位收到 ±limit。
 fn one_click_tonal(suggestions: &[RetouchSuggestion], mode: OneClickMode) -> EditParams {
     let (_, light, color) = mode.gains();
     let mut out = EditParams::default();
@@ -472,7 +484,8 @@ fn one_click_tonal(suggestions: &[RetouchSuggestion], mode: OneClickMode) -> Edi
         };
         let mut increment = delta * gain;
         if item.field == "exposure" {
-            increment = increment.clamp(-8.0, 8.0);
+            let limit = mode.exposure_limit();
+            increment = increment.clamp(-limit, limit);
         }
         let value = round1(increment);
         match item.field.as_str() {
@@ -601,8 +614,8 @@ fn one_click_three_modes_are_visible_and_balanced() {
         "高级/自然 像素组间比不足：{}",
         cheek_diffs[2] / cheek_diffs[0]
     );
-    // 参数层相邻组间比 ≥ 1.4；像素层因引擎的 texture 保护随增益上升会部分抵消磨皮，
-    // 相邻像素比实测约 1.37 / 1.23，这里如实记录而不伪装成 1.4。
+    // 参数层相邻组间比 ≥ 1.4。texture/detail 不再随档位上升后，磨皮不再被 eps/retention
+    // 抵消，相邻像素比实测约 1.53 / 1.40（旧逻辑约 1.37 / 1.23）。
     assert!(
         smooth_values[1] / smooth_values[0] >= 1.4 && smooth_values[2] / smooth_values[1] >= 1.4,
         "skinSmooth 三档必须拉开：{smooth_values:?}"
@@ -613,6 +626,59 @@ fn one_click_three_modes_are_visible_and_balanced() {
         cheek_diffs[1] / cheek_diffs[0],
         cheek_diffs[2] / cheek_diffs[1]
     );
+}
+
+/// 数值契约的「改错就红」测试：把 texture/detail 改回随档位增益上升、或把 exposure
+/// 改回三档共用 ±8，本测试立刻失败。TS 侧 `slim.test.ts` 有同样的断言。
+#[test]
+fn one_click_texture_flat_and_exposure_gradient() {
+    let modes = [
+        OneClickMode::Natural,
+        OneClickMode::Refined,
+        OneClickMode::Advanced,
+    ];
+
+    // 强曝光建议 +18：旧逻辑下精致/高级都会撞到全局上限 8，相邻档无梯度。
+    let exposure = RetouchSuggestion {
+        id: "exposure".into(),
+        group: "光影".into(),
+        label: "exposure".into(),
+        target: "param".into(),
+        field: "exposure".into(),
+        current: 0.0,
+        suggested: 18.0,
+        reason: "测试".into(),
+        confidence: 0.8,
+        applicable: true,
+    };
+    let exposures: Vec<f32> = modes
+        .iter()
+        .map(|m| one_click_tonal(&[exposure.clone()], *m).exposure)
+        .collect();
+    assert_eq!(exposures, vec![4.0, 6.5, 8.0], "三档曝光必须分层：{exposures:?}");
+
+    // texture/detail 固定用满档剖面 × severity，不乘档位增益。
+    let mut suggested = BeautyParams::default();
+    suggested.skin_smooth = 27.5;
+    suggested.texture = 40.0;
+    suggested.detail = 20.0;
+    let textures: Vec<f32> = modes
+        .iter()
+        .map(|m| one_click_beauty(&suggested, 0.05, *m).texture)
+        .collect();
+    let details: Vec<f32> = modes
+        .iter()
+        .map(|m| one_click_beauty(&suggested, 0.05, *m).detail)
+        .collect();
+    assert!(
+        textures[1] <= textures[0] && textures[2] <= textures[1],
+        "texture 不得随档位上升：{textures:?}"
+    );
+    assert!(
+        details[1] <= details[0] && details[2] <= details[1],
+        "detail 不得随档位上升：{details:?}"
+    );
+    assert!(textures[2] > 0.0 && details[2] > 0.0, "纹理保护不能归零");
 }
 
 #[test]
