@@ -9,6 +9,7 @@
 //! - 眼睑、唇轮廓、鼻翼等需要稠密轮廓的参数在 UI 中禁用并提示；
 //! - 所有变形限制在脸部椭圆内，外圈控制点固定，背景不会被弯曲。
 
+pub mod ai_slim;
 pub mod blending;
 pub mod boundary;
 pub mod contour;
