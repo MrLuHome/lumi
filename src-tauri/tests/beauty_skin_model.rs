@@ -129,13 +129,83 @@ fn softmax_output_is_a_probability_distribution_not_raw_logits() {
     logits[1] = 3.0486;
     let probabilities = onnx::softmax_classes(&logits).unwrap();
     assert!(probabilities.iter().all(|value| *value >= 0.0 && *value <= 1.0));
+    // tract 输出是 NCHW [1,6,256,256]：同一像素的 6 类概率在 class*pixels + pixel，
+    // 不是相邻 6 个 flat 元素（后者是 6 个不同像素的同一类别）。
     for pixel in [0usize, 7, pixels - 1] {
-        let sum: f32 = probabilities[pixel * 6..(pixel + 1) * 6].iter().sum();
+        let sum: f32 = (0..6).map(|class| probabilities[class * pixels + pixel]).sum();
         assert!((sum - 1.0).abs() < 1e-5, "像素 {pixel} 概率和 {sum}");
     }
     let skin = onnx::skin_alpha_from_probs(&probabilities);
     assert_eq!(skin.len(), pixels);
     assert!(skin.iter().all(|value| *value >= 0.0 && *value <= 1.0));
+}
+
+/// 按 NCHW `[6,256,256]` 造 logits：通道 c 的第 p 个像素在 `c*PIXELS + p`。
+const PIXELS: usize = 256 * 256;
+const CLASSES: usize = 6;
+const BODY_SKIN: usize = 2;
+const FACE_SKIN: usize = 3;
+fn nchw(class: usize, pixel: usize) -> usize {
+    class * PIXELS + pixel
+}
+
+#[test]
+fn skin_mask_tracks_image_content_left_vs_right() {
+    // 内容相关 fixture：皮肤类(2/3)左半 logit=+5、右半=-5，其余类保持 0。
+    // 旧的错误 stride（pixel*6+class）只会读到 class0 全 0 的通道，得到恒定 1/3 → 本测试变红。
+    let mut logits = vec![0f32; CLASSES * PIXELS];
+    for y in 0..256usize {
+        for x in 0..256usize {
+            let p = y * 256 + x;
+            let value = if x < 128 { 5.0 } else { -5.0 };
+            logits[nchw(BODY_SKIN, p)] = value;
+            logits[nchw(FACE_SKIN, p)] = value;
+        }
+    }
+    let probabilities = onnx::softmax_classes(&logits).unwrap();
+    let skin = onnx::skin_alpha_from_probs(&probabilities);
+
+    let column = |x: usize| -> f32 {
+        (0..256usize).map(|y| skin[y * 256 + x]).sum::<f32>() / 256.0
+    };
+    let left = column(64);
+    let right = column(192);
+    assert!(
+        left - right > 0.3,
+        "左半 p(skin)={left}，右半 p(skin)={right}：蒙版必须跟内容走，不能是恒定 1/3 的伪蒙版"
+    );
+}
+
+#[test]
+fn permuting_class_channels_changes_the_mask() {
+    // 基线：皮肤信号全图放在真皮肤通道 2/3。
+    let mut base = vec![0f32; CLASSES * PIXELS];
+    for p in 0..PIXELS {
+        base[nchw(BODY_SKIN, p)] = 5.0;
+        base[nchw(FACE_SKIN, p)] = 5.0;
+    }
+    let base_skin = onnx::skin_alpha_from_probs(&onnx::softmax_classes(&base).unwrap());
+
+    // 轮转类别通道：old c -> new perm[c]，把皮肤信号从 2/3 搬到 4/5，
+    // 且 class0 通道仍是全 0。正确实现读 2/3 → 蒙版剧变；
+    // 错误实现读 class0 交错位置 → 蒙版不变（证明它读串了通道）。
+    let perm = [0usize, 1, 4, 5, 2, 3];
+    let mut shuffled = vec![0f32; CLASSES * PIXELS];
+    for p in 0..PIXELS {
+        for class in 0..CLASSES {
+            shuffled[nchw(perm[class], p)] = base[nchw(class, p)];
+        }
+    }
+    let shuffled_skin = onnx::skin_alpha_from_probs(&onnx::softmax_classes(&shuffled).unwrap());
+
+    let mean = |map: &[f32]| -> f32 { map.iter().sum::<f32>() / map.len() as f32 };
+    let base_mean = mean(&base_skin);
+    let shuffled_mean = mean(&shuffled_skin);
+    assert!(
+        (base_mean - shuffled_mean).abs() > 0.3,
+        "通道打乱后蒙版应显著变化：base={base_mean}，shuffled={shuffled_mean}；\
+         若两者相等说明实现读串了类别通道"
+    );
 }
 
 #[test]

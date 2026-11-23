@@ -269,6 +269,11 @@ fn run_segmentation(plan: &LoadedPlan, crop: &RgbImage) -> AppResult<Vec<f32>> {
 
 /// 沿类别维（NCHW 的 axis=1，步长 = 256×256）做**数值稳定**的 softmax。
 /// 图内 6 个 Softmax 都在 ViT 注意力内部，不是类别维，必须在这里自行做。
+///
+/// tract 输出布局是 `[1,6,256,256]`（NCHW），flat 缓冲为 `c * 65536 + y*256 + x`：
+/// 同一像素 p 的 6 个类别 logits **不相邻**，而是位于 `class*pixel_count + p`。
+/// 曾错误地按 `p*CLASSES + class`（逐像素交错 NHWC）索引，导致输出恒定 1/3、
+/// 与图像内容无关的伪蒙版；这里必须按 NCHW stride 取数。
 pub fn softmax_classes(logits: &[f32]) -> AppResult<Vec<f32>> {
     let pixel_count = (INPUT_SIDE as usize) * (INPUT_SIDE as usize);
     if logits.len() != CLASSES * pixel_count {
@@ -285,26 +290,38 @@ pub fn softmax_classes(logits: &[f32]) -> AppResult<Vec<f32>> {
         record_failure(reason.clone());
         return Err(AppError::Unsupported(reason));
     }
-    let mut probabilities = vec![0f32; logits.len()];
-    for pixel in 0..pixel_count {
-        let base = pixel * CLASSES;
-        let max = logits[base..base + CLASSES]
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let mut sum = 0.0f32;
-        for class in 0..CLASSES {
-            let exponent = (logits[base + class] - max).exp();
-            probabilities[base + class] = exponent;
-            sum += exponent;
+
+    // 每个像素的最大值必须跨 6 个类别取：max_c logits[c*pixel_count + p]。
+    let mut maxima = vec![f32::NEG_INFINITY; pixel_count];
+    for class in 0..CLASSES {
+        let offset = class * pixel_count;
+        for (pixel, max) in maxima.iter_mut().enumerate() {
+            *max = (*max).max(logits[offset + pixel]);
         }
+    }
+
+    // exp 后按类累加分母，probabilities 与 logits 保持同布局（NCHW）。
+    let mut probabilities = vec![0f32; logits.len()];
+    let mut sums = vec![0f32; pixel_count];
+    for class in 0..CLASSES {
+        let offset = class * pixel_count;
+        for pixel in 0..pixel_count {
+            let idx = offset + pixel;
+            let exponent = (logits[idx] - maxima[pixel]).exp();
+            probabilities[idx] = exponent;
+            sums[pixel] += exponent;
+        }
+    }
+
+    for pixel in 0..pixel_count {
+        let sum = sums[pixel];
         if !sum.is_finite() || sum <= 0.0 {
             let reason = format!("皮肤解析 softmax 在第 {pixel} 个像素上无效（sum={sum}）");
             record_failure(reason.clone());
             return Err(AppError::Unsupported(reason));
         }
         for class in 0..CLASSES {
-            probabilities[base + class] /= sum;
+            probabilities[class * pixel_count + pixel] /= sum;
         }
     }
     Ok(probabilities)
@@ -320,12 +337,14 @@ pub fn fuse_alpha(model_alpha: &[f32], geometry_alpha: &[f32]) -> Vec<f32> {
 }
 
 /// 取 `p(body-skin=2) + p(face-skin=3)` 作为皮肤置信度。
+/// 概率缓冲与 tract 输出同为 NCHW：通道 c 的第 pixel 个像素在 `c*pixel_count + pixel`。
 pub fn skin_alpha_from_probs(probabilities: &[f32]) -> Vec<f32> {
     let pixel_count = probabilities.len() / CLASSES;
     (0..pixel_count)
         .map(|pixel| {
-            let base = pixel * CLASSES;
-            (probabilities[base + BODY_SKIN] + probabilities[base + FACE_SKIN]).clamp(0.0, 1.0)
+            (probabilities[BODY_SKIN * pixel_count + pixel]
+                + probabilities[FACE_SKIN * pixel_count + pixel])
+                .clamp(0.0, 1.0)
         })
         .collect()
 }
@@ -354,18 +373,20 @@ mod tests {
 
     #[test]
     fn softmax_classes_is_stable_and_sums_to_one() {
-        let mut logits = vec![0f32; CLASSES * INPUT_SIDE as usize * INPUT_SIDE as usize];
-        // 负 logits 也必须得到非负概率（"负数当概率"陷阱）。
-        logits[0] = -1.49;
-        logits[1] = 3.05;
-        logits[6] = -100.0;
-        logits[7] = 100.0;
+        let pixels = INPUT_SIDE as usize * INPUT_SIDE as usize;
+        let mut logits = vec![0f32; CLASSES * pixels];
+        // 极端 logit 必须放在**同一像素的不同类别**（NCHW: class*pixels + pixel），
+        // 才能检验最大值是跨 6 个类别取的；负 logits 也不能当概率直接用。
+        logits[0 * pixels + 0] = -1.49;
+        logits[1 * pixels + 0] = 3.05;
+        logits[0 * pixels + 1] = -100.0;
+        logits[1 * pixels + 1] = 100.0;
         let probs = softmax_classes(&logits).unwrap();
-        let pixels = probs.len() / CLASSES;
-        assert_eq!(pixels, INPUT_SIDE as usize * INPUT_SIDE as usize);
+        assert_eq!(probs.len() / CLASSES, pixels);
         assert!(probs.iter().all(|value| *value >= 0.0 && value.is_finite()));
+        // 一个像素的 6 类概率位于 class*pixels + pixel（不是相邻 6 个）。
         for pixel in [0usize, 1, pixels - 1] {
-            let sum: f32 = probs[pixel * CLASSES..(pixel + 1) * CLASSES].iter().sum();
+            let sum: f32 = (0..CLASSES).map(|class| probs[class * pixels + pixel]).sum();
             assert!((sum - 1.0).abs() < 1e-5, "像素 {pixel} 概率和 {sum}");
         }
         let skin = skin_alpha_from_probs(&probs);
