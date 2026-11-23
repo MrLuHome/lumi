@@ -23,7 +23,8 @@ use crate::image_engine::buffer::Image16;
 use crate::image_engine::cancel::CancelToken;
 use crate::image_engine::params::{BeautyParams, RepairPoint};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FaceRetouchReport {
     pub face_id: u32,
     pub skin_pixels: usize,
@@ -32,6 +33,16 @@ pub struct FaceRetouchReport {
     pub blemish_skipped: Option<String>,
     /// S1：磨皮核心是否执行。
     pub skin_engine_ran: bool,
+    /// 双边网格阶段是否真正进入（strength>0 且处理权重非空）。
+    pub bilateral_grid_ran: bool,
+    /// 融合写回的像素数（0 = 没有任何像素被修改）。
+    pub fused_pixels: u64,
+    /// 处理权重在 ROI 上的均值（0..1）；≈0 说明蒙版/保护把处理压没了。
+    pub process_coverage: f32,
+    /// 皮肤区高频纹理保留率（quality.skin.texture_keep_ratio）。
+    pub skin_keep_ratio: f32,
+    /// 皮肤区平均 |ΔRGB|（quality.skin.mean_abs_delta，0..1）。
+    pub skin_mean_delta: f32,
     pub over_smooth_risk: f32,
     pub protected_leak: f32,
     pub notes: Vec<String>,
@@ -82,6 +93,15 @@ pub fn apply_face_retouch(
         cancel,
     )?;
     report.skin_engine_ran = true;
+    report.bilateral_grid_ran = out.grid_ran;
+    report.fused_pixels = out.fused_pixels;
+    report.process_coverage = if out.process_mask.is_empty() {
+        0.0
+    } else {
+        out.process_mask.iter().sum::<f32>() / out.process_mask.len() as f32
+    };
+    report.skin_keep_ratio = out.quality.skin.texture_keep_ratio;
+    report.skin_mean_delta = out.quality.skin.mean_abs_delta;
     report.over_smooth_risk = out.quality.over_smooth_risk;
     report.protected_leak = out.quality.protected_leak;
     report.notes = out.quality.notes.clone();

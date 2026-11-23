@@ -31,6 +31,11 @@ pub struct BilateralGridParams {
     pub strength: f32,
     /// 细节 soft-threshold 0..1（越大越保护高频）。
     pub detail_threshold: f32,
+    /// 细节回注地板 0..1：网格平滑后允许回注回来的比例下限。
+    /// **只由 texture/detail 决定（纹理保护归纹理旋钮），不随 strength 变化**——
+    /// 否则强度在 grid(s)、采纳(m·s)、回注地板(0.9−0.75s) 三处重复计效，
+    /// 有效强度被压成非线性的小量（一键精修“几乎无效果”的根因之一）。
+    pub detail_keep_floor: f32,
 }
 
 impl Default for BilateralGridParams {
@@ -41,6 +46,7 @@ impl Default for BilateralGridParams {
             levels: 3,
             strength: 0.5,
             detail_threshold: 0.25,
+            detail_keep_floor: 0.35,
         }
     }
 }
@@ -57,6 +63,10 @@ pub fn params_from_strength(smoothing: f32, texture: f32, detail: f32) -> Bilate
         strength: s,
         // 纹理保护越高，阈值越高，越少抹掉毛孔。
         detail_threshold: (0.10 + 0.35 * texture + 0.15 * detail).clamp(0.05, 0.7),
+        // 回注地板只看纹理/细节旋钮：texture 高 → 地板高 → 多回注（护毛孔）；
+        // texture 低（肤质本身光滑/要求强磨皮）→ 地板低 → 少回注。
+        // 强度 s 不再进入地板，净平滑 ≈ s × (1 − floor)，对 s 线性。
+        detail_keep_floor: (0.15 + 0.45 * texture).clamp(0.10, 0.75),
     }
 }
 
@@ -232,16 +242,21 @@ pub fn bilateral_grid_smooth_with_stats(
             .push((level, down_ms, proc_ms, blend_ms));
     }
 
-    // 细节层：original(=rgb 尚未被改写) - combined，soft threshold 后按 strength 与 mask 回注。
+    // 细节层：original(=rgb 尚未被改写) - combined，soft threshold 后按蒙版回注。
     // 逐像素先读后写、同址更新，因此无需再复制一份原图。
+    //
+    // 采纳系数只用蒙版 m（羽化），**不再乘 strength**：强度已在 grid_pass 内部
+    // 生效一次，这里再乘会让有效强度变成 strength²（自然档 0.32 → 0.10），
+    // 违反「强度与效果线性」的产品契约，表现为一键精修几乎无效果。
+    // 回注地板同样与 strength 解耦（见 detail_keep_floor）。
     let thr = params.detail_threshold;
-    let keep_base = 0.15 + 0.75 * (1.0 - params.strength); // 强度越大，回注越少
+    let keep_base = params.detail_keep_floor;
     for p in 0..n {
         let m = mask.map(|m| m[p].clamp(0.0, 1.0)).unwrap_or(1.0);
         if m <= 0.01 {
             continue;
         }
-        let blend = m * params.strength;
+        let blend = m;
         for c in 0..3 {
             let idx = p * 3 + c;
             let src = rgb[idx];
@@ -767,6 +782,7 @@ mod tests {
             levels: 2,
             strength: 0.8,
             detail_threshold: 0.2,
+            ..Default::default()
         }
     }
 
@@ -921,6 +937,7 @@ mod tests {
             levels: 1,
             strength: 1.0,
             detail_threshold: 0.1,
+            ..Default::default()
         };
         bilateral_grid_smooth(&mut rgb, w, h, Some(&mask), &p, &CancelToken::default()).unwrap();
         for y in 0..h {
@@ -1059,6 +1076,7 @@ mod tests {
             levels: 2,
             strength: 1.0,
             detail_threshold: 0.1,
+            ..Default::default()
         };
         let pred = |x: u32, _y: u32| x < w / 2 - 6;
         let before = region_mean(&rgb, w, h, pred);
@@ -1105,6 +1123,7 @@ mod tests {
             levels: 2,
             strength: 1.0,
             detail_threshold: 0.1,
+            ..Default::default()
         };
         let pred = |x: u32, _y: u32| x < w / 2 - 6;
         let before = region_mean(&rgb, w, h, pred);
@@ -1151,6 +1170,7 @@ mod tests {
             levels: 2,
             strength: 1.0,
             detail_threshold: 0.1,
+            ..Default::default()
         };
         let pred = |x: u32, _y: u32| x < w / 2 - 6;
         let before = region_mean(&rgb, w, h, pred);
@@ -1207,6 +1227,7 @@ mod tests {
             levels: 2,
             strength: 1.0,
             detail_threshold: 0.1,
+            ..Default::default()
         };
         bilateral_grid_smooth(&mut rgb, w, h, Some(&mask), &p, &CancelToken::default()).unwrap();
         let after = region_mean(&rgb, w, h, pred);
@@ -1239,6 +1260,7 @@ mod tests {
             levels: 1,
             strength: 1.0,
             detail_threshold: 0.1,
+            ..Default::default()
         };
         let left = |x: u32, _y: u32| x < w / 2 - 4;
         let right = |x: u32, _y: u32| x >= w / 2 + 4;
@@ -1448,6 +1470,7 @@ mod tests {
             levels,
             strength: 0.7,
             detail_threshold: 0.2,
+            ..Default::default()
         };
 
         let mut single = orig.clone();

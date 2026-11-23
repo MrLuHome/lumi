@@ -34,6 +34,9 @@ pub struct MaskReport {
 #[serde(rename_all = "camelCase")]
 pub struct PipelineReport {
     pub reshape: Vec<FaceReshapeReport>,
+    /// 每张脸的美肤执行明细（S1.2 诊断：参数是否生效、融合像素、皮肤变化）。
+    #[serde(default)]
+    pub faces: Vec<FaceRetouchReport>,
     /// 第五轮：每个身材对象的处理结果。
     pub body: Vec<BodyReport>,
     pub background: Option<BackgroundReport>,
@@ -197,7 +200,15 @@ pub fn render_with_report(
             report.warnings.push("未检测到人脸，已跳过美肤".into());
         } else {
             progress(0.06, "皮肤分割");
-            apply_beauty(&mut output, &params, faces, cancel, &mut *progress)?;
+            let beauty_reports =
+                apply_beauty(&mut output, &params, faces, cancel, &mut *progress)?;
+            if beauty_reports.is_empty() {
+                report.warnings.push(
+                    "美肤未执行：没有人脸携带生效参数（检查参数条目是否启用）或蒙版构建失败"
+                        .into(),
+                );
+            }
+            report.faces = beauty_reports;
         }
     }
 

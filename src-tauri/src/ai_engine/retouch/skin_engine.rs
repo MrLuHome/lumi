@@ -25,6 +25,8 @@ pub struct SkinRetouchOutput {
     pub frequency: Option<FrequencySplit>,
     pub fused_pixels: u64,
     pub seam_risk: bool,
+    /// 双边网格阶段是否真正进入（strength>0 且处理权重非空）。
+    pub grid_ran: bool,
 }
 
 /// 执行皮肤精修（不含 blemish/tone/eyes——由上层串联）。
@@ -46,6 +48,7 @@ pub fn run_skin_retouch(
             frequency: None,
             fused_pixels: 0,
             seam_risk: false,
+            grid_ran: false,
         });
     }
 
@@ -81,7 +84,11 @@ pub fn run_skin_retouch(
     // 4) 多尺度双边网格（在基础皮肤上继续平滑，带 process mask）
     let mut grid_params = params_from_strength(strength * 100.0, beauty.texture, beauty.detail);
     grid_params.strength = strength;
-    bilateral_grid_smooth(&mut rgb, mw, mh, Some(&process_w), &grid_params, cancel)?;
+    // 网格只有在处理权重非空时才会真正平滑（全 0 蒙版会在内部提前返回）。
+    let grid_ran = process_w.iter().any(|value| *value > 1e-4);
+    if grid_ran {
+        bilateral_grid_smooth(&mut rgb, mw, mh, Some(&process_w), &grid_params, cancel)?;
+    }
 
     // 5) 质量：before = 原 ROI，after = 处理后 rgb；
     //    skin_w 传原始皮肤蒙版（非 process_w），否则 protect=0 的五官区
@@ -115,6 +122,7 @@ pub fn run_skin_retouch(
         frequency: Some(split_stub),
         fused_pixels: report.fused_pixels,
         seam_risk: report.seam_risk,
+        grid_ran,
     })
 }
 
