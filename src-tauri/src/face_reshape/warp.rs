@@ -19,13 +19,23 @@ pub struct WarpStats {
     pub max_displacement: f32,
 }
 
-/// 网格变形：把 `mesh.points.to` 当作目标位置，从原图采样写回。
+/// 网格变形：把 `mesh.points.to` 当作目标位置，**从 `source` 快照采样**写回 `image`。
+///
+/// `source` 必须是本次变形前的原始图像（pristine）。早期实现直接从正在写回的
+/// `image` 采样：行序自上而下 + 三角形互相覆盖导致「读到已写入的变形像素」，
+/// 产生梳状条纹、鬼影与矩形台阶（S1.2.2 伪影根因）。
 pub fn warp_mesh(
     image: &mut Image16,
+    source: &Image16,
     mesh: &ControlMesh,
     region: &AlphaRegion,
     cancel: &CancelToken,
 ) -> AppResult<WarpStats> {
+    debug_assert_eq!(
+        (image.width(), image.height()),
+        (source.width(), source.height()),
+        "快照与目标尺寸必须一致"
+    );
     let mut stats = WarpStats::default();
     if mesh.triangles.is_empty() || mesh.max_displacement() < 0.01 {
         return Ok(stats);
@@ -34,7 +44,7 @@ pub fn warp_mesh(
     let height = image.height() as i32;
 
     for triangle in &mesh.triangles {
-        let source = [
+        let src_pts = [
             mesh.points[triangle[0]].from,
             mesh.points[triangle[1]].from,
             mesh.points[triangle[2]].from,
@@ -96,13 +106,13 @@ pub fn warp_mesh(
                 if w0 < -0.001 || w1 < -0.001 || w2 < -0.001 {
                     continue;
                 }
-                let sample_x = w0 * source[0][0] + w1 * source[1][0] + w2 * source[2][0];
-                let sample_y = w0 * source[0][1] + w1 * source[1][1] + w2 * source[2][1];
+                let sample_x = w0 * src_pts[0][0] + w1 * src_pts[1][0] + w2 * src_pts[2][0];
+                let sample_y = w0 * src_pts[0][1] + w1 * src_pts[1][1] + w2 * src_pts[2][1];
                 if !sample_x.is_finite() || !sample_y.is_finite() {
                     continue;
                 }
-                let warped = sample_bilinear(image, sample_x - 0.5, sample_y - 0.5);
-                let original = image.get_pixel(x as u32, y as u32).0;
+                let warped = sample_bilinear(source, sample_x - 0.5, sample_y - 0.5);
+                let original = source.get_pixel(x as u32, y as u32).0;
                 let output = crate::face_reshape::blending::mix_pixel(&original, &warped, alpha);
                 image.put_pixel(x as u32, y as u32, Rgba(output));
                 stats.pixels += 1;
@@ -215,10 +225,55 @@ mod tests {
         let before = image.clone();
         let mesh = shifted_mesh(6.0);
         let region = full_region(64, 64);
-        warp_mesh(&mut image, &mesh, &region, &CancelToken::default()).unwrap();
+        warp_mesh(&mut image, &before, &mesh, &region, &CancelToken::default()).unwrap();
         assert_ne!(image.get_pixel(30, 30), before.get_pixel(30, 30));
         assert_eq!(image.get_pixel(2, 2), before.get_pixel(2, 2));
         assert_eq!(image.get_pixel(60, 60), before.get_pixel(60, 60));
+    }
+
+    /// S1.2.2 回归：位移方向与行序一致时，旧实现会读到「已写入的变形像素」
+    /// （自污染）。修复后目标像素必须等于 pristine 快照的逆映射采样值。
+    #[test]
+    fn warp_samples_pristine_snapshot_without_feedback() {
+        let mut image = gradient(64, 64);
+        let before = image.clone();
+        // 四角整体下移 8px（纯 +Y 平移，逆映射 = 目标 - (0,8)）。
+        let pt = |fx: f32, fy: f32| ControlPoint {
+            local: [0.0, 0.0],
+            local_to: [0.0, 0.0],
+            from: [fx, fy],
+            to: [fx, fy + 8.0],
+            tag: ControlTag::Fixed,
+            weight: 0.0,
+        };
+        let points = vec![
+            pt(10.0, 10.0),
+            pt(54.0, 10.0),
+            pt(54.0, 54.0),
+            pt(10.0, 54.0),
+        ];
+        let mut mesh = ControlMesh {
+            points,
+            triangles: Vec::new(),
+            eye_distance: 44.0,
+            bbox: [10.0, 10.0, 54.0, 62.0],
+            version: MESH_VERSION,
+            signature: String::new(),
+        };
+        mesh.rebuild_triangles();
+        let region = full_region(64, 64);
+        warp_mesh(&mut image, &before, &mesh, &region, &CancelToken::default()).unwrap();
+        // 目标 (32,32) ← pristine (32,24)；旧自污染实现会得到 (32,16)。
+        assert_eq!(
+            image.get_pixel(32, 32).0,
+            before.get_pixel(32, 24).0,
+            "必须采样 pristine 快照，不得读到已写入的变形像素"
+        );
+        assert_ne!(
+            image.get_pixel(32, 32).0,
+            before.get_pixel(32, 16).0,
+            "若等于 (32,16) 说明仍在自污染"
+        );
     }
 
     #[test]
@@ -227,7 +282,7 @@ mod tests {
         let before = image.clone();
         let mesh = shifted_mesh(0.0);
         let region = full_region(32, 32);
-        warp_mesh(&mut image, &mesh, &region, &CancelToken::default()).unwrap();
+        warp_mesh(&mut image, &before, &mesh, &region, &CancelToken::default()).unwrap();
         assert_eq!(image.into_raw(), before.into_raw());
     }
 

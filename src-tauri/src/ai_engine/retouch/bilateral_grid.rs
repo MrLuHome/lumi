@@ -89,6 +89,15 @@ pub struct GridStats {
     pub max_cells: u64,
 }
 
+/// 逐尺度诊断捕获（S1.2.2 伪影定位）：只做只读克隆，**不改变正式渲染行为**。
+#[derive(Debug, Default)]
+pub struct GridDebugCapture {
+    /// `(level, w, h, rgb)`：该尺度网格平滑后的结果（level0 为全分辨率，粗层为该层分辨率）。
+    pub level_smoothed: Vec<(u32, u32, u32, Vec<f32>)>,
+    /// 多尺度融合后、细节回注前的全分辨率结果。
+    pub pyramid: Option<Vec<f32>>,
+}
+
 /// 对 RGB 平面（各通道 0..1，行优先）做双边网格平滑，原地写回 `rgb`。
 ///
 /// `mask` 可选：长度 = w*h；None 表示全图。融合权重 = mask（调用方应已羽化）。
@@ -113,10 +122,61 @@ pub fn bilateral_grid_smooth_with_stats(
     params: &BilateralGridParams,
     cancel: &CancelToken,
 ) -> AppResult<GridStats> {
-    let n = (width * height) as usize;
     let mut stats = GridStats::default();
+    grid_core(
+        rgb,
+        width,
+        height,
+        mask,
+        params,
+        cancel,
+        &mut stats,
+        None,
+        SplatMode::Point,
+    )?;
+    Ok(stats)
+}
+
+/// 诊断版：与 `with_stats` 完全同一条核心路径，额外捕获逐尺度结果与金字塔输出。
+/// 捕获只读克隆缓冲，不参与任何计算 → 不改变正式渲染行为。
+pub fn bilateral_grid_smooth_debug(
+    rgb: &mut [f32],
+    width: u32,
+    height: u32,
+    mask: Option<&[f32]>,
+    params: &BilateralGridParams,
+    cancel: &CancelToken,
+    capture: &mut GridDebugCapture,
+) -> AppResult<GridStats> {
+    let mut stats = GridStats::default();
+    grid_core(
+        rgb,
+        width,
+        height,
+        mask,
+        params,
+        cancel,
+        &mut stats,
+        Some(capture),
+        SplatMode::Point,
+    )?;
+    Ok(stats)
+}
+
+fn grid_core(
+    rgb: &mut [f32],
+    width: u32,
+    height: u32,
+    mask: Option<&[f32]>,
+    params: &BilateralGridParams,
+    cancel: &CancelToken,
+    stats: &mut GridStats,
+    mut capture: Option<&mut GridDebugCapture>,
+    splat: SplatMode,
+) -> AppResult<()> {
+    let n = (width * height) as usize;
     if width < 4 || height < 4 || rgb.len() != n * 3 || params.strength <= 0.0 {
-        return Ok(stats);
+        return Ok(());
     }
     if let Some(m) = mask {
         if m.len() != n {
@@ -126,7 +186,7 @@ pub fn bilateral_grid_smooth_with_stats(
         }
         // 蒙版全 0：不参与 splat、不回注 → 恒等，直接返回。
         if m.iter().all(|v| *v <= 1e-4) {
-            return Ok(stats);
+            return Ok(());
         }
     }
 
@@ -151,7 +211,8 @@ pub fn bilateral_grid_smooth_with_stats(
         params.sigma_r,
         params.strength,
         cancel,
-        &mut stats,
+        stats,
+        splat,
     )?;
     if params.strength > 0.01 {
         // 双 pass（与参考管线同型）：第二次仍为满强度。
@@ -164,13 +225,17 @@ pub fn bilateral_grid_smooth_with_stats(
             params.sigma_r,
             params.strength,
             cancel,
-            &mut stats,
+            stats,
+            splat,
         )?;
     }
     let level0_ms = t0.elapsed().as_millis();
     stats
         .level_ms
         .push((0, 0, level0_ms, t_level.elapsed().as_millis()));
+    if let Some(c) = capture.as_mut() {
+        c.level_smoothed.push((0, width, height, combined.clone()));
+    }
 
     // —— 粗层：从最粗到次细依次融合（输入始终为原图 rgb）——
     for level in (1..=levels).rev() {
@@ -200,7 +265,8 @@ pub fn bilateral_grid_smooth_with_stats(
             params.sigma_r,
             strength_level,
             cancel,
-            &mut stats,
+            stats,
+            splat,
         )?;
         if strength_level > 0.01 {
             grid_pass(
@@ -212,10 +278,14 @@ pub fn bilateral_grid_smooth_with_stats(
                 params.sigma_r,
                 params.strength,
                 cancel,
-                &mut stats,
+                stats,
+                splat,
             )?;
         }
         let proc_ms = t_proc.elapsed().as_millis();
+        if let Some(c) = capture.as_mut() {
+            c.level_smoothed.push((level, lw, lh, low.clone()));
+        }
 
         // 融合权重（明确固定，不随实现漂移）：
         //   level 0（最细）w = 1.0；
@@ -240,6 +310,10 @@ pub fn bilateral_grid_smooth_with_stats(
         stats
             .level_ms
             .push((level, down_ms, proc_ms, blend_ms));
+    }
+
+    if let Some(c) = capture.as_mut() {
+        c.pyramid = Some(combined.clone());
     }
 
     // 细节层：original(=rgb 尚未被改写) - combined，soft threshold 后按蒙版回注。
@@ -275,11 +349,46 @@ pub fn bilateral_grid_smooth_with_stats(
             rgb[idx] = value.clamp(0.0, 1.0);
         }
     }
+    Ok(())
+}
+
+/// 实验入口（S1.2.2 §4.2）：三线性分布 Splat 的质量对比分支。
+/// 与 `with_stats` 走完全相同的核心路径，仅 Splat 策略不同；
+/// **未经质量验证不得替换正式算法**（正式路径始终为 `SplatMode::Point`）。
+pub fn bilateral_grid_smooth_splat_experiment(
+    rgb: &mut [f32],
+    width: u32,
+    height: u32,
+    mask: Option<&[f32]>,
+    params: &BilateralGridParams,
+    cancel: &CancelToken,
+) -> AppResult<GridStats> {
+    let mut stats = GridStats::default();
+    grid_core(
+        rgb,
+        width,
+        height,
+        mask,
+        params,
+        cancel,
+        &mut stats,
+        None,
+        SplatMode::Bilinear,
+    )?;
     Ok(stats)
 }
 
 fn luma(r: f32, g: f32, b: f32) -> f32 {
     0.299 * r + 0.587 * g + 0.114 * b
+}
+
+/// Splat 策略（S1.2.2 §4.2 实验分支）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplatMode {
+    /// 正式路径：单节点点 Splat。
+    Point,
+    /// 实验分支：向 2×2×2 邻域做三线性分布 Splat。**未经质量验证不替换正式算法。**
+    Bilinear,
 }
 
 /// 单次双边网格 pass：原地平滑 `rgb`。
@@ -301,6 +410,7 @@ fn grid_pass(
     strength: f32,
     cancel: &CancelToken,
     stats: &mut GridStats,
+    splat: SplatMode,
 ) -> AppResult<()> {
     if strength <= 0.0 {
         return Ok(());
@@ -344,14 +454,56 @@ fn grid_pass(
             let g = rgb[p * 3 + 1];
             let b = rgb[p * 3 + 2];
             let i = luma(r, g, b).clamp(0.0, 1.0);
-            let gx = ((x as f32 / ss + 0.5) as usize + 1).min(nx - 1);
-            let gy = ((y as f32 / ss + 0.5) as usize + 1).min(ny - 1);
-            let gv = ((i / sr + 0.5) as usize + 1).min(nv - 1);
-            let idx = ((gy * nx + gx) * nv + gv) * 4;
-            acc[idx] += r * m;
-            acc[idx + 1] += g * m;
-            acc[idx + 2] += b * m;
-            acc[idx + 3] += m;
+            match splat {
+                SplatMode::Point => {
+                    let gx = ((x as f32 / ss + 0.5) as usize + 1).min(nx - 1);
+                    let gy = ((y as f32 / ss + 0.5) as usize + 1).min(ny - 1);
+                    let gv = ((i / sr + 0.5) as usize + 1).min(nv - 1);
+                    let idx = ((gy * nx + gx) * nv + gv) * 4;
+                    acc[idx] += r * m;
+                    acc[idx + 1] += g * m;
+                    acc[idx + 2] += b * m;
+                    acc[idx + 3] += m;
+                }
+                SplatMode::Bilinear => {
+                    // 与 slice 同一连续坐标：三线性分布到 2×2×2 邻域。
+                    let fx = x as f32 / ss + 1.0;
+                    let fy = y as f32 / ss + 1.0;
+                    let fv = i / sr + 1.0;
+                    let bx = fx.floor();
+                    let by = fy.floor();
+                    let bz = fv.floor();
+                    let tx = (fx - bx).clamp(0.0, 1.0);
+                    let ty = (fy - by).clamp(0.0, 1.0);
+                    let tz = (fv - bz).clamp(0.0, 1.0);
+                    let x0 = (bx as i64).clamp(0, nx as i64 - 1) as usize;
+                    let y0 = (by as i64).clamp(0, ny as i64 - 1) as usize;
+                    let z0 = (bz as i64).clamp(0, nv as i64 - 1) as usize;
+                    let x1 = (x0 + 1).min(nx - 1);
+                    let y1 = (y0 + 1).min(ny - 1);
+                    let z1 = (z0 + 1).min(nv - 1);
+                    for dz in 0..2 {
+                        for dy in 0..2 {
+                            for dx in 0..2 {
+                                let wgt = (if dx == 0 { 1.0 - tx } else { tx })
+                                    * (if dy == 0 { 1.0 - ty } else { ty })
+                                    * (if dz == 0 { 1.0 - tz } else { tz });
+                                if wgt <= 0.0 {
+                                    continue;
+                                }
+                                let xx = if dx == 0 { x0 } else { x1 };
+                                let yy = if dy == 0 { y0 } else { y1 };
+                                let zz = if dz == 0 { z0 } else { z1 };
+                                let idx = ((yy * nx + xx) * nv + zz) * 4;
+                                acc[idx] += r * m * wgt;
+                                acc[idx + 1] += g * m * wgt;
+                                acc[idx + 2] += b * m * wgt;
+                                acc[idx + 3] += m * wgt;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     stats.splat_ms += t_splat.elapsed().as_millis();

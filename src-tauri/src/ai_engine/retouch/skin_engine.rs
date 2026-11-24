@@ -63,13 +63,14 @@ pub fn run_skin_retouch(
     let protect = texture_protect::build_texture_protection(image, mask, geometry, cancel)?;
     let process_w = texture_protect::combine_with_skin(&mask.alpha, &protect);
 
-    // 3) 频率分离（对当前 ROI）：先均匀低频，按保护比例回注高频
+    // 3) 频率分离（对当前 ROI）：从原图扩展真实像素 Halo 做引导滤波，
+    //    低频均匀（even_low）也在 padded 低频上执行（真实 Halo，S1.2.2 §4.1），
+    //    最后裁回 ROI。禁止对裁剪 ROI 直接滤波产生矩形接缝。
     let radius = ((mw as f32 * 0.02).round() as u32).clamp(3, 20);
     let eps = 0.004 + 0.02 * (1.0 - beauty.texture.clamp(0.0, 100.0) / 100.0);
-    // 从原图扩展真实像素 Halo 做引导滤波，再裁回 ROI（禁止 ROI 裁剪后直接滤波产生矩形接缝）。
-    let (mut low, high) = split_planes(image, mask, &rgb, radius, eps, cancel)?;
     let tone_even = (beauty.tone_even.clamp(0.0, 100.0) / 100.0) * 0.7;
-    frequency::even_low_frequency_wh(&mut low, mw, mh, &process_w, tone_even, cancel)?;
+    let (mut low, high) =
+        split_planes(image, mask, &rgb, radius, eps, tone_even, &process_w, cancel)?;
     let high_keep = (0.20
         + 0.50 * beauty.texture.clamp(0.0, 100.0) / 100.0
         + 0.20 * beauty.detail.clamp(0.0, 100.0) / 100.0)
@@ -142,12 +143,15 @@ fn split_planes(
     roi: &[f32],
     radius: u32,
     eps: f32,
+    even_amount: f32,
+    process_w: &[f32],
     cancel: &CancelToken,
 ) -> AppResult<([Vec<f32>; 3], [Vec<f32>; 3])> {
     use crate::ai_engine::retouch::filter::{guided_filter, RgbPlanes};
+    use crate::ai_engine::retouch::frequency::even_low_frequency_padded;
     let (mw, mh) = (mask.width, mask.height);
     let n = (mw * mh) as usize;
-    if mw < 2 || mh < 2 || roi.len() != n * 3 {
+    if mw < 2 || mh < 2 || roi.len() != n * 3 || process_w.len() != n {
         return Err(crate::error::AppError::Unsupported(
             "频率分离缓冲尺寸与 ROI 不一致".into(),
         ));
@@ -158,14 +162,39 @@ fn split_planes(
     let (fw, fh) = (padded.width, padded.height);
     let ox = (fw - mw) / 2;
     let oy = (fh - mh) / 2;
+
+    // ① 在带真实像素 Halo 的平面上做引导滤波（保留 padded 低频）。
+    let mut low_padded: [Vec<f32>; 3] = [
+        vec![0f32; (fw * fh) as usize],
+        vec![0f32; (fw * fh) as usize],
+        vec![0f32; (fw * fh) as usize],
+    ];
+    for c in 0..3 {
+        cancel.check()?;
+        low_padded[c] = guided_filter(&padded.planes[c], fw, fh, radius, eps);
+    }
+
+    // ② 低频均匀（even_low）同样在 padded 低频上执行：ROI 边缘窗口不截断。
+    even_low_frequency_padded(
+        &mut low_padded,
+        fw,
+        fh,
+        ox,
+        oy,
+        mw,
+        mh,
+        process_w,
+        even_amount,
+        cancel,
+    )?;
+
+    // ③ 裁回 ROI，high = roi − low。
     let mut low: [Vec<f32>; 3] = [vec![0f32; n], vec![0f32; n], vec![0f32; n]];
     let mut high: [Vec<f32>; 3] = [vec![0f32; n], vec![0f32; n], vec![0f32; n]];
     for c in 0..3 {
-        cancel.check()?;
-        let filtered = guided_filter(&padded.planes[c], fw, fh, radius, eps);
         for y in 0..mh {
             for x in 0..mw {
-                let l = filtered[((y + oy) * fw + (x + ox)) as usize];
+                let l = low_padded[c][(y + oy) as usize * fw as usize + (x + ox) as usize];
                 let i = (y * mw + x) as usize;
                 low[c][i] = l;
                 high[c][i] = roi[i * 3 + c] - l;
@@ -356,8 +385,10 @@ mod tests {
         let roi = roi_of(&img, &mask);
         let radius = 6u32;
         let eps = 0.004f32;
-        let (low, high) = split_planes(&img, &mask, &roi, radius, eps, &CancelToken::default())
-            .unwrap();
+        let ones = vec![1.0f32; (mask.width * mask.height) as usize];
+        let (low, high) =
+            split_planes(&img, &mask, &roi, radius, eps, 0.0, &ones, &CancelToken::default())
+                .unwrap();
 
         // 参考：全图平面引导滤波 → 裁 ROI。
         for c in 0..3 {
@@ -397,12 +428,15 @@ mod tests {
         let img = ramp_image(96, 96);
         let mask = manual_mask(24, 24, 48, 48);
         let roi = roi_of(&img, &mask);
+        let ones = vec![1.0f32; (mask.width * mask.height) as usize];
         let (low, _high) = split_planes(
             &img,
             &mask,
             &roi,
             6,
             0.004,
+            0.0,
+            &ones,
             &CancelToken::default(),
         )
         .unwrap();
@@ -447,12 +481,15 @@ mod tests {
         let img = ramp_image(64, 64);
         let mask = manual_mask(0, 0, 32, 32);
         let roi = roi_of(&img, &mask);
+        let ones = vec![1.0f32; (mask.width * mask.height) as usize];
         let (low, high) = split_planes(
             &img,
             &mask,
             &roi,
             5,
             0.004,
+            0.0,
+            &ones,
             &CancelToken::default(),
         )
         .unwrap();

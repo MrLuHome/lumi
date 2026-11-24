@@ -295,7 +295,10 @@ pub fn apply_face_reshape(
         let mut extra_notes = Vec::new();
 
         if candidate.mesh.max_displacement() > 0.01 {
-            let stats = warp::warp_mesh(image, &candidate.mesh, &region, cancel)?;
+            // 变形前的 pristine 快照：warp 反向映射必须从快照采样，
+            // 否则行序/三角覆盖会读到已写入的变形像素（方块/梳纹/鬼影）。
+            let source = image.clone();
+            let stats = warp::warp_mesh(image, &source, &candidate.mesh, &region, cancel)?;
             warped_pixels += stats.pixels;
         }
 

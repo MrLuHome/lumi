@@ -158,6 +158,93 @@ mod tests {
         assert!((p[0] as f32 - 32768.0).abs() < 200.0, "half mix got {}", p[0]);
     }
 
+    /// S1.2.2 §4.4：处理结果与原图必须严格同坐标（无一像素偏移）。
+    #[test]
+    fn fuse_identity_roundtrip_has_no_pixel_shift() {
+        let mut img = Image16::from_fn(24, 24, |x, y| {
+            Rgba([
+                (x * 2700 + y * 111) as u16,
+                (y * 2700) as u16,
+                12_000,
+                65535,
+            ])
+        });
+        let before = img.clone();
+        let processed = extract_roi(&img, (6, 4), 12, 14);
+        let weight = vec![1.0f32; 12 * 14];
+        fuse(
+            FusionRequest {
+                image: &mut img,
+                origin: (6, 4),
+                processed_rgb: &processed,
+                weight: &weight,
+                roi_w: 12,
+                roi_h: 14,
+                strength: 1.0,
+            },
+            &CancelToken::default(),
+        )
+        .unwrap();
+        // ROI 内必须逐位等于原图（同坐标回写），ROI 外不变。
+        for y in 0..24u32 {
+            for x in 0..24u32 {
+                let in_roi = (6..18).contains(&x) && (4..18).contains(&y);
+                assert_eq!(
+                    img.get_pixel(x, y).0,
+                    before.get_pixel(x, y).0,
+                    "像素 ({x},{y}) in_roi={in_roi} 出现偏移或越界改动"
+                );
+            }
+        }
+    }
+
+    /// S1.2.2 §4.4：边缘连续性——半权重带上不得出现比两侧更硬的跳变。
+    #[test]
+    fn fuse_ramp_edge_is_continuous() {
+        let mut img = Image16::from_fn(32, 8, |x, _y| {
+            Rgba([(x * 2000) as u16, 30_000, 30_000, 65535])
+        });
+        let before = img.clone();
+        // 处理结果整体 +2000（更亮），权重沿 x 线性 0→1
+        let processed: Vec<f32> = (0..32 * 8)
+            .flat_map(|i| {
+                let x = i % 32;
+                let v = ((x * 2000 + 2000) as f32 / 65535.0).min(1.0);
+                [v, 30_000.0 / 65535.0, 30_000.0 / 65535.0]
+            })
+            .collect();
+        let weight: Vec<f32> = (0..32 * 8)
+            .map(|i| (i % 32) as f32 / 31.0)
+            .collect();
+        fuse(
+            FusionRequest {
+                image: &mut img,
+                origin: (0, 0),
+                processed_rgb: &processed,
+                weight: &weight,
+                roi_w: 32,
+                roi_h: 8,
+                strength: 1.0,
+            },
+            &CancelToken::default(),
+        )
+        .unwrap();
+        for y in 0..8u32 {
+            let mut prev = img.get_pixel(0, y).0[0] as f32;
+            for x in 1..32u32 {
+                let v = img.get_pixel(x, y).0[0] as f32;
+                let jump = (v - prev).abs();
+                // 原图本身行跳变 =2000；融合后单步不应超过原跳变 + 权重带来的平滑增量
+                assert!(
+                    jump <= 2400.0,
+                    "边缘出现硬跳变 ({x},{y}) jump={jump}"
+                );
+                prev = v;
+            }
+            let _ = before;
+        }
+    }
+
     #[test]
     fn rejects_bad_weight() {
         let mut img: Image16 = Image16::from_pixel(2, 2, Rgba([100, 100, 100, 65535]));
